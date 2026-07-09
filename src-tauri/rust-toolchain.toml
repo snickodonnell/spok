@@ -1,0 +1,3 @@
+# Pin the host to GNU so build-scripts and proc-macros also use MinGW.
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"

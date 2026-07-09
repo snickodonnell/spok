@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+:root {
+  --crt-bg: #050805;
+  --crt-panel: #0a100c;
+  --crt-panel-elevated: #0e1610;
+  --phosphor-green: #33ff66;
+  --phosphor-green-dim: #1a9940;
+  --phosphor-amber: #ffb000;
+  --phosphor-cyan: #33e0ff;
+  --phosphor-magenta: #ff33aa;
+  --phosphor-red: #ff4455;
+  --glow-green: 0 0 12px rgba(51, 255, 102, 0.35);
+  --glow-cyan: 0 0 12px rgba(51, 224, 255, 0.3);
+  --glow-amber: 0 0 12px rgba(255, 176, 0, 0.3);
+  --background: var(--crt-bg);
+  --foreground: var(--phosphor-green);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-crt-bg: var(--crt-bg);
+  --color-crt-panel: var(--crt-panel);
+  --color-crt-panel-elevated: var(--crt-panel-elevated);
+  --color-phosphor-green: var(--phosphor-green);
+  --color-phosphor-green-dim: var(--phosphor-green-dim);
+  --color-phosphor-amber: var(--phosphor-amber);
+  --color-phosphor-cyan: var(--phosphor-cyan);
+  --color-phosphor-magenta: var(--phosphor-magenta);
+  --color-phosphor-red: var(--phosphor-red);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  border-color: color-mix(in srgb, var(--phosphor-green) 15%, transparent);
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--crt-bg);
+  color: var(--phosphor-green);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* CRT scanline overlay */
+.crt-scanlines::after {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.12) 0px,
+    rgba(0, 0, 0, 0.12) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  opacity: 0.35;
+}
+
+.crt-glow {
+  text-shadow: 0 0 6px rgba(51, 255, 102, 0.55), 0 0 18px rgba(51, 255, 102, 0.2);
+}
+
+.crt-panel {
+  background: linear-gradient(180deg, var(--crt-panel-elevated) 0%, var(--crt-panel) 100%);
+  border: 1px solid color-mix(in srgb, var(--phosphor-green) 22%, transparent);
+  box-shadow:
+    inset 0 0 40px rgba(51, 255, 102, 0.03),
+    0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.crt-border-glow {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--phosphor-green) 25%, transparent),
+    0 0 20px rgba(51, 255, 102, 0.08),
+    inset 0 0 30px rgba(51, 255, 102, 0.03);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--phosphor-green) 35%, transparent);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--phosphor-green) 55%, transparent);
+}
+
+/* Diff line highlights */
+.diff-add {
+  background: rgba(51, 255, 102, 0.12);
+  border-left: 2px solid var(--phosphor-green);
+}
+.diff-remove {
+  background: rgba(255, 68, 85, 0.12);
+  border-left: 2px solid var(--phosphor-red);
+}
+.diff-context {
+  border-left: 2px solid transparent;
+}
+
+/* Pulse live indicator */
+@keyframes phosphor-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 4px var(--phosphor-green);
+  }
+  50% {
+    opacity: 0.5;
+    box-shadow: 0 0 12px var(--phosphor-green);
+  }
+}
+.live-dot {
+  animation: phosphor-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  93% {
+    opacity: 0.85;
+  }
+  94% {
+    opacity: 1;
+  }
+}
+.crt-flicker {
+  animation: flicker 6s infinite;
+}
+
+/* Timeline */
+.timeline-track {
+  background: linear-gradient(
+    90deg,
+    rgba(51, 255, 102, 0.08),
+    rgba(51, 224, 255, 0.08),
+    rgba(255, 176, 0, 0.08)
+  );
+}
+
+/* Monaco override container */
+.monaco-diff-host {
+  --vscode-editor-background: #080c09;
+}
+
+/* Resizable handles */
+[data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id] {
+  width: 4px;
+  background: color-mix(in srgb, var(--phosphor-green) 12%, transparent);
+  transition: background 0.15s;
+}
+[data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id]:hover,
+[data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id][data-resize-handle-active] {
+  background: color-mix(in srgb, var(--phosphor-green) 45%, transparent);
+}
+[data-panel-group-direction="vertical"] > [data-panel-resize-handle-id] {
+  height: 4px;
+  background: color-mix(in srgb, var(--phosphor-green) 12%, transparent);
+}
+[data-panel-group-direction="vertical"] > [data-panel-resize-handle-id]:hover {
+  background: color-mix(in srgb, var(--phosphor-green) 45%, transparent);
+}
+
+/* Selection */
+::selection {
+  background: color-mix(in srgb, var(--phosphor-green) 35%, transparent);
+  color: #fff;
+}

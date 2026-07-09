@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "Auth middleware refactor",
+  "description": "Sample NDJSON-style events for Spok import demos. Prefer in-app Samples for full live playback with file contents.",
+  "events": [
+    {
+      "type": "session_start",
+      "timestamp": 0,
+      "title": "Session started",
+      "content": "Refactor auth middleware"
+    },
+    {
+      "type": "goal",
+      "id": "g1",
+      "title": "Goal",
+      "content": "Split auth middleware into modular JWT + session handlers"
+    },
+    {
+      "type": "thinking",
+      "id": "th1",
+      "parentId": "g1",
+      "title": "Exploring codebase",
+      "content": "Looking for middleware entry points under src/middleware"
+    },
+    {
+      "type": "tool_call",
+      "id": "tc1",
+      "parentId": "th1",
+      "title": "Tool: list_dir",
+      "toolName": "list_dir",
+      "content": "list_dir({ target_directory: \"src\" })",
+      "status": "running"
+    },
+    {
+      "type": "tool_result",
+      "id": "tr1",
+      "parentId": "tc1",
+      "title": "Result: list_dir",
+      "content": "src/middleware/auth.ts, src/utils/jwt.ts",
+      "status": "success"
+    },
+    {
+      "type": "session_end",
+      "title": "Done",
+      "content": "See full sample in-app for multi-file diffs",
+      "status": "success"
+    }
+  ]
+}

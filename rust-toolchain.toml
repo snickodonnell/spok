@@ -1,0 +1,4 @@
+# Use MinGW host so we don't need Windows SDK / MSVC link.exe for Tauri.
+# Requires WinLibs gcc on PATH (winget install BrechtSanders.WinLibs.POSIX.UCRT).
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"
