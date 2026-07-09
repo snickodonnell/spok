@@ -12,7 +12,10 @@ import {
   Puzzle,
   Layers,
   Bell,
+  Keyboard,
+  Palette,
 } from "lucide-react";
+import type { UiTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useSpokStore } from "@/lib/store";
@@ -40,8 +43,25 @@ export function Topbar() {
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
   const setScanlines = useSpokStore((s) => s.setScanlines);
+  const uiTheme = useSpokStore((s) => s.uiTheme);
+  const setUiTheme = useSpokStore((s) => s.setUiTheme);
+  const setKeyboardHelpOpen = useSpokStore((s) => s.setKeyboardHelpOpen);
   const exportActiveSession = useSpokStore((s) => s.exportActiveSession);
   const viewMode = useSpokStore((s) => s.viewMode);
+
+  const cycleTheme = () => {
+    const order: UiTheme[] = ["professional", "crt", "high-contrast"];
+    const i = order.indexOf(uiTheme);
+    const next = order[(i + 1) % order.length];
+    setUiTheme(next);
+    toast.message(
+      next === "professional"
+        ? "Professional theme"
+        : next === "crt"
+          ? "CRT phosphor theme"
+          : "High contrast theme"
+    );
+  };
 
   const exportSession = () => {
     const session = exportActiveSession();
@@ -169,14 +189,38 @@ export function Topbar() {
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          onClick={() => {
-            setCrtEnabled(!crtEnabled);
-            if (crtEnabled) setScanlines(false);
-            else setScanlines(true);
-          }}
-          title="Toggle CRT theme effects"
+          onClick={cycleTheme}
+          title={`Theme: ${uiTheme} (click to cycle)`}
         >
-          <Monitor className={crtEnabled ? "h-4 w-4 text-phosphor-green" : "h-4 w-4 opacity-50"} />
+          <Palette className="h-4 w-4 text-phosphor-cyan" />
+        </Button>
+        {uiTheme === "crt" && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              setCrtEnabled(!crtEnabled);
+              if (crtEnabled) setScanlines(false);
+              else setScanlines(true);
+            }}
+            title="Toggle CRT effects"
+          >
+            <Monitor
+              className={
+                crtEnabled ? "h-4 w-4 text-phosphor-green" : "h-4 w-4 opacity-50"
+              }
+            />
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setKeyboardHelpOpen(true)}
+          title="Keyboard shortcuts (?)"
+        >
+          <Keyboard className="h-4 w-4" />
         </Button>
         <Button
           variant="secondary"

@@ -39,7 +39,10 @@
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
       "timestampUrl": ""
-    }
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "Live harness for Grok Build",
+    "longDescription": "Spok is a desktop harness for Grok Build with live thinking traces, repo diffs, durable sessions, and a hardened local privilege boundary."
   },
   "plugins": {}
 }

@@ -882,8 +882,9 @@ export class GrokStreamIngestor {
   private flushOpenText(
     events: StreamEvent[],
     t: number,
-    _finalize = false
+    _finalize = false // reserved for end-of-stream seal semantics
   ) {
+    void _finalize;
     // Seal open buffers as permanent segments (never discarded when the
     // next tool/phase starts — terminal Grok clears these; Spok keeps them).
     if (this.thoughtId && this.thoughtText) {

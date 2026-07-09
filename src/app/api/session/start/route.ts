@@ -23,12 +23,18 @@ import {
 } from "@/lib/security/approvals";
 import { appendAuditEvent } from "@/lib/security/audit";
 import { resolveCommandProfile } from "@/lib/security/command-profiles";
+import {
+  defaultRunTimeoutMs,
+  killProcessTree,
+  registerProcess,
+  unregisterProcess,
+  stopSessionProcess,
+  scheduleForceKill,
+  pruneStaleProcesses,
+} from "@/lib/process-lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// In-memory process registry for stop support
-const processes = new Map<string, ChildProcessWithoutNullStreams>();
 
 type StartBody = {
   sessionId: string;
@@ -291,7 +297,50 @@ export async function POST(req: Request) {
         return;
       }
 
-      processes.set(sessionId, child);
+      const timeoutMs = defaultRunTimeoutMs();
+      let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+      let timedOut = false;
+
+      const trackChild = (c: ChildProcessWithoutNullStreams) => {
+        if (c.pid) {
+          registerProcess(
+            {
+              sessionId,
+              pid: c.pid,
+              command,
+              args,
+              cwd,
+              startedAt: Date.now(),
+              timeoutMs,
+            },
+            c
+          );
+        }
+      };
+
+      trackChild(child);
+
+      if (timeoutMs > 0) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          push({
+            type: "event",
+            event: {
+              type: "system",
+              timestamp: Date.now(),
+              title: "Run timeout",
+              content: `Process exceeded ${Math.round(timeoutMs / 1000)}s limit (SPOK_RUN_TIMEOUT_MS). Stopping process tree.`,
+              status: "error",
+              severity: "error",
+            },
+          });
+          if (child && !child.killed) {
+            killProcessTree(child, { force: true });
+            scheduleForceKill(child, 2000);
+          }
+        }, timeoutMs);
+        timeoutTimer.unref?.();
+      }
 
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
@@ -320,7 +369,7 @@ export async function POST(req: Request) {
               shell: false,
               windowsHide: true,
             }) as ChildProcessWithoutNullStreams;
-            processes.set(sessionId, child);
+            trackChild(child);
             child.stdout.setEncoding("utf8");
             child.stderr.setEncoding("utf8");
             child.stdout.on("data", (chunk: string) => {
@@ -376,7 +425,7 @@ export async function POST(req: Request) {
             content:
               err.message +
               (err.message.includes("ENOENT")
-                ? ` — is '${command}' installed and on PATH? Try samples if CLI is unavailable.`
+                ? ` — is '${command}' installed and on PATH? Authenticate via the native Grok CLI if needed, then retry. Samples work without the CLI.`
                 : ""),
             status: "error",
           },
@@ -384,12 +433,14 @@ export async function POST(req: Request) {
       });
 
       function onClose(code: number | null, signal: NodeJS.Signals | null) {
-        processes.delete(sessionId);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        unregisterProcess(sessionId);
         push({
           type: "exit",
-          code: code ?? (signal ? 1 : 0),
-          signal,
+          code: timedOut ? 124 : code ?? (signal ? 1 : 0),
+          signal: timedOut ? "SIGTERM" : signal,
           sessionId,
+          timedOut,
         });
         if (!closed) {
           closed = true;
@@ -405,11 +456,8 @@ export async function POST(req: Request) {
     },
     cancel() {
       closed = true;
-      const proc = processes.get(sessionId);
-      if (proc && !proc.killed) {
-        proc.kill();
-        processes.delete(sessionId);
-      }
+      stopSessionProcess(sessionId, { force: true });
+      unregisterProcess(sessionId);
     },
   });
 
@@ -432,11 +480,29 @@ export async function DELETE(req: Request) {
   if (!sessionId) {
     return Response.json({ error: "sessionId required" }, { status: 400 });
   }
-  const proc = processes.get(sessionId);
-  if (!proc) {
+  pruneStaleProcesses();
+  const result = stopSessionProcess(sessionId, { force: true });
+  unregisterProcess(sessionId);
+
+  appendAuditEvent({
+    type: "runtime_action",
+    timestamp: Date.now(),
+    sessionId,
+    action: "session_stop",
+    decision: "allowed",
+    details: {
+      found: result.found,
+      method: result.method,
+      error: result.error,
+    },
+  });
+
+  if (!result.found) {
     return Response.json({ ok: true, message: "No running process" });
   }
-  proc.kill();
-  processes.delete(sessionId);
-  return Response.json({ ok: true });
+  return Response.json({
+    ok: result.ok,
+    method: result.method,
+    error: result.error,
+  });
 }

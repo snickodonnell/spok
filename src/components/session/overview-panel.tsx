@@ -11,6 +11,8 @@ import {
   Bot,
   GitCommit,
 } from "lucide-react";
+import { UsageMeter } from "@/components/session/usage-meter";
+import { getCachedSettings } from "@/lib/settings-client";
 
 export function OverviewPanel() {
   const session = useSpokStore((s) =>
@@ -123,6 +125,17 @@ export function OverviewPanel() {
             {session.config.cwd}
           </p>
         )}
+      </div>
+
+      <div className="mb-4 max-w-md">
+        <h3 className="mb-2 text-[10px] uppercase tracking-widest text-phosphor-green/45">
+          Usage
+        </h3>
+        <UsageMeter
+          compact={false}
+          show={getCachedSettings()?.resolved.ui.showUsageMeter !== false}
+          contextLimit={getCachedSettings()?.resolved.ui.contextLimitTokens}
+        />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

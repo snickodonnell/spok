@@ -4,7 +4,7 @@
 
 > Product roadmap and security audit: [`docs/HARNESS_AUDIT_AND_ROADMAP.md`](docs/HARNESS_AUDIT_AND_ROADMAP.md)
 
-Watch reasoning steps, tool calls, plan updates, sub-agents, and code changes stream in as they happen — not after the fact — with a retro tech / CRT phosphor aesthetic.
+Watch reasoning steps, tool calls, plan updates, sub-agents, and code changes stream in as they happen — not after the fact. Daily-driver **professional** theme by default, with optional CRT phosphor and high-contrast modes.
 
 ![Spok](https://img.shields.io/badge/Spok-Live%20Harness-33ff66?style=flat-square&labelColor=0a100c)
 ![Next.js 15](https://img.shields.io/badge/Next.js-15-black?style=flat-square)
@@ -21,7 +21,8 @@ Watch reasoning steps, tool calls, plan updates, sub-agents, and code changes st
 | **Repo Diff** | File tree + Monaco side-by-side diffs, hunk nav, stats |
 | **Unified view** | Deep-link: select a trace step → highlight related code changes |
 | **Import & samples** | JSON exports, paste logs, unified diffs, high-quality sample sessions |
-| **Retro tech UI** | Phosphor greens / ambers / cyans / magentas, CRT scanlines, glow |
+| **Themes & a11y** | Professional (default), CRT phosphor, high contrast; reduced motion; keyboard help (`?`) |
+| **Desktop shell** | Native folder picker, OS notifications, diagnostics bundle, Tauri packaging |
 
 Use Spok as your **primary interface** for running Grok Build when you want full visibility into the agent’s mind and the working tree.
 
@@ -53,11 +54,20 @@ npm run build
 npm start
 ```
 
-Tests (parser fixtures, session replay, durable store, security helpers):
+Tests (parser fixtures, session replay, durable store, security helpers, theme/vault/diagnostics):
 
 ```bash
 npm test
 ```
+
+Playwright UI smoke (build first, or reuse a running server):
+
+```bash
+npm run build
+npm run test:e2e
+```
+
+Security posture and release docs: [`docs/SECURITY_POSTURE.md`](docs/SECURITY_POSTURE.md), [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
 ### Durable sessions
 
@@ -84,22 +94,22 @@ Samples included:
 
 ### 2. Launch a live Grok Build session
 
-1. Click **Launch** (or `Ctrl+K` → “Launch Grok Build session”)
-2. Set:
-   - **Working directory** — your project path
-   - **Command** — default `grok` (or full path / alias)
-   - **Extra args** — e.g. flags your CLI accepts
-   - **Prompt / task** — the work for the agent
-3. Spok spawns the process via `/api/session/start` and streams stdout/stderr
-4. Output is parsed into trace nodes; `git diff` can be polled for live file changes
+**Authenticate with the native Grok CLI first** (Spok does not handle Grok login). Then:
+
+1. Click **Open repo** (or `Ctrl+K`)
+2. Choose the working directory (native folder picker on desktop)
+3. Enter prompts / slash commands in the workspace composer
+4. Spok spawns Grok via `/api/session/start` and streams thinking + diffs
+5. While a run is live, **Enter queues a follow-up** (does not interrupt the current turn)
 
 Environment overrides:
 
 | Variable | Purpose |
 |---|---|
 | `SPOK_GROK_CMD` | Default CLI binary name/path |
+| `SPOK_RUN_TIMEOUT_MS` | Max run duration in ms (default 2h; `0` = unlimited) |
 
-> If the CLI is not installed, launch will error cleanly — use **samples** or **import** instead.
+> If the CLI is not installed, the status line shows **cli missing** — use **samples** or **import** instead.
 
 ### 3. Import pastes, JSON, or diffs
 
@@ -120,13 +130,12 @@ Export the active session as JSON (`Export` button or command palette) for shari
 | Shortcut | Action |
 |---|---|
 | `Ctrl+K` / `⌘K` | Command palette |
-| `Ctrl+1` | Unified view (trace + diff) |
-| `Ctrl+2` | Trace only |
-| `Ctrl+3` | Diff only |
-| `Ctrl+4` | Session overview |
+| `?` | Keyboard shortcuts help |
+| `Ctrl+1` … `Ctrl+5` | Workspace / Trace / Diff / Overview / Log |
 | `↑` `↓` | Navigate trace tree |
 | `←` `→` | Collapse / expand node |
 | `Enter` | Jump to linked file change |
+| Tab | Focus next control (visible focus ring) |
 
 ---
 
@@ -193,6 +202,8 @@ Supported `type` values include: `session_start`, `session_end`, `thinking`, `re
 ## Desktop (Tauri)
 
 Tauri 2 is set up (`@tauri-apps/cli` + `src-tauri/`). Requires [Rust](https://rustup.rs/).
+
+Native folder picker, OS notifications, and path open/reveal are available in the desktop shell. See [`docs/UPDATER_AND_DESKTOP.md`](docs/UPDATER_AND_DESKTOP.md).
 
 ### Cargo PATH fix
 

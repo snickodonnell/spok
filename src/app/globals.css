@@ -1,6 +1,37 @@
 @import "tailwindcss";
 
-:root {
+/* ─── Base token defaults (professional theme) ─── */
+:root,
+html[data-theme="professional"] {
+  --crt-bg: #0b0f14;
+  --crt-panel: #111820;
+  --crt-panel-elevated: #161e28;
+  --phosphor-green: #6ee7a8;
+  --phosphor-green-dim: #3d9a6a;
+  --phosphor-amber: #e8b84a;
+  --phosphor-cyan: #5ec8e8;
+  --phosphor-magenta: #d46bb0;
+  --phosphor-red: #f07178;
+  --glow-green: none;
+  --glow-cyan: none;
+  --glow-amber: none;
+  --background: var(--crt-bg);
+  --foreground: #d6e0ea;
+  --text-primary: #d6e0ea;
+  --text-muted: rgba(214, 224, 234, 0.55);
+  --text-faint: rgba(214, 224, 234, 0.35);
+  --border-subtle: rgba(110, 231, 168, 0.14);
+  --border-strong: rgba(110, 231, 168, 0.32);
+  --focus-ring: rgba(94, 200, 232, 0.7);
+  --surface-hover: rgba(110, 231, 168, 0.08);
+  --font-ui: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-code: var(--font-geist-mono), ui-monospace, monospace;
+  --radius-panel: 8px;
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* ─── CRT phosphor (brand retro) ─── */
+html[data-theme="crt"] {
   --crt-bg: #050805;
   --crt-panel: #0a100c;
   --crt-panel-elevated: #0e1610;
@@ -15,6 +46,48 @@
   --glow-amber: 0 0 12px rgba(255, 176, 0, 0.3);
   --background: var(--crt-bg);
   --foreground: var(--phosphor-green);
+  --text-primary: var(--phosphor-green);
+  --text-muted: rgba(51, 255, 102, 0.55);
+  --text-faint: rgba(51, 255, 102, 0.35);
+  --border-subtle: rgba(51, 255, 102, 0.15);
+  --border-strong: rgba(51, 255, 102, 0.32);
+  --focus-ring: rgba(51, 255, 102, 0.55);
+  --surface-hover: rgba(51, 255, 102, 0.1);
+  --font-ui: var(--font-geist-mono), ui-monospace, monospace;
+  --font-code: var(--font-geist-mono), ui-monospace, monospace;
+  --radius-panel: 4px;
+  --shadow-panel:
+    inset 0 0 40px rgba(51, 255, 102, 0.03),
+    0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── High contrast (a11y) ─── */
+html[data-theme="high-contrast"] {
+  --crt-bg: #000000;
+  --crt-panel: #0a0a0a;
+  --crt-panel-elevated: #121212;
+  --phosphor-green: #00ff66;
+  --phosphor-green-dim: #00cc52;
+  --phosphor-amber: #ffcc00;
+  --phosphor-cyan: #00e5ff;
+  --phosphor-magenta: #ff66cc;
+  --phosphor-red: #ff3344;
+  --glow-green: none;
+  --glow-cyan: none;
+  --glow-amber: none;
+  --background: #000000;
+  --foreground: #ffffff;
+  --text-primary: #ffffff;
+  --text-muted: #c8c8c8;
+  --text-faint: #9a9a9a;
+  --border-subtle: #ffffff;
+  --border-strong: #ffffff;
+  --focus-ring: #00e5ff;
+  --surface-hover: rgba(255, 255, 255, 0.12);
+  --font-ui: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-code: var(--font-geist-mono), ui-monospace, monospace;
+  --radius-panel: 2px;
+  --shadow-panel: none;
 }
 
 @theme inline {
@@ -34,7 +107,7 @@
 }
 
 * {
-  border-color: color-mix(in srgb, var(--phosphor-green) 15%, transparent);
+  border-color: var(--border-subtle);
 }
 
 html,
@@ -45,12 +118,62 @@ body {
 
 body {
   background: var(--crt-bg);
-  color: var(--phosphor-green);
-  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
-/* CRT scanline overlay */
+/* Prefer system reduced-motion when user has not forced it off via app setting */
+@media (prefers-reduced-motion: reduce) {
+  html:not(.reduce-motion-off) .crt-flicker,
+  html:not(.reduce-motion-off) .live-dot {
+    animation: none !important;
+  }
+  html:not(.reduce-motion-off) .crt-glow {
+    text-shadow: none !important;
+  }
+}
+
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html.reduce-motion .crt-glow,
+html.reduce-motion.theme-crt-effects .crt-glow {
+  text-shadow: none !important;
+}
+
+/* Skip link for keyboard users */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10000;
+  padding: 0.5rem 1rem;
+  background: var(--crt-panel-elevated);
+  color: var(--text-primary);
+  border: 2px solid var(--focus-ring);
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+}
+.skip-link:focus {
+  left: 0.75rem;
+  top: 0.75rem;
+}
+
+/* Accessible focus — high visibility, theme-aware */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* CRT scanline overlay (only when class applied) */
 .crt-scanlines::after {
   content: "";
   pointer-events: none;
@@ -67,23 +190,42 @@ body {
   opacity: 0.35;
 }
 
+html[data-theme="professional"] .crt-scanlines::after,
+html[data-theme="high-contrast"] .crt-scanlines::after,
+html.reduce-motion .crt-scanlines::after {
+  display: none;
+}
+
 .crt-glow {
   text-shadow: 0 0 6px rgba(51, 255, 102, 0.55), 0 0 18px rgba(51, 255, 102, 0.2);
 }
 
+html[data-theme="professional"] .crt-glow,
+html[data-theme="high-contrast"] .crt-glow {
+  text-shadow: none;
+}
+
 .crt-panel {
   background: linear-gradient(180deg, var(--crt-panel-elevated) 0%, var(--crt-panel) 100%);
-  border: 1px solid color-mix(in srgb, var(--phosphor-green) 22%, transparent);
-  box-shadow:
-    inset 0 0 40px rgba(51, 255, 102, 0.03),
-    0 0 20px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+html[data-theme="professional"] .crt-panel {
+  background: var(--crt-panel);
 }
 
 .crt-border-glow {
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--phosphor-green) 25%, transparent),
+    0 0 0 1px var(--border-strong),
     0 0 20px rgba(51, 255, 102, 0.08),
     inset 0 0 30px rgba(51, 255, 102, 0.03);
+}
+
+html[data-theme="professional"] .crt-border-glow,
+html[data-theme="high-contrast"] .crt-border-glow {
+  box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 /* Custom scrollbar */
@@ -102,6 +244,13 @@ body {
   background: color-mix(in srgb, var(--phosphor-green) 55%, transparent);
 }
 
+html[data-theme="high-contrast"] ::-webkit-scrollbar-thumb {
+  background: #888;
+}
+html[data-theme="high-contrast"] ::-webkit-scrollbar-thumb:hover {
+  background: #ccc;
+}
+
 /* Diff line highlights */
 .diff-add {
   background: rgba(51, 255, 102, 0.12);
@@ -113,6 +262,13 @@ body {
 }
 .diff-context {
   border-left: 2px solid transparent;
+}
+
+html[data-theme="professional"] .diff-add {
+  background: rgba(110, 231, 168, 0.1);
+}
+html[data-theme="professional"] .diff-remove {
+  background: rgba(240, 113, 120, 0.1);
 }
 
 /* Pulse live indicator */
@@ -129,6 +285,13 @@ body {
 }
 .live-dot {
   animation: phosphor-pulse 1.4s ease-in-out infinite;
+}
+
+html[data-theme="professional"] .live-dot,
+html[data-theme="high-contrast"] .live-dot {
+  animation: none;
+  box-shadow: none;
+  opacity: 1;
 }
 
 @keyframes flicker {
@@ -150,29 +313,34 @@ body {
   animation: flicker 6s infinite;
 }
 
+html[data-theme="professional"] .crt-flicker,
+html[data-theme="high-contrast"] .crt-flicker,
+html.reduce-motion .crt-flicker {
+  animation: none;
+}
+
 /* Timeline */
 .timeline-track {
   background: linear-gradient(
     90deg,
-    rgba(51, 255, 102, 0.08),
-    rgba(51, 224, 255, 0.08),
-    rgba(255, 176, 0, 0.08)
+    color-mix(in srgb, var(--phosphor-green) 12%, transparent),
+    color-mix(in srgb, var(--phosphor-cyan) 12%, transparent),
+    color-mix(in srgb, var(--phosphor-amber) 12%, transparent)
   );
 }
 
 /* Monaco override container */
 .monaco-diff-host {
-  --vscode-editor-background: #080c09;
+  --vscode-editor-background: var(--crt-bg);
   height: 100%;
   min-height: 0;
 }
 
 /* Unified (inline) mode — reinforce combined +/− stream styling */
 .monaco-diff-unified .monaco-diff-editor .diffOverview {
-  background: #080c09;
+  background: var(--crt-bg);
 }
 .monaco-diff-unified .monaco-diff-editor {
-  /* Slight inset so the stream reads as one panel, not a split pair */
   border-radius: 0;
 }
 
@@ -198,4 +366,9 @@ body {
 ::selection {
   background: color-mix(in srgb, var(--phosphor-green) 35%, transparent);
   color: #fff;
+}
+
+html[data-theme="high-contrast"] ::selection {
+  background: #00e5ff;
+  color: #000;
 }

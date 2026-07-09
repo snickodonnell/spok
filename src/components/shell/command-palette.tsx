@@ -23,7 +23,12 @@ import {
   Puzzle,
   Layers,
   Bell,
+  Activity,
+  Palette,
+  Accessibility,
 } from "lucide-react";
+import type { UiTheme } from "@/lib/theme";
+import { THEME_META } from "@/lib/theme";
 import { syncDiffsFromGit } from "@/lib/git/client";
 import {
   openWorkspaceSession,
@@ -54,6 +59,12 @@ export function CommandPalette() {
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
   const scanlines = useSpokStore((s) => s.scanlines);
   const setScanlines = useSpokStore((s) => s.setScanlines);
+  const uiTheme = useSpokStore((s) => s.uiTheme);
+  const setUiTheme = useSpokStore((s) => s.setUiTheme);
+  const reducedMotion = useSpokStore((s) => s.reducedMotion);
+  const setReducedMotion = useSpokStore((s) => s.setReducedMotion);
+  const setKeyboardHelpOpen = useSpokStore((s) => s.setKeyboardHelpOpen);
+  const setDiagnosticsOpen = useSpokStore((s) => s.setDiagnosticsOpen);
   const expandAll = useSpokStore((s) => s.expandAll);
   const collapseAll = useSpokStore((s) => s.collapseAll);
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
@@ -315,29 +326,70 @@ export function CommandPalette() {
             heading="Display"
             className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-phosphor-green/40"
           >
+            {(Object.keys(THEME_META) as UiTheme[]).map((theme) => (
+              <Item
+                key={theme}
+                icon={Palette}
+                label={`${uiTheme === theme ? "✓ " : ""}Theme: ${THEME_META[theme].label}`}
+                onSelect={() => {
+                  setUiTheme(theme);
+                  setOpen(false);
+                  toast.message(`${THEME_META[theme].label} theme`);
+                }}
+              />
+            ))}
             <Item
-              icon={Monitor}
-              label={crtEnabled ? "Disable CRT effects" : "Enable CRT effects"}
+              icon={Accessibility}
+              label={reducedMotion ? "Allow motion" : "Reduce motion"}
               onSelect={() => {
-                setCrtEnabled(!crtEnabled);
+                setReducedMotion(!reducedMotion);
                 setOpen(false);
               }}
             />
-            <Item
-              icon={Monitor}
-              label={scanlines ? "Hide scanlines" : "Show scanlines"}
-              onSelect={() => {
-                setScanlines(!scanlines);
-                setOpen(false);
-              }}
-            />
+            {uiTheme === "crt" && (
+              <>
+                <Item
+                  icon={Monitor}
+                  label={crtEnabled ? "Disable CRT effects" : "Enable CRT effects"}
+                  onSelect={() => {
+                    setCrtEnabled(!crtEnabled);
+                    setOpen(false);
+                  }}
+                />
+                <Item
+                  icon={Monitor}
+                  label={scanlines ? "Hide scanlines" : "Show scanlines"}
+                  onSelect={() => {
+                    setScanlines(!scanlines);
+                    setOpen(false);
+                  }}
+                />
+              </>
+            )}
             <Item icon={Brain} label="Expand all traces" onSelect={() => { expandAll(); setOpen(false); }} />
             <Item icon={Brain} label="Collapse all traces" onSelect={() => { collapseAll(); setOpen(false); }} />
+            <Item
+              icon={Keyboard}
+              label="Keyboard shortcuts"
+              onSelect={() => {
+                setKeyboardHelpOpen(true);
+                setOpen(false);
+              }}
+            />
+            <Item
+              icon={Activity}
+              label="Diagnostics"
+              onSelect={() => {
+                setDiagnosticsOpen(true);
+                setOpen(false);
+              }}
+            />
           </Command.Group>
         </Command.List>
         <div className="border-t border-phosphor-green/15 px-3 py-1.5 text-[10px] text-phosphor-green/35">
           <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl</kbd>+
-          <kbd className="rounded border border-phosphor-green/20 px-1">K</kbd> to toggle
+          <kbd className="rounded border border-phosphor-green/20 px-1">K</kbd> palette ·{" "}
+          <kbd className="rounded border border-phosphor-green/20 px-1">?</kbd> shortcuts
         </div>
       </Command>
     </div>

@@ -15,7 +15,8 @@ import { useSpokStore } from "@/lib/store";
 import { toast } from "sonner";
 import { DirectoryNavigator } from "@/components/shell/directory-navigator";
 import { openWorkspaceSession } from "@/lib/workspace-session";
-import { FolderOpen } from "lucide-react";
+import { isDesktopRuntime, pickFolderNative } from "@/lib/desktop";
+import { FolderOpen, FolderSearch } from "lucide-react";
 
 const LAST_CWD_KEY = "spok.lastCwd";
 const LAST_CMD_KEY = "spok.lastCommand";
@@ -27,10 +28,14 @@ const LAST_CMD_KEY = "spok.lastCommand";
 export function LaunchDialog() {
   const open = useSpokStore((s) => s.launchOpen);
   const setOpen = useSpokStore((s) => s.setLaunchOpen);
+  const nativeFolderPicker = useSpokStore((s) => s.nativeFolderPicker);
 
   const [cwd, setCwd] = useState("");
   const [command, setCommand] = useState("grok");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const desktop = isDesktopRuntime();
 
   useEffect(() => {
     if (!open) return;
@@ -42,7 +47,25 @@ export function LaunchDialog() {
     } catch {
       /* ignore */
     }
-  }, [open]);
+    // Desktop default: prefer native picker; show in-app browser only when needed
+    setShowBrowser(!desktop || !nativeFolderPicker);
+  }, [open, desktop, nativeFolderPicker]);
+
+  const pickNative = async () => {
+    setPicking(true);
+    try {
+      const path = await pickFolderNative({
+        title: "Open workspace folder",
+        defaultPath: cwd || undefined,
+      });
+      if (path) {
+        setCwd(path);
+        toast.message("Folder selected");
+      }
+    } finally {
+      setPicking(false);
+    }
+  };
 
   const openWorkspace = async () => {
     if (!cwd.trim()) {
@@ -88,9 +111,37 @@ export function LaunchDialog() {
             >
               {cwd || "No folder selected"}
             </span>
+            {desktop && nativeFolderPicker && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 shrink-0"
+                disabled={picking}
+                onClick={() => void pickNative()}
+              >
+                <FolderSearch className="h-3.5 w-3.5" />
+                Browse…
+              </Button>
+            )}
           </div>
 
-          {open && (
+          {desktop && nativeFolderPicker && !showBrowser && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="flex-1 text-[11px] text-phosphor-green/45">
+                Using the OS folder picker for a native desktop experience.
+              </p>
+              <button
+                type="button"
+                className="text-[10px] uppercase tracking-wider text-phosphor-cyan/70 hover:text-phosphor-cyan"
+                onClick={() => setShowBrowser(true)}
+              >
+                Use in-app browser
+              </button>
+            </div>
+          )}
+
+          {open && showBrowser && (
             <DirectoryNavigator
               value={cwd}
               onChange={setCwd}

@@ -27,6 +27,7 @@ import {
   registerDurableSession,
   saveDurableSnapshot,
 } from "./session-persist-client";
+import { extractProviderTokens, mergeTokensIntoMetrics } from "./usage";
 
 const defaultConfig: SessionConfig = {
   cwd: "",
@@ -95,6 +96,9 @@ function recomputeMetrics(session: Session): SessionMetrics {
     session.status === "ready"
       ? session.metrics.endedAt
       : null;
+  // Preserve provider-reported token totals across metric recompute
+  const tokensEstimate = session.metrics.tokensEstimate;
+  const tokensLimit = session.metrics.tokensLimit;
   return {
     startedAt,
     endedAt,
@@ -106,6 +110,8 @@ function recomputeMetrics(session: Session): SessionMetrics {
     linesDeleted: files.reduce((s, f) => s + f.deletions, 0),
     subagentCount: nodes.filter((n) => n.type === "subagent").length,
     errorCount: nodes.filter((n) => n.type === "error" || n.status === "error").length,
+    tokensEstimate,
+    tokensLimit,
   };
 }
 
@@ -171,6 +177,13 @@ interface SpokState {
   linkedHighlightFileId: string | null;
   crtEnabled: boolean;
   scanlines: boolean;
+  /** Appearance theme: professional | crt | high-contrast */
+  uiTheme: import("./theme").UiTheme;
+  reducedMotion: boolean;
+  osNotifications: boolean;
+  nativeFolderPicker: boolean;
+  keyboardHelpOpen: boolean;
+  diagnosticsOpen: boolean;
 
   // selectors helpers
   getActiveSession: () => Session | null;
@@ -195,6 +208,12 @@ interface SpokState {
   collapseAll: () => void;
   setCrtEnabled: (v: boolean) => void;
   setScanlines: (v: boolean) => void;
+  setUiTheme: (theme: import("./theme").UiTheme) => void;
+  setReducedMotion: (v: boolean) => void;
+  setOsNotifications: (v: boolean) => void;
+  setNativeFolderPicker: (v: boolean) => void;
+  setKeyboardHelpOpen: (open: boolean) => void;
+  setDiagnosticsOpen: (open: boolean) => void;
 
   /**
    * Create a session. When `activate` is false, the current active session
@@ -319,8 +338,14 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   },
   expandedNodeIds: new Set(),
   linkedHighlightFileId: null,
-  crtEnabled: true,
-  scanlines: true,
+  crtEnabled: false,
+  scanlines: false,
+  uiTheme: "professional",
+  reducedMotion: false,
+  osNotifications: true,
+  nativeFolderPicker: true,
+  keyboardHelpOpen: false,
+  diagnosticsOpen: false,
 
   getActiveSession: () => {
     const { sessions, activeSessionId } = get();
@@ -362,6 +387,18 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   collapseAll: () => set({ expandedNodeIds: new Set() }),
   setCrtEnabled: (v) => set({ crtEnabled: v }),
   setScanlines: (v) => set({ scanlines: v }),
+  setUiTheme: (theme) => {
+    if (theme === "crt") {
+      set({ uiTheme: theme, crtEnabled: true, scanlines: true });
+    } else {
+      set({ uiTheme: theme, crtEnabled: false, scanlines: false });
+    }
+  },
+  setReducedMotion: (v) => set({ reducedMotion: v }),
+  setOsNotifications: (v) => set({ osNotifications: v }),
+  setNativeFolderPicker: (v) => set({ nativeFolderPicker: v }),
+  setKeyboardHelpOpen: (open) => set({ keyboardHelpOpen: open }),
+  setDiagnosticsOpen: (open) => set({ diagnosticsOpen: open }),
 
   createSession: (partial, opts) => {
     const session = createSession(partial);
@@ -785,6 +822,13 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         updated.metrics = { ...updated.metrics, startedAt: event.timestamp };
       }
       updated.metrics = recomputeMetrics(updated);
+      const providerTokens = extractProviderTokens(event.meta);
+      if (providerTokens != null) {
+        updated.metrics = mergeTokensIntoMetrics(
+          updated.metrics,
+          providerTokens
+        );
+      }
 
       return {
         sessions: { ...s.sessions, [sessionId]: updated },
@@ -1202,10 +1246,31 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       ),
     })),
 
-  pushNotification: (n) =>
+  pushNotification: (n) => {
     set((s) => ({
       notifications: [n, ...s.notifications].slice(0, 80),
-    })),
+    }));
+    // Desktop / browser OS notification mirror (best-effort, never blocks UI)
+    if (typeof window !== "undefined" && get().osNotifications) {
+      const important = new Set([
+        "run_complete",
+        "run_failed",
+        "run_cancelled",
+        "approval_needed",
+        "schedule_fired",
+        "schedule_skipped",
+        "channel_event",
+        "subagent_complete",
+      ]);
+      if (important.has(n.kind)) {
+        void import("./desktop")
+          .then(({ showOsNotification }) =>
+            showOsNotification({ title: n.title, body: n.body || "" })
+          )
+          .catch(() => undefined);
+      }
+    }
+  },
 
   markNotificationRead: (id) =>
     set((s) => ({

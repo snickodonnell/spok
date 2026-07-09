@@ -37,8 +37,12 @@ import {
   Save,
   Eye,
   EyeOff,
+  Palette,
+  Activity,
+  Keyboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { THEME_META, UI_THEMES, type UiTheme } from "@/lib/theme";
 
 const MODES: AppPermissionMode[] = [
   "manual",
@@ -56,6 +60,12 @@ export function SettingsDialog() {
   );
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
   const setScanlines = useSpokStore((s) => s.setScanlines);
+  const setUiTheme = useSpokStore((s) => s.setUiTheme);
+  const setReducedMotion = useSpokStore((s) => s.setReducedMotion);
+  const setOsNotifications = useSpokStore((s) => s.setOsNotifications);
+  const setNativeFolderPicker = useSpokStore((s) => s.setNativeFolderPicker);
+  const setDiagnosticsOpen = useSpokStore((s) => s.setDiagnosticsOpen);
+  const setKeyboardHelpOpen = useSpokStore((s) => s.setKeyboardHelpOpen);
   const setAppPermissionMode = useSpokStore((s) => s.setAppPermissionMode);
 
   const [loading, setLoading] = useState(false);
@@ -87,7 +97,16 @@ export function SettingsDialog() {
   }, [open, load]);
 
   const patch = (partial: Partial<SpokSettings>) => {
-    setDraft((d) => (d ? { ...d, ...partial, ui: { ...d.ui, ...partial.ui } } : d));
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            ...partial,
+            ui: { ...d.ui, ...(partial.ui ?? {}) },
+            desktop: { ...d.desktop, ...(partial.desktop ?? {}) },
+          }
+        : d
+    );
   };
 
   const save = async () => {
@@ -109,6 +128,7 @@ export function SettingsDialog() {
           showHiddenFolders: draft.showHiddenFolders,
           auditPrivilegedActions: draft.auditPrivilegedActions,
           ui: draft.ui,
+          desktop: draft.desktop,
           rules: draft.rules,
         },
       });
@@ -116,8 +136,7 @@ export function SettingsDialog() {
       setDraft({ ...res.resolved });
       setGrants(res.grants ?? []);
       setAppPermissionMode(res.resolved.permissionMode);
-      setCrtEnabled(res.resolved.ui.crtEnabled);
-      setScanlines(res.resolved.ui.scanlines);
+      applyUiFromResolved(res.resolved);
       toast.success(
         layer === "project" ? "Project settings saved" : "User settings saved"
       );
@@ -135,12 +154,38 @@ export function SettingsDialog() {
       setData(res);
       setDraft({ ...res.resolved });
       setAppPermissionMode(res.resolved.permissionMode);
+      applyUiFromResolved(res.resolved);
       toast.success("User settings reset to defaults");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Reset failed");
     } finally {
       setSaving(false);
     }
+  };
+
+  const applyUiFromResolved = (resolved: SpokSettings) => {
+    setUiTheme(resolved.ui.theme);
+    setCrtEnabled(resolved.ui.crtEnabled);
+    setScanlines(resolved.ui.scanlines);
+    setReducedMotion(resolved.ui.reducedMotion);
+    setOsNotifications(
+      resolved.ui.osNotifications ?? resolved.desktop.osNotifications
+    );
+    setNativeFolderPicker(resolved.desktop.nativeFolderPicker);
+  };
+
+  const setTheme = (theme: UiTheme) => {
+    const meta = THEME_META[theme];
+    patch({
+      ui: {
+        ...draft!.ui,
+        theme,
+        crtEnabled: meta.defaultCrt,
+        scanlines: meta.defaultScanlines,
+      },
+    });
+    // Live preview while drafting
+    setUiTheme(theme);
   };
 
   return (
@@ -167,17 +212,20 @@ export function SettingsDialog() {
         ) : (
           <Tabs defaultValue="permissions" className="flex min-h-0 flex-col">
             <div className="border-b border-phosphor-green/10 px-4 pt-2">
-              <TabsList className="w-full">
-                <TabsTrigger value="permissions" className="flex-1">
+              <TabsList className="w-full flex-wrap h-auto gap-0.5">
+                <TabsTrigger value="permissions" className="flex-1 min-w-[4.5rem]">
                   Permissions
                 </TabsTrigger>
-                <TabsTrigger value="commands" className="flex-1">
+                <TabsTrigger value="commands" className="flex-1 min-w-[4.5rem]">
                   Commands
                 </TabsTrigger>
-                <TabsTrigger value="grants" className="flex-1">
+                <TabsTrigger value="appearance" className="flex-1 min-w-[4.5rem]">
+                  Appearance
+                </TabsTrigger>
+                <TabsTrigger value="grants" className="flex-1 min-w-[4.5rem]">
                   Grants
                 </TabsTrigger>
-                <TabsTrigger value="privacy" className="flex-1">
+                <TabsTrigger value="privacy" className="flex-1 min-w-[4.5rem]">
                   Privacy
                 </TabsTrigger>
               </TabsList>
@@ -400,6 +448,185 @@ export function SettingsDialog() {
                 )}
               </TabsContent>
 
+              <TabsContent value="appearance" className="mt-0 space-y-4">
+                <section>
+                  <h3 className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-phosphor-green/45">
+                    <Palette className="h-3 w-3" />
+                    Theme
+                  </h3>
+                  <div className="grid gap-2">
+                    {UI_THEMES.map((theme) => {
+                      const meta = THEME_META[theme];
+                      const active = draft.ui.theme === theme;
+                      return (
+                        <button
+                          key={theme}
+                          type="button"
+                          onClick={() => setTheme(theme)}
+                          className={cn(
+                            "rounded-lg border px-3 py-2.5 text-left transition",
+                            active
+                              ? "border-phosphor-cyan/50 bg-phosphor-cyan/10"
+                              : "border-phosphor-green/15 bg-black/30 hover:border-phosphor-green/30"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs text-phosphor-green">
+                              {meta.label}
+                            </span>
+                            {active && (
+                              <Badge variant="success" className="ml-auto">
+                                active
+                              </Badge>
+                            )}
+                            {theme === "professional" && !active && (
+                              <Badge variant="muted" className="ml-auto">
+                                recommended
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[11px] leading-relaxed text-phosphor-green/50">
+                            {meta.description}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {draft.ui.theme === "crt" && (
+                  <>
+                    <ToggleRow
+                      label="CRT visual effects"
+                      description="Phosphor glow and subtle flicker."
+                      checked={draft.ui.crtEnabled}
+                      onChange={(v) => {
+                        patch({
+                          ui: {
+                            ...draft.ui,
+                            crtEnabled: v,
+                            scanlines: v ? draft.ui.scanlines : false,
+                          },
+                        });
+                        setCrtEnabled(v);
+                        if (!v) setScanlines(false);
+                      }}
+                    />
+                    <ToggleRow
+                      label="Scanlines"
+                      description="Requires CRT effects."
+                      checked={draft.ui.scanlines}
+                      onChange={(v) => {
+                        patch({ ui: { ...draft.ui, scanlines: v } });
+                        setScanlines(v);
+                      }}
+                    />
+                  </>
+                )}
+
+                <ToggleRow
+                  label="Reduced motion"
+                  description="Disable animations and CRT motion. Also honors OS prefers-reduced-motion."
+                  checked={draft.ui.reducedMotion}
+                  onChange={(v) => {
+                    patch({ ui: { ...draft.ui, reducedMotion: v } });
+                    setReducedMotion(v);
+                  }}
+                />
+
+                <ToggleRow
+                  label="Usage meter"
+                  description="Show context (and turns) usage in the metrics strip with color that shifts near the limit."
+                  checked={draft.ui.showUsageMeter !== false}
+                  onChange={(v) =>
+                    patch({ ui: { ...draft.ui, showUsageMeter: v } })
+                  }
+                />
+
+                <label className="block rounded-lg border border-phosphor-green/15 bg-black/30 px-3 py-2.5">
+                  <span className="text-xs text-phosphor-green">
+                    Context limit (tokens)
+                  </span>
+                  <p className="mt-0.5 text-[11px] text-phosphor-green/45">
+                    Budget for the usage meter. Override with SPOK_CONTEXT_LIMIT
+                    env if managed. Default 128000.
+                  </p>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={2000000}
+                    step={1000}
+                    className="mt-2 w-full rounded border border-phosphor-green/25 bg-black/50 px-2 py-1.5 font-mono text-xs text-phosphor-green outline-none focus:border-phosphor-cyan/50"
+                    value={draft.ui.contextLimitTokens ?? 128000}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!Number.isFinite(n)) return;
+                      patch({
+                        ui: {
+                          ...draft.ui,
+                          contextLimitTokens: Math.max(
+                            1000,
+                            Math.min(2_000_000, n)
+                          ),
+                        },
+                      });
+                    }}
+                  />
+                </label>
+
+                <ToggleRow
+                  label="OS notifications"
+                  description="Mirror completion, failure, and approval alerts to the desktop shell when available."
+                  checked={
+                    draft.ui.osNotifications ?? draft.desktop.osNotifications
+                  }
+                  onChange={(v) => {
+                    patch({
+                      ui: { ...draft.ui, osNotifications: v },
+                      desktop: { ...draft.desktop, osNotifications: v },
+                    });
+                    setOsNotifications(v);
+                  }}
+                />
+
+                <ToggleRow
+                  label="Native folder picker"
+                  description="Prefer the OS folder dialog in desktop builds. Falls back to the in-app browser."
+                  checked={draft.desktop.nativeFolderPicker}
+                  onChange={(v) => {
+                    patch({
+                      desktop: { ...draft.desktop, nativeFolderPicker: v },
+                    });
+                    setNativeFolderPicker(v);
+                  }}
+                />
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setOpen(false);
+                      setDiagnosticsOpen(true);
+                    }}
+                  >
+                    <Activity className="h-3.5 w-3.5" />
+                    Diagnostics
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setOpen(false);
+                      setKeyboardHelpOpen(true);
+                    }}
+                  >
+                    <Keyboard className="h-3.5 w-3.5" />
+                    Keyboard shortcuts
+                  </Button>
+                </div>
+              </TabsContent>
+
               <TabsContent value="privacy" className="mt-0 space-y-3">
                 <ToggleRow
                   label="Restrict browse to trusted roots"
@@ -419,28 +646,6 @@ export function SettingsDialog() {
                   description="Write spawn/approval decisions to ~/.spok/audit.ndjson and the session log."
                   checked={draft.auditPrivilegedActions}
                   onChange={(v) => patch({ auditPrivilegedActions: v })}
-                />
-                <ToggleRow
-                  label="CRT visual effects"
-                  description="Scanlines and phosphor glow (appearance only)."
-                  checked={draft.ui.crtEnabled}
-                  onChange={(v) =>
-                    patch({
-                      ui: {
-                        ...draft.ui,
-                        crtEnabled: v,
-                        scanlines: v ? draft.ui.scanlines : false,
-                      },
-                    })
-                  }
-                />
-                <ToggleRow
-                  label="Scanlines"
-                  description="Requires CRT effects."
-                  checked={draft.ui.scanlines}
-                  onChange={(v) =>
-                    patch({ ui: { ...draft.ui, scanlines: v } })
-                  }
                 />
               </TabsContent>
             </ScrollArea>

@@ -10,6 +10,7 @@ import {
   applyHookResultsToSession,
   runSessionHooks,
 } from "./extensions-client";
+import { detectAuthFailureHint } from "./runtime/auth-hints";
 
 export type HarnessHandle = {
   sessionId: string;
@@ -215,6 +216,25 @@ export async function runHarness(opts: {
   const decoder = new TextDecoder();
   let buffer = "";
   let exitCode: number | null = null;
+  let authHintEmitted = false;
+  let timedOut = false;
+
+  const maybeAuthHint = (text: string) => {
+    if (authHintEmitted || !text) return;
+    const hint = detectAuthFailureHint(text);
+    if (!hint) return;
+    authHintEmitted = true;
+    store.applyStreamEvent(sessionId, {
+      type: "system",
+      timestamp: Date.now(),
+      title: "Grok authentication",
+      content: hint,
+      status: "pending",
+      severity: "warn",
+      provider: "spok",
+      meta: { authGuidance: true, externalCliAuth: true },
+    });
+  };
 
   try {
     while (true) {
@@ -229,7 +249,7 @@ export async function runHarness(opts: {
           type: "system",
           timestamp: Date.now(),
           title: "Stopped",
-          content: "Run cancelled by user",
+          content: "Run cancelled by user (process tree kill requested)",
           status: "skipped",
         });
         await fireLifecycleHooks(sessionId, cwd, "stop");
@@ -246,28 +266,48 @@ export async function runHarness(opts: {
         if (!line.trim()) continue;
 
         try {
-          const maybe = JSON.parse(line) as { type?: string; code?: number };
+          const maybe = JSON.parse(line) as {
+            type?: string;
+            code?: number;
+            timedOut?: boolean;
+            data?: string;
+          };
           if (maybe.type === "exit") {
             exitCode = maybe.code ?? null;
+            timedOut = !!maybe.timedOut || exitCode === 124;
             const ok = exitCode === 0;
             store.updateSession(sessionId, {
-              status: ok ? "ready" : "error",
-              error: ok ? undefined : `Exit code ${exitCode}`,
+              status: ok ? "ready" : timedOut ? "stopped" : "error",
+              error: ok
+                ? undefined
+                : timedOut
+                  ? "Run timed out"
+                  : `Exit code ${exitCode}`,
             });
+          }
+          if (
+            (maybe.type === "stdout" || maybe.type === "stderr") &&
+            typeof maybe.data === "string"
+          ) {
+            maybeAuthHint(maybe.data);
           }
         } catch {
           /* not json envelope */
         }
+
+        maybeAuthHint(line);
 
         const result = ingest.ingestLine(line, Date.now());
         if (result.logLine) {
           store.appendRawLog(sessionId, redactSecrets(result.logLine).text);
         }
         for (const ev of result.events) {
+          const content =
+            ev.content != null ? redactSecrets(ev.content).text : ev.content;
+          if (typeof content === "string") maybeAuthHint(content);
           store.applyStreamEvent(sessionId, {
             ...ev,
-            content:
-              ev.content != null ? redactSecrets(ev.content).text : ev.content,
+            content,
             summary:
               ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
           });
@@ -315,7 +355,23 @@ export async function runHarness(opts: {
 
   const s = useSpokStore.getState().sessions[sessionId];
   if (s && (s.status === "running" || s.status === "starting")) {
-    store.updateSession(sessionId, { status: "ready" });
+    store.updateSession(sessionId, {
+      status: timedOut ? "stopped" : "ready",
+      error: timedOut ? "Run timed out" : undefined,
+    });
+  }
+
+  if (timedOut) {
+    store.applyStreamEvent(sessionId, {
+      type: "system",
+      timestamp: Date.now(),
+      title: "Timed out",
+      content:
+        "The Grok process was stopped after the run timeout. Adjust SPOK_RUN_TIMEOUT_MS (ms, 0=unlimited) if needed.",
+      status: "error",
+      severity: "warn",
+      provider: "spok",
+    });
   }
 
   // Always fire stop when a run finishes; also session_end on clean exit

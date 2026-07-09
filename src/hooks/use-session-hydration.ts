@@ -28,6 +28,10 @@ export function useSessionHydration() {
   const setAppPermissionMode = useSpokStore((s) => s.setAppPermissionMode);
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
   const setScanlines = useSpokStore((s) => s.setScanlines);
+  const setUiTheme = useSpokStore((s) => s.setUiTheme);
+  const setReducedMotion = useSpokStore((s) => s.setReducedMotion);
+  const setOsNotifications = useSpokStore((s) => s.setOsNotifications);
+  const setNativeFolderPicker = useSpokStore((s) => s.setNativeFolderPicker);
 
   useEffect(() => {
     if (started.current) return;
@@ -43,9 +47,17 @@ export function useSessionHydration() {
         try {
           const settings = await fetchSettings();
           if (!cancelled) {
+            const ui = settings.resolved.ui;
+            const desktop = settings.resolved.desktop;
             setAppPermissionMode(settings.resolved.permissionMode);
-            setCrtEnabled(settings.resolved.ui.crtEnabled);
-            setScanlines(settings.resolved.ui.scanlines);
+            setUiTheme(ui.theme ?? "professional");
+            setCrtEnabled(ui.crtEnabled);
+            setScanlines(ui.scanlines);
+            setReducedMotion(ui.reducedMotion ?? false);
+            setOsNotifications(
+              ui.osNotifications ?? desktop?.osNotifications ?? true
+            );
+            setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
             maxRestore = settings.resolved.maxRestoredSessions ?? 20;
           }
         } catch {
@@ -222,6 +234,10 @@ export function useSessionHydration() {
     setAppPermissionMode,
     setCrtEnabled,
     setScanlines,
+    setUiTheme,
+    setReducedMotion,
+    setOsNotifications,
+    setNativeFolderPicker,
   ]);
 
   // Remember last active session for next launch

@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useSpokStore } from "@/lib/store";
 import { formatDuration } from "@/lib/utils";
 import { GitStatusPill } from "@/components/git/git-status-pill";
+import { UsageMeter } from "@/components/session/usage-meter";
+import { getCachedSettings } from "@/lib/settings-client";
 import {
   Wrench,
   Brain,
@@ -44,6 +46,9 @@ export function MetricsBar() {
 
   const eventCount = session.eventCount ?? session.eventLog?.length ?? 0;
   const reviewCount = session.reviewComments?.filter((c) => !c.resolved).length ?? 0;
+  const ui = getCachedSettings()?.resolved.ui;
+  const showUsage = ui?.showUsageMeter !== false;
+  const contextLimit = ui?.contextLimitTokens;
 
   const items = [
     { icon: Clock, label: formatDuration(elapsed), tip: "Elapsed" },
@@ -62,6 +67,11 @@ export function MetricsBar() {
   return (
     <div className="flex h-8 items-center gap-3 overflow-x-auto border-b border-phosphor-green/15 px-3 text-[11px]">
       <StatusPill status={session.status} />
+      <UsageMeter
+        compact
+        show={showUsage}
+        contextLimit={contextLimit}
+      />
       {session.source === "resume" && (
         <span
           title="Restored from durable session log"

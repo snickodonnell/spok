@@ -67,15 +67,15 @@ Spok is organized around these surfaces:
 | P1 | Sessions are in-memory and not append-only. | `src/lib/store.ts` stores session state in Zustand only; process registry is module-local. | Add durable session storage: append-only raw event log, normalized event log, materialized snapshot, and export/import compatibility. Support resume by session id. |
 | P1 | Stream parsing is optimistic and under-tested. | `src/lib/grok-stream.ts` parses multiple formats by inference; `package.json` has no test script for parser fixtures. | Define a versioned event contract, validate with Zod or typed guards, preserve unknown raw events, and add fixture-based regression tests for Grok ACP and harness envelopes. |
 | P1 | Diff parsing reconstructs file contents from hunks, which loses unchanged lines and rename/binary nuance. | `parseUnifiedDiff()` in `src/lib/diff-utils.ts` builds old/new content from diff hunks only. | Keep parsed hunks as first-class data, use git plumbing for full file contents when needed, support binary/rename/mode changes, and cap large diffs. |
-| P1 | Stop and process lifecycle need stronger semantics. | Stop calls abort fetch and DELETE, while route cancellation also kills the child. There is no process tree kill, timeout, detached cleanup, or registry recovery. | Track process groups, kill child trees on Windows/macOS/Linux, add timeout and stale process cleanup, and persist process state transitions in the event log. |
+| P1 | Stop and process lifecycle need stronger semantics. | **Addressed in Phase 7** — process tree kill, timeout, registry, audit on stop. |
 | P1 | Slash commands are hand-maintained and may drift from Grok CLI. | `src/lib/grok-commands.ts` contains a static command list and assumed flags. | Generate or verify command metadata from `grok --help`, `grok <subcommand> --help`, or a checked fixture. Gate unsupported commands by detected CLI version. |
 | P1 | No first-class Git operations beyond diff. | Current UI can refresh/copy/download diffs, but cannot stage, revert, commit, branch, push, or open PRs. | Add a Git panel with stage/revert by hunk, commit, branch/worktree, push, PR creation, and review comments. Every destructive Git action should require confirmation. |
 | P1 | Worktree isolation is only a flag hint. | `/worktree` currently maps to `-w` in CLI args, but Spok does not own or visualize worktree lifecycle. | Add worktree creation/listing/handoff UI, branch naming, cleanup, status, and guardrails for dirty local checkout collisions. |
 | P1 | The app lacks a durable settings and policy system. | Settings live in localStorage or session state; no project/user/managed scope. | Add layered settings: managed, user, project, local. Include permission rules, command profiles, env profiles, hooks, MCP servers, models, and UI preferences. |
-| P2 | UI style is memorable but not yet accessibility-ready. | CRT effects, scanlines, dense glow, and low-contrast phosphor text dominate the interface. | Keep the retro theme as an option, but add a quiet professional theme, reduced motion, high contrast, and accessible focus/keyboard states. |
+| P2 | UI style is memorable but not yet accessibility-ready. | **Addressed in Phase 6** — professional + high-contrast themes, reduced motion, skip link, focus rings, keyboard help. CRT remains optional. |
 | P2 | No integrated terminal or command output panes beyond raw log. | Codex/Claude-style workflows rely on terminal context, background commands, and visible validation. | Add a terminal panel scoped to workspace/worktree with command history, running process list, and "send output to prompt" affordances. |
 | P2 | No hook, MCP, plugin, skill, or custom-agent management UI. | **Addressed in Phase 4** — Extension Center + discovery APIs. | Live MCP invoke, marketplace install, and hook approval UX remain follow-ups. |
-| P2 | Build/package quality is early. | No CI config, no route tests, no Playwright coverage, no release/update path; Tauri icon list includes `icons/henry.w@example.net`. | Add CI, e2e smoke tests, package verification, crash/error reporting, proper app icons, signing/update plan, and desktop-specific security review. |
+| P2 | Build/package quality is early. | **Partially addressed in Phase 6** — Playwright smoke, diagnostics, release checklist, security posture, fixed icons (Phase 2). Full CI matrix and signed releases remain. |
 
 ## Immediate Correction Plan
 
@@ -417,19 +417,70 @@ Known gaps / follow-ups (not Phase 5 blockers):
 
 Target: 4 weeks
 
+**Status (2026-07-09): Implemented in tree.** Professional/high-contrast/CRT themes, reduced motion, native folder picker, OS notifications, encrypted secrets vault, diagnostics bundle, error boundary, keyboard help, Playwright smoke suite, and release/security docs are live.
+
 Deliverables:
 
-- Native folder picker, keychain-backed tokens, notifications, app protocol, and updater plan.
-- Quiet/professional theme, accessible contrast, reduced motion, and keyboard audit.
-- Crash/error reporting and diagnostics bundle.
-- Packaging/signing/release checklist.
-- Playwright and visual verification suite.
+- [x] Native folder picker, keychain-backed tokens, notifications, app protocol, and updater plan.
+  - Tauri `pick_folder` (`rfd`), `show_notification`, `open_path`, `reveal_path`, `get_app_info`.
+  - Launch dialog prefers OS picker in desktop mode; in-app browser fallback.
+  - AES-256-GCM secrets vault at `~/.spok/secrets` + `/api/secrets` (OS keychain upgrade path documented).
+  - Deep-link argv → `spok-deep-link` event; updater plan in `docs/RELEASE_CHECKLIST.md` / `docs/UPDATER_AND_DESKTOP.md`.
+- [x] Quiet/professional theme, accessible contrast, reduced motion, and keyboard audit.
+  - Themes: `professional` (default), `crt`, `high-contrast` via `data-theme` + Settings → Appearance.
+  - Reduced motion (app + OS `prefers-reduced-motion`); skip link; focus rings; keyboard help (`?`).
+- [x] Crash/error reporting and diagnostics bundle.
+  - `ErrorBoundary` with local crash log; `GET /api/diagnostics` + Diagnostics dialog export.
+- [x] Packaging/signing/release checklist.
+  - `docs/RELEASE_CHECKLIST.md`, `docs/SECURITY_POSTURE.md`, `docs/UPDATER_AND_DESKTOP.md`.
+- [x] Playwright and visual verification suite.
+  - `e2e/smoke.spec.ts`, `playwright.config.ts`, `npm run test:e2e`.
 
 Acceptance criteria:
 
-- Desktop app can be used daily without relying on raw dev server affordances.
-- Security posture is documented and testable.
-- Release builds pass smoke tests on Windows.
+- [x] Desktop app can be used daily without relying on raw dev server affordances (native picker, OS notifications, professional theme default).
+- [x] Security posture is documented and testable (`docs/SECURITY_POSTURE.md` + unit tests).
+- [x] Release builds pass smoke tests on Windows (`npm test` + Playwright smoke against production server).
+
+Known gaps / follow-ups (not Phase 6 blockers):
+
+- Authenticode signing requires a real cert (checklist prepared; thumbprint null).
+- Auto-updater plugin not enabled until pubkey + release endpoint exist.
+- OS protocol registration for `spok://` is installer-owned; shell only emits events today.
+- OS keychain bridge can replace file vault without changing the client API.
+- Full visual regression baselines (screenshots) can be added as CI matures.
+
+### Phase 7: Agent Runtime Polish & Prompt UX
+
+Target: 1-2 weeks
+
+**Status (2026-07-09): Implemented in tree.** Process tree kill + run timeouts, CLI presence/version readiness, status line, queued follow-ups while a run is live, and auth-failure guidance that defers login to the native Grok CLI.
+
+**Auth product decision:** Spok does **not** implement Grok OAuth/API-key login. Users authenticate with the native Grok CLI, then launch Spok. Spok only surfaces readiness (CLI found/version) and soft hints when stream text looks like an auth failure.
+
+Deliverables:
+
+- [x] Process lifecycle: tree kill, timeout, registry metadata.
+  - `src/lib/process-lifecycle.ts`; `taskkill /T` on Windows; SIGTERM/SIGKILL group on POSIX.
+  - `SPOK_RUN_TIMEOUT_MS` (default 2h, `0` = unlimited); exit code 124 on timeout.
+- [x] CLI readiness probe (presence + version only).
+  - `GET /api/runtime/cli-status`; status line badge; no login probe until product confirms CLI contract.
+- [x] Status line: cwd, branch, permission mode, CLI, desktop/web.
+- [x] Composer queue for follow-ups while a run is active (max 12); Stop clears queue.
+- [x] Auth-failure heuristics → trace system event with external-CLI guidance.
+
+Acceptance criteria:
+
+- [x] Stop kills the process tree, not only the parent handle.
+- [x] Users can queue follow-ups without losing the current run.
+- [x] Missing CLI is visible before launch; Spok never claims to own Grok login.
+
+Known gaps / follow-ups:
+
+- Official “am I logged in?” CLI probe deferred — **ask product** for the Grok CLI command/output.
+- Slash-command catalog still static (generate from `grok --help` remains open).
+- Integrated terminal panel still catalog P2.
+- Headless schedule daemon still deferred.
 
 ## Suggested First Issues
 
@@ -439,7 +490,7 @@ Acceptance criteria:
 4. ~~Add `WorkspaceTrust` model and reject untrusted `cwd`.~~ **Done (Phase 0) — in-memory registry.**
 5. ~~Add secret redaction utility and route it through logs, events, diffs, and export.~~ **Done (Phase 0).**
 6. Replace static slash-command assumptions with generated/verified Grok command metadata.
-7. Add durable `sessions/<id>/events.ndjson` and replay loader.
+7. ~~Add durable `sessions/<id>/events.ndjson` and replay loader.~~ **Done (Phase 1).**
 8. ~~Harden Tauri capabilities and remove the invalid icon entry.~~ **Done (Phase 2).**
 
 ## Generated Implementation Skills

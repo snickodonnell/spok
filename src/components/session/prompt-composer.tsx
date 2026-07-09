@@ -87,6 +87,8 @@ export function PromptComposer() {
 
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Follow-up prompts queued while a run is active (Phase 7). */
+  const [promptQueue, setPromptQueue] = useState<string[]>([]);
   const [hint, setHint] = useState<string | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -94,6 +96,8 @@ export function PromptComposer() {
   const [agentCatalog, setAgentCatalog] = useState<CustomAgentConfig[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const busyRef = useRef(false);
+  const queueDrainRef = useRef(false);
 
   const flags = useMemo(
     () => flagsFromSession(session?.grokFlags),
@@ -165,196 +169,239 @@ export function PromptComposer() {
 
   const stopRun = useCallback(async () => {
     abortRef.current?.abort();
+    // Drop queued follow-ups on stop so they do not surprise-run after cancel
+    setPromptQueue([]);
+    queueDrainRef.current = false;
     if (session) {
       await localFetch(
         `/api/session/start?sessionId=${encodeURIComponent(session.id)}`,
         { method: "DELETE" }
       ).catch(() => undefined);
     }
+    busyRef.current = false;
     setBusy(false);
   }, [session]);
 
+  /** Execute one prompt turn (must not be called while busyRef is true). */
+  const runPromptText = useCallback(
+    async (text: string) => {
+      if (!session) return;
+      const resolved = resolveRun(text, flags);
+
+      if (resolved.type === "ui") {
+        if (resolved.action === "set-flag" && resolved.flags) {
+          setGrokFlags(session.id, resolved.flags as Record<string, unknown>);
+          setHint(resolved.message ?? "Flag updated");
+          toast.message(resolved.message ?? "Flag updated");
+          return;
+        }
+        if (resolved.action === "show-help" || resolved.action === "help") {
+          setHint(resolved.message ?? null);
+          applyStreamEvent(session.id, {
+            type: "system",
+            timestamp: Date.now(),
+            title: "Help",
+            content: resolved.message ?? "Type / to browse commands",
+            status: "success",
+          });
+          return;
+        }
+        if (resolved.action === "clear") {
+          clearSessionTraces(session.id);
+          applyStreamEvent(session.id, {
+            type: "system",
+            timestamp: Date.now(),
+            title: "Workspace cleared",
+            content: `Repo: ${session.config.cwd}`,
+            status: "success",
+          });
+          toast.success("Traces cleared");
+          return;
+        }
+        if (resolved.action === "stop") {
+          await stopRun();
+          toast.message("Stop requested");
+          return;
+        }
+        if (resolved.action === "export") {
+          const s = exportActiveSession();
+          if (!s) return;
+          const payload = buildExportPayload(s);
+          const blob = new Blob([JSON.stringify(payload, null, 2)], {
+            type: "application/json",
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `spok-session-${s.id}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+          toast.success("Exported (secrets redacted)");
+          return;
+        }
+        return;
+      }
+
+      const turnId = nanoid(8);
+
+      const skillSnippet =
+        attachedSkills.length > 0
+          ? buildSkillAttachmentSnippet(attachedSkills)
+          : "";
+      const agentSnippet = selectedAgent
+        ? buildAgentBrief(selectedAgent, { includeSystemPrompt: true })
+        : "";
+      const extensionPreamble = [agentSnippet, skillSnippet]
+        .filter(Boolean)
+        .join("\n\n");
+
+      if (extensionPreamble) {
+        applyStreamEvent(session.id, {
+          type: "system",
+          timestamp: Date.now(),
+          title: "Extensions for this turn",
+          content: extensionPreamble,
+          status: "success",
+          severity: "info",
+          provider: "spok",
+          meta: {
+            skills: attachedSkills.map((s) => s.id),
+            agentId: selectedAgent?.id,
+          },
+        });
+      }
+
+      let runArgs = resolved.args;
+      if (
+        extensionPreamble &&
+        resolved.type === "prompt" &&
+        Array.isArray(resolved.args)
+      ) {
+        const args = [...resolved.args];
+        const last = args[args.length - 1];
+        if (typeof last === "string" && last === text) {
+          args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${text}`;
+          runArgs = args;
+        } else if (typeof last === "string" && last.includes(text)) {
+          args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${last}`;
+          runArgs = args;
+        }
+      }
+
+      pushPromptTurn(session.id, {
+        id: turnId,
+        text,
+        label: resolved.label,
+        timestamp: Date.now(),
+        status: "running",
+      });
+      setHint(null);
+      busyRef.current = true;
+      setBusy(true);
+      clearSelectedSkills();
+
+      const ac = new AbortController();
+      abortRef.current = ac;
+
+      try {
+        try {
+          const { results } = await runSessionHooks({
+            event: "prompt_submit",
+            sessionId: session.id,
+            cwd: session.config.cwd,
+            vars: { prompt: text.slice(0, 200) },
+          });
+          applyHookResultsToSession(session.id, results, (sid, ev) => {
+            applyStreamEvent(sid, ev);
+          });
+        } catch {
+          /* non-fatal */
+        }
+
+        await runHarness({
+          sessionId: session.id,
+          cwd: session.config.cwd,
+          command: session.config.command || "grok",
+          args: runArgs,
+          label: resolved.label,
+          signal: ac.signal,
+        });
+        updatePromptTurn(session.id, turnId, { status: "success" });
+      } catch (e) {
+        if (!ac.signal.aborted) {
+          updatePromptTurn(session.id, turnId, { status: "error" });
+          toast.error(e instanceof Error ? e.message : "Run failed");
+        } else {
+          updatePromptTurn(session.id, turnId, { status: "cancelled" });
+        }
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+        abortRef.current = null;
+      }
+    },
+    [
+      session,
+      flags,
+      setGrokFlags,
+      applyStreamEvent,
+      clearSessionTraces,
+      stopRun,
+      exportActiveSession,
+      pushPromptTurn,
+      updatePromptTurn,
+      attachedSkills,
+      selectedAgent,
+      clearSelectedSkills,
+    ]
+  );
+
+  // Drain queue after each finished run
+  useEffect(() => {
+    if (busy || promptQueue.length === 0 || !session) return;
+    if (queueDrainRef.current) return;
+    queueDrainRef.current = true;
+    const next = promptQueue[0];
+    setPromptQueue((q) => q.slice(1));
+    void (async () => {
+      try {
+        await runPromptText(next);
+      } finally {
+        queueDrainRef.current = false;
+      }
+    })();
+  }, [busy, promptQueue, session, runPromptText]);
+
   const submit = useCallback(async () => {
-    if (!session || busy) return;
+    if (!session) return;
     const text = value.trim();
     if (!text) return;
 
-    const resolved = resolveRun(text, flags);
+    // UI slash actions always run immediately (including stop while busy)
+    if (text.startsWith("/")) {
+      const resolved = resolveRun(text, flags);
+      if (resolved.type === "ui") {
+        setValue("");
+        await runPromptText(text);
+        return;
+      }
+    }
 
-    if (resolved.type === "ui") {
-      if (resolved.action === "set-flag" && resolved.flags) {
-        setGrokFlags(session.id, resolved.flags as Record<string, unknown>);
-        setHint(resolved.message ?? "Flag updated");
-        toast.message(resolved.message ?? "Flag updated");
-        setValue("");
+    if (busyRef.current || busy) {
+      // Queue follow-up while live run is active
+      if (promptQueue.length >= 12) {
+        toast.error("Queue full (max 12). Wait for a turn to finish.");
         return;
       }
-      if (resolved.action === "show-help" || resolved.action === "help") {
-        setHint(resolved.message ?? null);
-        applyStreamEvent(session.id, {
-          type: "system",
-          timestamp: Date.now(),
-          title: "Help",
-          content: resolved.message ?? "Type / to browse commands",
-          status: "success",
-        });
-        return;
-      }
-      if (resolved.action === "clear") {
-        clearSessionTraces(session.id);
-        applyStreamEvent(session.id, {
-          type: "system",
-          timestamp: Date.now(),
-          title: "Workspace cleared",
-          content: `Repo: ${session.config.cwd}`,
-          status: "success",
-        });
-        setValue("");
-        toast.success("Traces cleared");
-        return;
-      }
-      if (resolved.action === "stop") {
-        await stopRun();
-        toast.message("Stop requested");
-        return;
-      }
-      if (resolved.action === "export") {
-        const s = exportActiveSession();
-        if (!s) return;
-        const payload = buildExportPayload(s);
-        const blob = new Blob([JSON.stringify(payload, null, 2)], {
-          type: "application/json",
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `spok-session-${s.id}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        toast.success("Exported (secrets redacted)");
-        return;
-      }
+      setPromptQueue((q) => [...q, text]);
+      setValue("");
+      toast.message(`Queued (#${promptQueue.length + 1}) — runs after current turn`);
       return;
     }
 
-    const turnId = nanoid(8);
-
-    // Opt-in skill/agent context — compact index only, never every repo skill
-    const skillSnippet =
-      attachedSkills.length > 0
-        ? buildSkillAttachmentSnippet(attachedSkills)
-        : "";
-    const agentSnippet = selectedAgent
-      ? buildAgentBrief(selectedAgent, { includeSystemPrompt: true })
-      : "";
-    const extensionPreamble = [agentSnippet, skillSnippet]
-      .filter(Boolean)
-      .join("\n\n");
-
-    // Prefer injecting as a system trace + light prompt prefix only when attached
-    if (extensionPreamble) {
-      applyStreamEvent(session.id, {
-        type: "system",
-        timestamp: Date.now(),
-        title: "Extensions for this turn",
-        content: extensionPreamble,
-        status: "success",
-        severity: "info",
-        provider: "spok",
-        meta: {
-          skills: attachedSkills.map((s) => s.id),
-          agentId: selectedAgent?.id,
-        },
-      });
-    }
-
-    // Rebuild args if we need to prefix the user prompt (prompt runs only)
-    let runArgs = resolved.args;
-    if (
-      extensionPreamble &&
-      resolved.type === "prompt" &&
-      Array.isArray(resolved.args)
-    ) {
-      // Grok headless prompts usually end with the freeform prompt string
-      const args = [...resolved.args];
-      const last = args[args.length - 1];
-      if (typeof last === "string" && last === text) {
-        args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${text}`;
-        runArgs = args;
-      } else if (typeof last === "string" && last.includes(text)) {
-        args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${last}`;
-        runArgs = args;
-      }
-    }
-
-    pushPromptTurn(session.id, {
-      id: turnId,
-      text,
-      label: resolved.label,
-      timestamp: Date.now(),
-      status: "running",
-    });
     setValue("");
-    setHint(null);
-    setBusy(true);
-    clearSelectedSkills();
-    // keep agent selection sticky across turns (user can clear)
-
-    const ac = new AbortController();
-    abortRef.current = ac;
-
-    try {
-      // prompt_submit hooks (trace only unless trusted command hooks exist)
-      try {
-        const { results } = await runSessionHooks({
-          event: "prompt_submit",
-          sessionId: session.id,
-          cwd: session.config.cwd,
-          vars: { prompt: text.slice(0, 200) },
-        });
-        applyHookResultsToSession(session.id, results, (sid, ev) => {
-          applyStreamEvent(sid, ev);
-        });
-      } catch {
-        /* non-fatal */
-      }
-
-      await runHarness({
-        sessionId: session.id,
-        cwd: session.config.cwd,
-        command: session.config.command || "grok",
-        args: runArgs,
-        label: resolved.label,
-        signal: ac.signal,
-      });
-      updatePromptTurn(session.id, turnId, { status: "success" });
-    } catch (e) {
-      if (!ac.signal.aborted) {
-        updatePromptTurn(session.id, turnId, { status: "error" });
-        toast.error(e instanceof Error ? e.message : "Run failed");
-      } else {
-        updatePromptTurn(session.id, turnId, { status: "cancelled" });
-      }
-    } finally {
-      setBusy(false);
-      abortRef.current = null;
-    }
-  }, [
-    session,
-    busy,
-    value,
-    flags,
-    setGrokFlags,
-    applyStreamEvent,
-    clearSessionTraces,
-    stopRun,
-    exportActiveSession,
-    pushPromptTurn,
-    updatePromptTurn,
-    attachedSkills,
-    selectedAgent,
-    clearSelectedSkills,
-  ]);
+    await runPromptText(text);
+  }, [session, value, flags, busy, promptQueue.length, runPromptText]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (slashOpen && slashMatches.length) {
@@ -505,9 +552,43 @@ export function PromptComposer() {
           <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-phosphor-green">
             <span className="live-dot h-1.5 w-1.5 rounded-full bg-phosphor-green" />
             RUNNING
+            {promptQueue.length > 0 && (
+              <span className="text-phosphor-amber">
+                · {promptQueue.length} queued
+              </span>
+            )}
           </span>
         )}
       </div>
+
+      {promptQueue.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-phosphor-amber/25 bg-phosphor-amber/5 px-3 py-1.5">
+          <span className="text-[9px] uppercase tracking-widest text-phosphor-amber/80">
+            Queue
+          </span>
+          {promptQueue.map((q, i) => (
+            <button
+              key={`${i}-${q.slice(0, 12)}`}
+              type="button"
+              title={q}
+              onClick={() =>
+                setPromptQueue((prev) => prev.filter((_, j) => j !== i))
+              }
+              className="max-w-[180px] truncate rounded border border-phosphor-amber/30 bg-black/40 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-amber hover:border-phosphor-red/40"
+            >
+              {i + 1}. {q}
+              <X className="ml-1 inline h-2.5 w-2.5 opacity-60" />
+            </button>
+          ))}
+          <button
+            type="button"
+            className="ml-auto text-[9px] uppercase tracking-wider text-phosphor-green/40 hover:text-phosphor-red"
+            onClick={() => setPromptQueue([])}
+          >
+            Clear queue
+          </button>
+        </div>
+      )}
 
       {hint && (
         <div className="border-b border-phosphor-cyan/20 bg-phosphor-cyan/5 px-3 py-1.5 text-[11px] text-phosphor-cyan/80">
@@ -582,22 +663,37 @@ export function PromptComposer() {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={busy}
             rows={2}
-            placeholder='Prompt Grok…  or type / for commands (e.g. /continue, /model, /always-approve)'
-            className="w-full resize-none rounded-md border border-phosphor-green/25 bg-black/50 px-3 py-2 font-mono text-sm text-phosphor-green outline-none placeholder:text-phosphor-green/30 focus:border-phosphor-green/50 focus:ring-1 focus:ring-phosphor-green/40 disabled:opacity-50"
+            placeholder={
+              busy
+                ? "Type a follow-up and Enter to queue…  (runs after current turn)"
+                : "Prompt Grok…  or type / for commands (e.g. /continue, /model, /always-approve)"
+            }
+            className="w-full resize-none rounded-md border border-phosphor-green/25 bg-black/50 px-3 py-2 font-mono text-sm text-phosphor-green outline-none placeholder:text-phosphor-green/30 focus:border-phosphor-green/50 focus:ring-1 focus:ring-phosphor-green/40 focus:ring-[var(--focus-ring)]"
           />
         </div>
         <div className="flex shrink-0 flex-col gap-1">
-          {busy || isLive ? (
+          {(busy || isLive) && (
             <Button
               variant="destructive"
               size="sm"
               onClick={() => void stopRun()}
-              title="Stop run"
+              title="Stop run and clear queue"
             >
               <Square className="h-3.5 w-3.5" />
               Stop
+            </Button>
+          )}
+          {busy || isLive ? (
+            <Button
+              size="sm"
+              variant="amber"
+              onClick={() => void submit()}
+              disabled={!value.trim()}
+              title="Queue follow-up (Enter)"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              Queue
             </Button>
           ) : (
             <>
@@ -653,7 +749,7 @@ export function PromptComposer() {
       <div className="flex items-center justify-between px-3 pb-1.5 text-[10px] text-phosphor-green/30">
         <span>
           <kbd className="rounded border border-phosphor-green/20 px-1">Enter</kbd>{" "}
-          send ·{" "}
+          {busy ? "queue" : "send"} ·{" "}
           <kbd className="rounded border border-phosphor-green/20 px-1">Shift+Enter</kbd>{" "}
           newline ·{" "}
           <kbd className="rounded border border-phosphor-green/20 px-1">/</kbd>{" "}

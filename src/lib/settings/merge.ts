@@ -1,4 +1,5 @@
 import { defaultSettings } from "./defaults";
+import { isUiTheme } from "../theme";
 import type {
   LayeredSettingsBundle,
   PermissionRule,
@@ -19,6 +20,7 @@ export function deepMergeSettings(
     ...base,
     ...overlay,
     ui: { ...base.ui, ...(overlay.ui ?? {}) },
+    desktop: { ...base.desktop, ...(overlay.desktop ?? {}) },
     rules: overlay.rules ?? base.rules,
     autoProfiles: overlay.autoProfiles ?? base.autoProfiles,
   };
@@ -90,6 +92,13 @@ export function mergeLayeredSettings(layers: {
     if (partial.ui) {
       resolved = { ...resolved, ui: { ...resolved.ui, ...partial.ui } };
       provenance.ui = layer;
+    }
+    if (partial.desktop) {
+      resolved = {
+        ...resolved,
+        desktop: { ...resolved.desktop, ...partial.desktop },
+      };
+      provenance.desktop = layer;
     }
   };
 
@@ -186,15 +195,54 @@ export function sanitizePartialSettings(
     );
   }
   if (isObject(input.ui)) {
+    const theme = isUiTheme(input.ui.theme)
+      ? input.ui.theme
+      : // Back-compat: older settings without theme → infer from crtEnabled
+        typeof input.ui.crtEnabled === "boolean" && input.ui.crtEnabled
+        ? "crt"
+        : d.ui.theme;
     out.ui = {
+      theme,
       crtEnabled:
         typeof input.ui.crtEnabled === "boolean"
           ? input.ui.crtEnabled
-          : d.ui.crtEnabled,
+          : theme === "crt",
       scanlines:
         typeof input.ui.scanlines === "boolean"
           ? input.ui.scanlines
-          : d.ui.scanlines,
+          : theme === "crt",
+      reducedMotion:
+        typeof input.ui.reducedMotion === "boolean"
+          ? input.ui.reducedMotion
+          : d.ui.reducedMotion,
+      osNotifications:
+        typeof input.ui.osNotifications === "boolean"
+          ? input.ui.osNotifications
+          : d.ui.osNotifications,
+      contextLimitTokens:
+        typeof input.ui.contextLimitTokens === "number" &&
+        Number.isFinite(input.ui.contextLimitTokens)
+          ? Math.max(
+              1_000,
+              Math.min(2_000_000, Math.floor(input.ui.contextLimitTokens))
+            )
+          : d.ui.contextLimitTokens,
+      showUsageMeter:
+        typeof input.ui.showUsageMeter === "boolean"
+          ? input.ui.showUsageMeter
+          : d.ui.showUsageMeter,
+    };
+  }
+  if (isObject(input.desktop)) {
+    out.desktop = {
+      nativeFolderPicker:
+        typeof input.desktop.nativeFolderPicker === "boolean"
+          ? input.desktop.nativeFolderPicker
+          : d.desktop.nativeFolderPicker,
+      osNotifications:
+        typeof input.desktop.osNotifications === "boolean"
+          ? input.desktop.osNotifications
+          : d.desktop.osNotifications,
     };
   }
 

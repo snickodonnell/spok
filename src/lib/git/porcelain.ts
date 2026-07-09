@@ -54,7 +54,7 @@ export function parsePorcelainStatus(statusText: string): GitFileEntry[] {
   for (const line of lines) {
     if (!line || line.length < 2) continue;
     const code = line.slice(0, 2);
-    let rest = line.slice(3);
+    const rest = line.slice(3);
 
     let path = rest;
     let oldPath: string | undefined;

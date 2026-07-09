@@ -6,6 +6,8 @@
  *   managed → user → project → local (session UI)
  */
 
+import type { UiTheme } from "../theme";
+
 export type SettingsLayer = "managed" | "user" | "project" | "local";
 
 /**
@@ -92,8 +94,34 @@ export interface SpokSettings {
   /** Soft max concurrent durable sessions restored at boot */
   maxRestoredSessions: number;
   ui: {
+    /**
+     * Appearance theme. Professional is the daily-driver default;
+     * CRT keeps the retro aesthetic; high-contrast maximizes legibility.
+     */
+    theme: UiTheme;
+    /** CRT scanlines / flicker overlays (only when theme is crt). */
     crtEnabled: boolean;
     scanlines: boolean;
+    /** Prefer reduced motion (disables CRT animations and framer flourishes). */
+    reducedMotion: boolean;
+    /** Mirror in-app notifications to the OS (desktop shell only). */
+    osNotifications: boolean;
+    /**
+     * Context window budget for the usage meter (tokens).
+     * Override with SPOK_CONTEXT_LIMIT env for managed installs.
+     */
+    contextLimitTokens: number;
+    /** Show compact usage meter in the metrics strip. */
+    showUsageMeter: boolean;
+  };
+  /**
+   * Desktop shell preferences (ignored in pure browser mode).
+   */
+  desktop: {
+    /** Prefer native OS folder picker when Tauri is available. */
+    nativeFolderPicker: boolean;
+    /** Show OS notifications for completion / failure / approval. */
+    osNotifications: boolean;
   };
 }
 

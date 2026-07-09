@@ -53,7 +53,7 @@ export function WelcomeScreen() {
       <div className="mx-auto flex w-full max-w-4xl flex-col justify-center gap-8 p-8">
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded border border-phosphor-green/30 bg-phosphor-green/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.25em] text-phosphor-green">
-            <Radio className="h-3 w-3 animate-pulse" />
+            <Radio className="h-3 w-3 live-dot" />
             Live harness online
           </div>
           <h1 className="font-mono text-3xl font-bold tracking-tight text-phosphor-green crt-glow sm:text-4xl">
@@ -63,7 +63,11 @@ export function WelcomeScreen() {
             Pick a repo, then work in a full workspace: prompts and{" "}
             <code className="text-phosphor-cyan">/</code> commands at the bottom,
             live thinking permanently on the side, diffs and metrics streaming as
-            Grok runs.
+            Grok runs. Use{" "}
+            <kbd className="rounded border border-phosphor-green/25 px-1 text-[10px]">
+              ?
+            </kbd>{" "}
+            for shortcuts, or cycle themes from the top bar.
           </p>
         </div>
 

@@ -103,8 +103,18 @@ export function defaultSettings(): SpokSettings {
     auditPrivilegedActions: true,
     maxRestoredSessions: 20,
     ui: {
-      crtEnabled: true,
-      scanlines: true,
+      // Professional is the daily-driver default (Phase 6); CRT remains one click away.
+      theme: "professional",
+      crtEnabled: false,
+      scanlines: false,
+      reducedMotion: false,
+      osNotifications: true,
+      contextLimitTokens: 128_000,
+      showUsageMeter: true,
+    },
+    desktop: {
+      nativeFolderPicker: true,
+      osNotifications: true,
     },
   };
 }

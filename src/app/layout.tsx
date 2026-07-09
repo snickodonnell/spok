@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Spok — Live Harness for Grok Build",
   description:
-    "Live thinking-trace and repo-diff visualizer for Grok Build sessions. Retro tech CRT aesthetics.",
+    "Live thinking-trace and repo-diff visualizer for Grok Build sessions. Professional and CRT themes with durable sessions and a hardened local runtime.",
   icons: {
     icon: "/favicon.ico",
   },
@@ -27,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" data-theme="professional">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

@@ -155,7 +155,10 @@ export interface SessionMetrics {
   linesDeleted: number;
   subagentCount: number;
   errorCount: number;
+  /** Best-known token total (provider-reported or estimated). */
   tokensEstimate?: number;
+  /** Context window budget for usage UI (tokens). */
+  tokensLimit?: number;
 }
 
 export interface SessionConfig {
