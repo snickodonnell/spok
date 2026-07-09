@@ -13,6 +13,7 @@ import type { DiffStatus, FileTreeNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
+import { DiffStatChip } from "./monaco-diff";
 
 function statusColor(status?: DiffStatus) {
   switch (status) {
@@ -101,15 +102,12 @@ function TreeNode({
             <Folder className="h-3.5 w-3.5 text-phosphor-amber/70" />
           )}
           <span className="truncate text-phosphor-green/75">{node.name}</span>
-          {(node.additions || node.deletions) && (
-            <span className="ml-auto flex gap-1 text-[10px]">
-              {!!node.additions && (
-                <span className="text-phosphor-green">+{node.additions}</span>
-              )}
-              {!!node.deletions && (
-                <span className="text-phosphor-red">-{node.deletions}</span>
-              )}
-            </span>
+          {(!!node.additions || !!node.deletions) && (
+            <DiffStatChip
+              className="ml-auto scale-90"
+              additions={node.additions ?? 0}
+              deletions={node.deletions ?? 0}
+            />
           )}
         </button>
         {open &&
@@ -160,17 +158,14 @@ function TreeNode({
           ?
         </span>
       )}
-      <span className={cn("ml-auto text-[10px] font-bold", statusColor(node.status))}>
+      <span className={cn("text-[10px] font-bold", statusColor(node.status))}>
         {statusLetter(node.status)}
       </span>
-      <span className="flex gap-1 text-[10px]">
-        {!!node.additions && (
-          <span className="text-phosphor-green">+{node.additions}</span>
-        )}
-        {!!node.deletions && (
-          <span className="text-phosphor-red">-{node.deletions}</span>
-        )}
-      </span>
+      <DiffStatChip
+        className="ml-auto scale-90"
+        additions={node.additions ?? 0}
+        deletions={node.deletions ?? 0}
+      />
     </button>
   );
 }
@@ -195,13 +190,14 @@ export function FileTree() {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-phosphor-green/15 p-2 space-y-2">
-        <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-phosphor-green/45">
-          <span>Files</span>
+        <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-phosphor-green/45">
           <span>
-            {files.length} ·{" "}
-            <span className="text-phosphor-green">+{totalAdd}</span>{" "}
-            <span className="text-phosphor-red">-{totalDel}</span>
+            Files{" "}
+            <span className="font-mono normal-case text-phosphor-green/30">
+              {files.length}
+            </span>
           </span>
+          <DiffStatChip additions={totalAdd} deletions={totalDel} />
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-phosphor-green/40" />

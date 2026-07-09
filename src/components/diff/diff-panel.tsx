@@ -2,7 +2,7 @@
 
 import { useSpokStore } from "@/lib/store";
 import { FileTree } from "./file-tree";
-import { MonacoDiff } from "./monaco-diff";
+import { DiffStatChip, MonacoDiff, type DiffLayout } from "./monaco-diff";
 import { HunkNav } from "./hunk-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,11 +16,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { unifiedDiffText } from "@/lib/diff-utils";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { refreshGitDiff } from "@/lib/harness";
 import { runGitAndRefresh } from "@/lib/git/client";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+
+const LAYOUT_KEY = "spok.diffLayout";
 
 export function DiffPanel() {
   const session = useSpokStore((s) =>
@@ -34,6 +36,25 @@ export function DiffPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [layout, setLayout] = useState<DiffLayout>("unified");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LAYOUT_KEY);
+      if (saved === "unified" || saved === "split") setLayout(saved);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const onLayoutChange = (next: DiffLayout) => {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const planMode = appPermissionMode === "plan";
   const canMutate = !!session?.config.cwd && !planMode;
@@ -184,10 +205,10 @@ export function DiffPanel() {
             <span className="max-w-[200px] truncate font-mono text-[11px] text-phosphor-green/70">
               {file.path}
             </span>
-            <span className="font-mono text-[11px]">
-              <span className="text-phosphor-green">+{file.additions}</span>{" "}
-              <span className="text-phosphor-red">-{file.deletions}</span>
-            </span>
+            <DiffStatChip
+              additions={file.additions}
+              deletions={file.deletions}
+            />
             <HunkNav file={file} />
             {canMutate && (
               <>
@@ -249,7 +270,12 @@ export function DiffPanel() {
           <FileTree />
         </div>
         <div className="min-w-0 flex-1">
-          <MonacoDiff file={file} className="h-full" />
+          <MonacoDiff
+            file={file}
+            className="h-full"
+            layout={layout}
+            onLayoutChange={onLayoutChange}
+          />
         </div>
       </div>
 

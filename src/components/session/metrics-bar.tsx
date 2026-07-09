@@ -11,10 +11,9 @@ import {
   Bot,
   AlertTriangle,
   Clock,
-  Plus,
-  Minus,
   MessageSquare,
 } from "lucide-react";
+import { DiffStatChip } from "@/components/diff/monaco-diff";
 
 export function MetricsBar() {
   const session = useSpokStore((s) =>
@@ -51,8 +50,6 @@ export function MetricsBar() {
     { icon: Brain, label: String(m.thinkingSteps), tip: "Thinking steps" },
     { icon: Wrench, label: String(m.toolCallCount), tip: "Tool calls" },
     { icon: FileCode2, label: String(m.filesChanged), tip: "Files changed" },
-    { icon: Plus, label: String(m.linesAdded), tip: "Lines added", className: "text-phosphor-green" },
-    { icon: Minus, label: String(m.linesDeleted), tip: "Lines deleted", className: "text-phosphor-red" },
     { icon: Bot, label: String(m.subagentCount), tip: "Subagents" },
     {
       icon: AlertTriangle,
@@ -82,6 +79,7 @@ export function MetricsBar() {
         </span>
       )}
       <GitStatusPill summary={session.gitSummary} cwd={session.config.cwd} compact />
+      <DiffStatChip additions={m.linesAdded} deletions={m.linesDeleted} />
       {items.map((item) => (
         <span
           key={item.tip}

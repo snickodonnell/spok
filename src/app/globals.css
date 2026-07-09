@@ -163,6 +163,17 @@ body {
 /* Monaco override container */
 .monaco-diff-host {
   --vscode-editor-background: #080c09;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Unified (inline) mode — reinforce combined +/− stream styling */
+.monaco-diff-unified .monaco-diff-editor .diffOverview {
+  background: #080c09;
+}
+.monaco-diff-unified .monaco-diff-editor {
+  /* Slight inset so the stream reads as one panel, not a split pair */
+  border-radius: 0;
 }
 
 /* Resizable handles */

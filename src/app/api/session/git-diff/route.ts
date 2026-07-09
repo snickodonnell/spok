@@ -112,6 +112,9 @@ export async function GET(req: Request) {
   }
 
   try {
+    // One combined working-tree-vs-HEAD diff (staged + unstaged together).
+    // Do not concatenate --cached + unstaged: that duplicates hunks and splits
+    // additions/removals across partial reconstructions of the same path.
     const [{ stdout: status }, { stdout: diff }] = await Promise.all([
       execFileAsync("git", ["status", "--porcelain", "-uall"], {
         cwd,
@@ -125,21 +128,7 @@ export async function GET(req: Request) {
       ),
     ]);
 
-    // Also capture unstaged + staged
-    let staged = "";
-    try {
-      const r = await execFileAsync("git", ["diff", "--cached"], {
-        cwd,
-        maxBuffer: 20 * 1024 * 1024,
-      });
-      staged = r.stdout || "";
-    } catch {
-      /* ignore */
-    }
-
-    const combinedDiff = redactSecrets(
-      [staged, diff].filter(Boolean).join("\n")
-    ).text;
+    const combinedDiff = redactSecrets(diff || "").text;
 
     const untracked: string[] = [];
     const skipped: Array<{ path: string; reason: string }> = [];
