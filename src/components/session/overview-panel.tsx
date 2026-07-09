@@ -82,8 +82,21 @@ export function OverviewPanel() {
         </h2>
         <p className="mt-1 text-xs text-phosphor-green/50">{session.name}</p>
         <p className="mt-0.5 font-mono text-[11px] text-phosphor-green/35">
-          Source: {session.source} · Elapsed {formatDuration(m.elapsedMs)}
+          Source: {session.source}
+          {session.durable !== false &&
+          (session.source === "live" || session.source === "resume")
+            ? " · durable"
+            : ""}{" "}
+          · Elapsed {formatDuration(m.elapsedMs)}
+          {(session.eventCount ?? session.eventLog?.length)
+            ? ` · ${session.eventCount ?? session.eventLog?.length} events`
+            : ""}
         </p>
+        {session.config.cwd && (
+          <p className="mt-0.5 truncate font-mono text-[11px] text-phosphor-cyan/50" title={session.config.cwd}>
+            {session.config.cwd}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

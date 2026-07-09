@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { SAMPLES } from "@/lib/samples";
 import { playEvents } from "@/lib/playback";
+import { buildExportPayload } from "@/lib/export-session";
 import { toast } from "sonner";
 
 export function CommandPalette() {
@@ -89,12 +90,7 @@ export function CommandPalette() {
       toast.error("No active session to export");
       return;
     }
-    const payload = {
-      version: 1 as const,
-      exportedAt: Date.now(),
-      session,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    const blob = new Blob([JSON.stringify(buildExportPayload(session), null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
@@ -104,7 +100,7 @@ export function CommandPalette() {
     a.click();
     URL.revokeObjectURL(url);
     setOpen(false);
-    toast.success("Session exported");
+    toast.success("Session exported (secrets redacted)");
   };
 
   return (

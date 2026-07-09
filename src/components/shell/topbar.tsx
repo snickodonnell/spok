@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSpokStore } from "@/lib/store";
+import { buildExportPayload } from "@/lib/export-session";
 import { toast } from "sonner";
 
 export function Topbar() {
@@ -31,7 +32,7 @@ export function Topbar() {
       return;
     }
     const blob = new Blob(
-      [JSON.stringify({ version: 1, exportedAt: Date.now(), session }, null, 2)],
+      [JSON.stringify(buildExportPayload(session), null, 2)],
       { type: "application/json" }
     );
     const url = URL.createObjectURL(blob);

@@ -2,6 +2,10 @@ import { readdir, stat, access } from "fs/promises";
 import { constants } from "fs";
 import path from "path";
 import os from "os";
+import {
+  authorizePrivilegedRequest,
+  denyFromAuthorize,
+} from "@/lib/security/local-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +75,9 @@ function getParent(dir: string): string | null {
 }
 
 export async function GET(req: Request) {
+  const auth = authorizePrivilegedRequest(req, "fs_browse");
+  if (!auth.ok) return denyFromAuthorize(auth);
+
   const { searchParams } = new URL(req.url);
   const rawPath = searchParams.get("path");
   const showHidden = searchParams.get("hidden") === "1";

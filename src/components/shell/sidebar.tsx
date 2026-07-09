@@ -12,12 +12,15 @@ import {
   Trash2,
   Circle,
   PanelsTopLeft,
+  HardDrive,
+  History,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
-import type { ViewMode } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { Session, ViewMode } from "@/lib/types";
+import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 
 const VIEWS: { mode: ViewMode; icon: typeof Brain; label: string }[] = [
   { mode: "workspace", icon: PanelsTopLeft, label: "Workspace" },
@@ -116,59 +119,153 @@ export function Sidebar() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col p-2">
-        <div className="mb-1 px-1 text-[10px] uppercase tracking-widest text-phosphor-green/40">
-          Sessions
+        <div className="mb-1 flex items-center justify-between px-1">
+          <span className="text-[10px] uppercase tracking-widest text-phosphor-green/40">
+            Sessions
+          </span>
+          {list.length > 0 && (
+            <span className="font-mono text-[9px] text-phosphor-green/30">
+              {list.length}
+            </span>
+          )}
         </div>
         <ScrollArea className="flex-1">
           {list.length === 0 ? (
             <p className="px-1 py-2 text-[11px] text-phosphor-green/30">
-              No sessions yet
+              No sessions yet — open a repo to start. Live sessions are saved to disk
+              automatically.
             </p>
           ) : (
             list.map((s) => (
-              <div
+              <SessionRow
                 key={s.id}
-                className={cn(
-                  "group mb-0.5 flex items-center gap-1 rounded px-1.5 py-1.5 text-xs",
-                  activeSessionId === s.id
-                    ? "bg-phosphor-green/12 text-phosphor-green"
-                    : "text-phosphor-green/55 hover:bg-phosphor-green/5"
-                )}
-              >
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                  onClick={() => setActiveSession(s.id)}
-                >
-                  <Circle
-                    className={cn(
-                      "h-2 w-2 shrink-0 fill-current",
-                      s.status === "running"
-                        ? "text-phosphor-green"
-                        : s.status === "error"
-                          ? "text-phosphor-red"
-                          : "text-phosphor-green/30"
-                    )}
-                  />
-                  <span className="truncate">{s.name}</span>
-                </button>
-                <button
-                  type="button"
-                  className="hidden shrink-0 rounded p-0.5 text-phosphor-red/70 hover:bg-red-500/10 group-hover:block"
-                  onClick={() => deleteSession(s.id)}
-                  title="Delete session"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
+                session={s}
+                active={activeSessionId === s.id}
+                onSelect={() => {
+                  setActiveSession(s.id);
+                  setViewMode("workspace");
+                }}
+                onDelete={() => deleteSession(s.id)}
+              />
             ))
           )}
         </ScrollArea>
       </div>
 
       <div className="border-t border-phosphor-green/15 p-2 text-[9px] text-phosphor-green/30">
-        Spok · Grok Build harness
+        <div className="flex items-center gap-1">
+          <HardDrive className="h-2.5 w-2.5" />
+          Durable sessions · ~/.spok/sessions
+        </div>
       </div>
     </aside>
+  );
+}
+
+function SessionRow({
+  session: s,
+  active,
+  onSelect,
+  onDelete,
+}: {
+  session: Session;
+  active: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const sourceLabel =
+    s.source === "resume"
+      ? "restored"
+      : s.source === "live"
+        ? "live"
+        : s.source === "sample"
+          ? "sample"
+          : s.source === "import" || s.source === "paste"
+            ? "import"
+            : s.source;
+
+  const eventCount = s.eventCount ?? s.eventLog?.length ?? 0;
+
+  return (
+    <div
+      className={cn(
+        "group mb-1 rounded border px-1.5 py-1.5 text-xs transition-colors",
+        active
+          ? "border-phosphor-green/35 bg-phosphor-green/12 text-phosphor-green"
+          : "border-transparent text-phosphor-green/55 hover:border-phosphor-green/15 hover:bg-phosphor-green/5"
+      )}
+    >
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          onClick={onSelect}
+          title={s.config.cwd || s.name}
+        >
+          <Circle
+            className={cn(
+              "h-2 w-2 shrink-0 fill-current",
+              s.status === "running" || s.status === "starting"
+                ? "text-phosphor-green"
+                : s.status === "error"
+                  ? "text-red-400"
+                  : s.status === "ready"
+                    ? "text-phosphor-cyan/70"
+                    : "text-phosphor-green/30"
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
+        </button>
+        <button
+          type="button"
+          className="hidden shrink-0 rounded p-0.5 text-phosphor-red/70 hover:bg-red-500/10 group-hover:block"
+          onClick={onDelete}
+          title="Delete session (also removes disk log)"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="mt-1 flex w-full flex-wrap items-center gap-1 pl-3.5 text-left"
+      >
+        <Badge
+          variant={s.source === "resume" ? "cyan" : "muted"}
+          className="h-4 px-1 text-[8px] uppercase"
+        >
+          {s.source === "resume" ? (
+            <span className="inline-flex items-center gap-0.5">
+              <History className="h-2 w-2" />
+              {sourceLabel}
+            </span>
+          ) : (
+            sourceLabel
+          )}
+        </Badge>
+        {s.durable !== false && (s.source === "live" || s.source === "resume") && (
+          <Badge variant="muted" className="h-4 px-1 text-[8px]">
+            <HardDrive className="mr-0.5 inline h-2 w-2" />
+            disk
+          </Badge>
+        )}
+        {eventCount > 0 && (
+          <span className="font-mono text-[9px] text-phosphor-green/30">
+            {eventCount} evt
+          </span>
+        )}
+        <span className="ml-auto font-mono text-[9px] text-phosphor-green/25">
+          {formatRelativeTime(s.updatedAt)}
+        </span>
+      </button>
+      {s.config.cwd && (
+        <div
+          className="mt-0.5 truncate pl-3.5 font-mono text-[9px] text-phosphor-green/25"
+          title={s.config.cwd}
+        >
+          {s.config.cwd}
+        </div>
+      )}
+    </div>
   );
 }

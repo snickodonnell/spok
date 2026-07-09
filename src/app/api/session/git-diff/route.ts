@@ -1,7 +1,19 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { existsSync, readFileSync, statSync } from "fs";
+import { existsSync, openSync, readSync, closeSync, readFileSync, statSync } from "fs";
 import path from "path";
+import {
+  authorizePrivilegedRequest,
+  denyFromAuthorize,
+  policyDenialResponse,
+} from "@/lib/security/local-api";
+import { requireTrustedCwd } from "@/lib/security/workspace-trust";
+import {
+  decideFilePreview,
+  isDeniedSecretPath,
+  normalizeRepoRelativePath,
+  redactSecrets,
+} from "@/lib/security/secrets";
 
 const execFileAsync = promisify(execFile);
 
@@ -9,14 +21,44 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_UNTRACKED_BYTES = 512 * 1024;
+/** Read a small sample for binary detection without loading the whole file. */
+const BINARY_SAMPLE_BYTES = 8192;
+
+function readFileSample(abs: string, size: number): Buffer {
+  const len = Math.min(size, BINARY_SAMPLE_BYTES);
+  const buf = Buffer.alloc(len);
+  const fd = openSync(abs, "r");
+  try {
+    readSync(fd, buf, 0, len, 0);
+  } finally {
+    closeSync(fd);
+  }
+  return buf;
+}
 
 /**
  * Return working-tree git status + diffs, including untracked file contents
- * so newly created files (e.g. plan.md) appear in Spok's live Diff panel.
+ * so newly created files appear in Spok's live Diff panel.
+ * Secret paths, binaries, and oversized files are denied or skipped.
  */
 export async function GET(req: Request) {
+  const auth = authorizePrivilegedRequest(req, "git_diff");
+  if (!auth.ok) return denyFromAuthorize(auth);
+
   const { searchParams } = new URL(req.url);
-  const cwd = searchParams.get("cwd") || process.cwd();
+  const rawCwd = searchParams.get("cwd") || process.cwd();
+
+  const trust = requireTrustedCwd(rawCwd);
+  if (!trust.ok) {
+    return policyDenialResponse(403, {
+      error: trust.reason,
+      code: "untrusted_cwd",
+      policy: "workspace_trust",
+      action: "git_diff",
+      details: { cwd: trust.path },
+    });
+  }
+  const cwd = trust.path;
 
   if (!existsSync(cwd)) {
     return Response.json({ error: "Directory not found" }, { status: 404 });
@@ -30,6 +72,7 @@ export async function GET(req: Request) {
       status: "",
       files: [],
       untracked: [],
+      skipped: [],
       cwd,
       timestamp: Date.now(),
     });
@@ -61,14 +104,19 @@ export async function GET(req: Request) {
       /* ignore */
     }
 
-    const combinedDiff = [staged, diff].filter(Boolean).join("\n");
+    const combinedDiff = redactSecrets(
+      [staged, diff].filter(Boolean).join("\n")
+    ).text;
 
     const untracked: string[] = [];
+    const skipped: Array<{ path: string; reason: string }> = [];
     const files: Array<{
       path: string;
       status: string;
       oldContent?: string;
       newContent?: string;
+      skipped?: boolean;
+      reason?: string;
     }> = [];
 
     for (const line of status.split("\n")) {
@@ -84,28 +132,48 @@ export async function GET(req: Request) {
         filePath = JSON.parse(filePath) as string;
       }
 
+      const rel = normalizeRepoRelativePath(filePath);
+
       if (code === "??" || code[0] === "?" || code[1] === "?") {
-        untracked.push(filePath);
+        untracked.push(rel);
         const abs = path.join(cwd, filePath);
         try {
           if (existsSync(abs) && statSync(abs).isFile()) {
             const size = statSync(abs).size;
-            if (size <= MAX_UNTRACKED_BYTES) {
-              const content = readFileSync(abs, "utf8");
-              files.push({
-                path: filePath.replace(/\\/g, "/"),
-                status: "added",
-                oldContent: "",
-                newContent: content,
-              });
-            } else {
-              files.push({
-                path: filePath.replace(/\\/g, "/"),
-                status: "added",
-                oldContent: "",
-                newContent: `// file too large to preview (${size} bytes)\n`,
-              });
+            let sample: Buffer | undefined;
+            try {
+              sample = readFileSample(abs, size);
+            } catch {
+              sample = undefined;
             }
+            const decision = decideFilePreview({
+              relativePath: rel,
+              sizeBytes: size,
+              maxBytes: MAX_UNTRACKED_BYTES,
+              contentSample: sample,
+            });
+
+            if (decision.action === "deny" || decision.action === "skip") {
+              skipped.push({ path: rel, reason: decision.reason });
+              files.push({
+                path: rel,
+                status: "added",
+                oldContent: "",
+                newContent: `// ${decision.reason}\n`,
+                skipped: true,
+                reason: decision.reason,
+              });
+              continue;
+            }
+
+            const raw = readFileSync(abs, "utf8");
+            const redacted = redactSecrets(raw);
+            files.push({
+              path: rel,
+              status: "added",
+              oldContent: "",
+              newContent: redacted.text,
+            });
           }
         } catch {
           /* skip unreadable */
@@ -114,11 +182,17 @@ export async function GET(req: Request) {
         // Modified/added tracked — content already in unified diff; still list path
         const st =
           code.includes("D") ? "deleted" : code.includes("A") ? "added" : "modified";
+        if (isDeniedSecretPath(rel)) {
+          skipped.push({
+            path: rel,
+            reason: `Path matches secret deny list: ${rel}`,
+          });
+          continue;
+        }
         // Avoid duplicate if also in untracked list
-        if (!files.some((f) => f.path === filePath.replace(/\\/g, "/"))) {
-          // Prefer diff parse; optional content fill for safety
+        if (!files.some((f) => f.path === rel)) {
           files.push({
-            path: filePath.replace(/\\/g, "/"),
+            path: rel,
             status: st,
           });
         }
@@ -130,6 +204,7 @@ export async function GET(req: Request) {
       diff: combinedDiff,
       untracked,
       files,
+      skipped,
       cwd,
       timestamp: Date.now(),
     });
@@ -140,6 +215,7 @@ export async function GET(req: Request) {
         diff: "",
         status: "",
         files: [],
+        skipped: [],
       },
       { status: 500 }
     );

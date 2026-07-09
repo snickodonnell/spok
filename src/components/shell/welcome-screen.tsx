@@ -15,6 +15,13 @@ export function WelcomeScreen() {
   const applyStreamEvent = useSpokStore((s) => s.applyStreamEvent);
   const appendRawLog = useSpokStore((s) => s.appendRawLog);
   const updateSession = useSpokStore((s) => s.updateSession);
+  const sessions = useSpokStore((s) => s.sessions);
+  const setActiveSession = useSpokStore((s) => s.setActiveSession);
+  const setViewMode = useSpokStore((s) => s.setViewMode);
+
+  const recent = Object.values(sessions)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 3);
 
   const playSample = (id: string) => {
     const sample = SAMPLES.find((s) => s.meta.id === id);
@@ -95,6 +102,40 @@ export function WelcomeScreen() {
             Play demo sample
           </Button>
         </div>
+
+        {recent.length > 0 && (
+          <div className="rounded-lg border border-phosphor-cyan/25 bg-phosphor-cyan/5 p-4">
+            <h2 className="mb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-phosphor-cyan/70">
+              Continue
+            </h2>
+            <div className="flex flex-col gap-1.5">
+              {recent.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveSession(s.id);
+                    setViewMode("workspace");
+                  }}
+                  className="flex items-center justify-between rounded border border-phosphor-green/15 bg-black/30 px-3 py-2 text-left transition hover:border-phosphor-cyan/40"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-sm text-phosphor-green">
+                      {s.name}
+                    </div>
+                    <div className="truncate font-mono text-[10px] text-phosphor-green/40">
+                      {s.config.cwd || s.source}
+                      {s.eventCount ? ` · ${s.eventCount} events` : ""}
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-phosphor-cyan/60">
+                    {s.source === "resume" ? "restored" : s.status}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div>
           <h2 className="mb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-phosphor-green/40">

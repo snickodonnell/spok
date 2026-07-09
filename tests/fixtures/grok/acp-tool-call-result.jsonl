@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"call_abc123","title":"Read","rawInput":{"path":"src/lib/utils.ts"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"call_abc123","title":"Read","_meta":{"updateParams":{"status":"Completed"}},"content":[{"type":"text","text":"export function cn() {}"}]}}}

@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { localFetch } from "@/lib/local-api-client";
 import { cn } from "@/lib/utils";
 
 export type BrowseEntry = {
@@ -98,9 +99,14 @@ export function DirectoryNavigator({
       const q = new URLSearchParams();
       if (target) q.set("path", target);
       q.set("dirsOnly", "1");
-      const res = await fetch(`/api/fs/browse?${q.toString()}`);
-      const json = (await res.json()) as BrowseResponse;
-      if (!res.ok && json.error) {
+      const res = await localFetch(`/api/fs/browse?${q.toString()}`);
+      const json = (await res.json()) as BrowseResponse & {
+        error?: string;
+        code?: string;
+      };
+      if (!res.ok) {
+        setError(json.error || `Browse failed (${res.status})`);
+      } else if (json.error) {
         setError(json.error);
       }
       setData(json);

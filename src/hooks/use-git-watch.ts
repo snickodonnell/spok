@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useSpokStore } from "@/lib/store";
 import { createFileDiff, parseUnifiedDiff } from "@/lib/diff-utils";
+import { localFetch } from "@/lib/local-api-client";
 
 /**
  * Poll git working tree for live diffs while a harness run is in progress.
@@ -24,7 +25,7 @@ export function useGitWatch(
 
     const tick = async () => {
       try {
-        const res = await fetch(
+        const res = await localFetch(
           `/api/session/git-diff?cwd=${encodeURIComponent(cwd)}`
         );
         if (!res.ok || cancelled) return;

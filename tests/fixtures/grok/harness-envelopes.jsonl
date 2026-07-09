@@ -1,0 +1,4 @@
+{"type":"stdout","data":"{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"hello from stdout\"}}}}\n","sessionId":"s1"}
+{"type":"stderr","data":"warning: something noisy\n","sessionId":"s1"}
+{"type":"event","event":{"type":"system","timestamp":1700000000000,"title":"Harness","content":"spawned","status":"running"}}
+{"type":"exit","code":0,"sessionId":"s1"}

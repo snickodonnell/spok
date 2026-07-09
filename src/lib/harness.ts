@@ -2,6 +2,8 @@
 
 import { useSpokStore } from "./store";
 import { GrokStreamIngestor } from "./grok-stream";
+import { localFetch } from "./local-api-client";
+import { redactSecrets } from "./security/secrets";
 
 export type HarnessHandle = {
   sessionId: string;
@@ -36,7 +38,7 @@ export async function runHarness(opts: {
     status: "running",
   });
 
-  const res = await fetch("/api/session/start", {
+  const res = await localFetch("/api/session/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, cwd, command, args }),
@@ -44,15 +46,19 @@ export async function runHarness(opts: {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
+    const err = (await res.json().catch(() => ({ error: res.statusText }))) as {
+      error?: string;
+      code?: string;
+    };
     const message = err.error || "Failed to start process";
     store.updateSession(sessionId, { status: "error", error: message });
     store.applyStreamEvent(sessionId, {
       type: "error",
       timestamp: Date.now(),
-      title: "Launch failed",
+      title: err.code === "untrusted_cwd" ? "Workspace not trusted" : "Launch failed",
       content: message,
       status: "error",
+      meta: err.code ? { code: err.code } : undefined,
     });
     throw new Error(message);
   }
@@ -68,7 +74,7 @@ export async function runHarness(opts: {
     while (true) {
       if (opts.signal?.aborted) {
         reader.cancel().catch(() => undefined);
-        await fetch(
+        await localFetch(
           `/api/session/start?sessionId=${encodeURIComponent(sessionId)}`,
           { method: "DELETE" }
         ).catch(() => undefined);
@@ -109,10 +115,14 @@ export async function runHarness(opts: {
 
         const result = ingest.ingestLine(line, Date.now());
         if (result.logLine) {
-          store.appendRawLog(sessionId, result.logLine);
+          store.appendRawLog(sessionId, redactSecrets(result.logLine).text);
         }
         for (const ev of result.events) {
-          store.applyStreamEvent(sessionId, ev);
+          store.applyStreamEvent(sessionId, {
+            ...ev,
+            content: ev.content != null ? redactSecrets(ev.content).text : ev.content,
+            summary: ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
+          });
         }
       }
     }
@@ -120,8 +130,16 @@ export async function runHarness(opts: {
     // Flush any remaining partial line
     if (buffer.trim()) {
       const result = ingest.ingestLine(buffer, Date.now());
-      if (result.logLine) store.appendRawLog(sessionId, result.logLine);
-      for (const ev of result.events) store.applyStreamEvent(sessionId, ev);
+      if (result.logLine) {
+        store.appendRawLog(sessionId, redactSecrets(result.logLine).text);
+      }
+      for (const ev of result.events) {
+        store.applyStreamEvent(sessionId, {
+          ...ev,
+          content: ev.content != null ? redactSecrets(ev.content).text : ev.content,
+          summary: ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
+        });
+      }
     }
   } catch (e) {
     if (opts.signal?.aborted) {
@@ -152,11 +170,20 @@ export async function runHarness(opts: {
     store.updateSession(sessionId, { status: "ready" });
   }
 
+  // Flush durable event log + snapshot so reopen can restore
+  try {
+    store.persistSessionNow(sessionId);
+  } catch {
+    /* optional */
+  }
+
   return { code: exitCode };
 }
 
 export async function refreshGitDiff(sessionId: string, cwd: string) {
-  const res = await fetch(`/api/session/git-diff?cwd=${encodeURIComponent(cwd)}`);
+  const res = await localFetch(
+    `/api/session/git-diff?cwd=${encodeURIComponent(cwd)}`
+  );
   if (!res.ok) return;
   const data = (await res.json()) as {
     diff?: string;
@@ -165,6 +192,7 @@ export async function refreshGitDiff(sessionId: string, cwd: string) {
       status: string;
       oldContent?: string;
       newContent?: string;
+      skipped?: boolean;
     }>;
   };
 

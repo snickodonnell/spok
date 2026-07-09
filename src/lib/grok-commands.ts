@@ -315,9 +315,13 @@ export interface GrokRunFlags {
   resumeId?: string | true;
 }
 
+/**
+ * Safe defaults for Grok CLI sticky flags.
+ * `alwaysApprove` is opt-in — users must enable auto-approve deliberately.
+ */
 export function defaultGrokFlags(): GrokRunFlags {
   return {
-    alwaysApprove: true,
+    alwaysApprove: false,
     noPlan: false,
     noSubagents: false,
     noMemory: false,
@@ -325,6 +329,13 @@ export function defaultGrokFlags(): GrokRunFlags {
     check: false,
     continueSession: false,
   };
+}
+
+/** Human-readable permission mode for status chips / selectors. */
+export function permissionModeLabel(flags: GrokRunFlags): string {
+  if (flags.alwaysApprove) return "always-approve";
+  if (flags.permissionMode) return flags.permissionMode;
+  return "manual";
 }
 
 export type ResolvedRun =

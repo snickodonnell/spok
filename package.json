@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "tsx --test tests/**/*.test.ts",
     "tauri": "node scripts/with-rust.mjs tauri",
     "tauri:dev": "node scripts/with-rust.mjs tauri dev",
     "tauri:build": "node scripts/with-rust.mjs tauri build",
@@ -60,6 +61,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.20",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "typescript": "^5"
   }
 }

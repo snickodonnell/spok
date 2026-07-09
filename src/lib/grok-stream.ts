@@ -1,5 +1,10 @@
 import { nanoid } from "nanoid";
-import type { DiffStatus, StreamEvent } from "./types";
+import type { DiffStatus, StreamEvent, StreamEventProvider } from "./types";
+import {
+  makeUnknownEvent,
+  parseStreamEvent,
+  stampStreamEvent,
+} from "./stream-event-schema";
 
 /**
  * Parse Grok Build `--output-format streaming-json` lines and Spok harness envelopes
@@ -21,6 +26,8 @@ export type IngestResult = {
   events: StreamEvent[];
   /** Human-readable log line for the raw log panel */
   logLine?: string;
+  /** Original raw line when useful for durable raw log */
+  rawLine?: string;
 };
 
 type Json = Record<string, unknown>;
@@ -160,6 +167,7 @@ export class GrokStreamIngestor {
   private messageText = "";
   private toolNodes = new Map<string, string>(); // toolCallId → trace node id
   private cwd: string;
+  private rawSeq = 0;
 
   constructor(cwd = "") {
     this.cwd = cwd;
@@ -175,6 +183,26 @@ export class GrokStreamIngestor {
     this.thoughtText = "";
     this.messageId = null;
     this.messageText = "";
+  }
+
+  private nextRawId(): string {
+    this.rawSeq += 1;
+    return `raw-${this.rawSeq}`;
+  }
+
+  private finalize(
+    events: StreamEvent[],
+    provider: StreamEventProvider,
+    logLine?: string,
+    rawLine?: string
+  ): IngestResult {
+    const stamped = events.map((ev) =>
+      stampStreamEvent(ev, {
+        provider: ev.provider ?? provider,
+        rawEventId: ev.rawEventId ?? this.nextRawId(),
+      })
+    );
+    return { events: stamped, logLine, rawLine };
   }
 
   ingestLine(line: string, timestamp = Date.now()): IngestResult {
@@ -194,19 +222,37 @@ export class GrokStreamIngestor {
           events.push(...r.events);
           if (r.logLine) lastLog = r.logLine;
         }
-        return {
+        return this.finalize(
           events,
-          logLine:
-            env.type === "stderr"
-              ? `[stderr] ${lastLog ?? data.slice(0, 200)}`
-              : lastLog,
-        };
+          "grok",
+          env.type === "stderr"
+            ? `[stderr] ${lastLog ?? data.slice(0, 200)}`
+            : lastLog,
+          trimmed
+        );
       }
       if (env.type === "event" && env.event) {
-        return {
-          events: [env.event as StreamEvent],
-          logLine: formatLogFromEvent(env.event as StreamEvent),
-        };
+        const parsed = parseStreamEvent(env.event, {
+          timestamp,
+          provider: "harness",
+        });
+        if (parsed.ok) {
+          return this.finalize(
+            [parsed.event],
+            "harness",
+            formatLogFromEvent(parsed.event),
+            trimmed
+          );
+        }
+        const fallback = stampStreamEvent(env.event as StreamEvent, {
+          provider: "harness",
+        });
+        return this.finalize(
+          [fallback],
+          "harness",
+          formatLogFromEvent(fallback),
+          trimmed
+        );
       }
       if (env.type === "exit") {
         const code = typeof env.code === "number" ? env.code : null;
@@ -218,12 +264,16 @@ export class GrokStreamIngestor {
           title: ok ? "Run complete" : "Run failed",
           content: `Process exited with code ${code}`,
           status: ok ? "success" : "error",
+          severity: ok ? "info" : "runtime",
+          provider: "harness",
+          meta: { exitCode: code, signal: env.signal },
         };
-        return { events: [ev], logLine: ev.content };
+        return this.finalize([ev], "harness", ev.content, trimmed);
       }
       // Fall through — might be a Grok stream line itself
       return this.ingestPayloadLine(trimmed, timestamp);
     } catch {
+      // Not JSON envelope — try payload / plain text
       return this.ingestPayloadLine(trimmed, timestamp);
     }
   }
@@ -237,8 +287,8 @@ export class GrokStreamIngestor {
       obj = JSON.parse(trimmed) as Json;
     } catch {
       // plain text
-      return {
-        events: [
+      return this.finalize(
+        [
           {
             type: "message",
             timestamp,
@@ -246,10 +296,13 @@ export class GrokStreamIngestor {
             title: "Output",
             content: trimmed,
             status: "success",
+            provider: "grok",
           },
         ],
-        logLine: trimmed.slice(0, 300),
-      };
+        "grok",
+        trimmed.slice(0, 300),
+        trimmed
+      );
     }
 
     // Spok native event
@@ -266,40 +319,72 @@ export class GrokStreamIngestor {
         "error",
         "goal",
         "plan",
+        "parser_error",
+        "session_start",
+        "session_end",
+        "diff",
       ].includes(obj.type) &&
       !obj.method
     ) {
-      const ev = obj as unknown as StreamEvent;
-      if (!ev.id) ev.id = nanoid(10);
-      if (!ev.timestamp) ev.timestamp = timestamp;
-      return { events: [ev], logLine: formatLogFromEvent(ev) };
+      const parsed = parseStreamEvent(obj, {
+        timestamp,
+        provider: "spok",
+      });
+      if (parsed.ok) {
+        return this.finalize(
+          [parsed.event],
+          "spok",
+          formatLogFromEvent(parsed.event),
+          trimmed
+        );
+      }
+      // Preserve unknown-shaped "native" with soft stamp
+      const soft = stampStreamEvent(
+        {
+          ...(obj as unknown as StreamEvent),
+          type: obj.type as StreamEvent["type"],
+          timestamp:
+            typeof obj.timestamp === "number" ? obj.timestamp : timestamp,
+          id: typeof obj.id === "string" ? obj.id : nanoid(10),
+          meta: {
+            ...(typeof obj.meta === "object" && obj.meta
+              ? (obj.meta as Record<string, unknown>)
+              : {}),
+            softParse: true,
+            parseNote: parsed.error,
+            raw: obj,
+          },
+        },
+        { provider: "spok" }
+      );
+      return this.finalize([soft], "spok", formatLogFromEvent(soft), trimmed);
     }
 
     // Grok ACP session/update
     if (obj.method === "session/update" || asObj(obj.params)?.update) {
-      return this.ingestSessionUpdate(obj, timestamp);
+      const r = this.ingestSessionUpdate(obj, timestamp);
+      return this.finalize(r.events, "grok", r.logLine, trimmed);
     }
 
     // Grok events.jsonl style: { type: "turn_started" | "phase_changed" | ... }
     if (typeof obj.type === "string" && !obj.method) {
-      return this.ingestGrokEvent(obj, timestamp);
+      const r = this.ingestGrokEvent(obj, timestamp);
+      return this.finalize(r.events, "grok", r.logLine, trimmed);
     }
 
-    // Unknown JSON — show compact friendly form, not raw dump as title
-    return {
-      events: [
-        {
-          type: "system",
-          timestamp,
-          id: nanoid(10),
-          title: "Stream event",
-          content: summarizeUnknownJson(obj),
-          status: "success",
-          meta: obj,
-        },
-      ],
-      logLine: summarizeUnknownJson(obj),
-    };
+    // Unknown JSON — preserve raw payload in meta, never drop
+    const unknown = makeUnknownEvent({
+      summary: summarizeUnknownJson(obj),
+      raw: obj,
+      timestamp,
+      provider: "unknown",
+    });
+    return this.finalize(
+      [unknown],
+      "unknown",
+      summarizeUnknownJson(obj),
+      trimmed
+    );
   }
 
   private ingestSessionUpdate(obj: Json, timestamp: number): IngestResult {

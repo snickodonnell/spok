@@ -17,6 +17,7 @@ import {
   DirectoryNavigator,
   saveRecentDir,
 } from "@/components/shell/directory-navigator";
+import { trustWorkspace } from "@/lib/local-api-client";
 import { FolderOpen } from "lucide-react";
 
 const LAST_CWD_KEY = "spok.lastCwd";
@@ -49,27 +50,39 @@ export function LaunchDialog() {
     }
   }, [open]);
 
-  const openWorkspace = () => {
+  const openWorkspace = async () => {
     if (!cwd.trim()) {
       toast.error("Select a working directory for Grok");
       return;
     }
 
-    saveRecentDir(cwd);
+    let trustedRoot = cwd;
     try {
-      localStorage.setItem(LAST_CWD_KEY, cwd);
+      const trusted = await trustWorkspace(cwd);
+      trustedRoot = trusted.root;
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Failed to trust workspace root"
+      );
+      return;
+    }
+
+    saveRecentDir(trustedRoot);
+    try {
+      localStorage.setItem(LAST_CWD_KEY, trustedRoot);
       localStorage.setItem(LAST_CMD_KEY, command);
     } catch {
       /* ignore */
     }
 
-    const base = cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
+    const base =
+      trustedRoot.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
     const sessionId = createSession({
       name: base,
       source: "live",
       status: "ready",
       config: {
-        cwd,
+        cwd: trustedRoot,
         command: command.trim() || "grok",
         args: [],
         autoScroll: true,
@@ -81,9 +94,13 @@ export function LaunchDialog() {
       type: "system",
       timestamp: Date.now(),
       title: "Workspace ready",
-      content: `Repo: ${cwd}\nCLI: ${command.trim() || "grok"}\n\nType a prompt below, or / for Grok commands.`,
+      content: `Repo: ${trustedRoot}\nCLI: ${command.trim() || "grok"}\nTrusted: yes\nDurable: yes (events saved under ~/.spok/sessions)\nPermission: manual (safe default)\n\nType a prompt below, or / for Grok commands. Enable always-approve only when intentional.`,
       status: "success",
+      provider: "spok",
     });
+
+    // Snapshot empty-ready workspace so it appears after restart even with few events
+    useSpokStore.getState().persistSessionNow(sessionId);
 
     setViewMode("workspace");
     setOpen(false);
@@ -150,7 +167,7 @@ export function LaunchDialog() {
           <Button variant="ghost" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={openWorkspace} disabled={!cwd.trim()}>
+          <Button onClick={() => void openWorkspace()} disabled={!cwd.trim()}>
             Open workspace
           </Button>
         </DialogFooter>

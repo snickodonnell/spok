@@ -1,5 +1,10 @@
 import { nanoid } from "nanoid";
 import type { StreamEvent, StreamEventType, TraceNodeType } from "./types";
+import {
+  parseStreamEvent,
+  stampStreamEvent,
+  STREAM_EVENT_SCHEMA_VERSION,
+} from "./stream-event-schema";
 
 /**
  * Parse Grok Build / agent CLI output into structured StreamEvents.
@@ -71,9 +76,26 @@ export function parseNdjsonLine(line: string, timestamp = Date.now()): StreamEve
   if (!trimmed || !NDJSON_RE.test(trimmed)) return null;
   try {
     const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    // Prefer strict schema when type is a known Spok stream event
+    const parsed = parseStreamEvent(
+      {
+        ...obj,
+        content: obj.content ?? obj.message ?? obj.text ?? "",
+        title:
+          obj.title ??
+          typeToTitle(
+            (obj.type as StreamEventType) || "message",
+            String(obj.content ?? obj.message ?? obj.text ?? "")
+          ),
+      },
+      { timestamp, provider: "import" }
+    );
+    if (parsed.ok) return parsed.event;
+
+    // Soft fallback for near-valid objects
     const type = (obj.type as StreamEventType) || "message";
-    return {
-      type,
+    return stampStreamEvent({
+      type: type || "message",
       timestamp: (obj.timestamp as number) || timestamp,
       id: (obj.id as string) || nanoid(10),
       parentId: (obj.parentId as string | null) ?? null,
@@ -87,12 +109,18 @@ export function parseNdjsonLine(line: string, timestamp = Date.now()): StreamEve
       oldContent: obj.oldContent as string | undefined,
       newContent: obj.newContent as string | undefined,
       language: obj.language as string | undefined,
-      meta: obj.meta as Record<string, unknown> | undefined,
+      meta: {
+        ...(obj.meta as Record<string, unknown> | undefined),
+        softParse: true,
+        parseNote: parsed.error,
+      },
       links: obj.links as StreamEvent["links"],
       subagentId: obj.subagentId as string | undefined,
       durationMs: obj.durationMs as number | undefined,
       sessionId: obj.sessionId as string | undefined,
-    };
+      version: STREAM_EVENT_SCHEMA_VERSION,
+      provider: "import",
+    });
   } catch {
     return null;
   }
@@ -196,6 +224,7 @@ export function streamEventToNodeType(type: StreamEventType): TraceNodeType {
     case "diff":
       return "file_change";
     case "error":
+    case "parser_error":
       return "error";
     case "goal":
       return "goal";

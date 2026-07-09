@@ -14,6 +14,14 @@ import type {
 } from "./types";
 import { buildFileTree, createFileDiff } from "./diff-utils";
 import { streamEventToNodeType, extractPaths } from "./parser";
+import { stampStreamEvent } from "./stream-event-schema";
+import {
+  deleteDurableSession,
+  enqueueDurableEvents,
+  flushDurableSession,
+  registerDurableSession,
+  saveDurableSnapshot,
+} from "./session-persist-client";
 
 const defaultConfig: SessionConfig = {
   cwd: "",
@@ -58,12 +66,16 @@ function createSession(partial?: Partial<Session>): Session {
     rawLog: [],
     source: partial?.source ?? "live",
     promptHistory: [],
+    eventLog: [],
+    durable: partial?.durable ?? partial?.source === "live",
+    eventCount: 0,
   };
   return {
     ...base,
     ...partial,
     config: { ...defaultConfig, ...partial?.config },
     promptHistory: partial?.promptHistory ?? [],
+    eventLog: partial?.eventLog ?? [],
   };
 }
 
@@ -166,10 +178,19 @@ interface SpokState {
   setActiveSession: (id: string | null) => void;
   updateSession: (id: string, patch: Partial<Session>) => void;
   deleteSession: (id: string) => void;
+  /** Insert a fully materialised session without re-running events (e.g. resume). */
+  hydrateSession: (session: Session, opts?: { activate?: boolean }) => void;
+  /** App bootstrap: mark hydration complete */
+  setHydrated: (v: boolean) => void;
+  hydrated: boolean;
+  hydrating: boolean;
+  setHydrating: (v: boolean) => void;
 
   applyStreamEvent: (sessionId: string, event: StreamEvent) => void;
   applyStreamEvents: (sessionId: string, events: StreamEvent[]) => void;
   appendRawLog: (sessionId: string, line: string) => void;
+  /** Persist current snapshot to disk (debounced callers may use flush). */
+  persistSessionNow: (sessionId: string) => void;
 
   selectTrace: (id: string | null) => void;
   selectFile: (id: string | null) => void;
@@ -198,6 +219,8 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   commandPaletteOpen: false,
   importOpen: false,
   launchOpen: false,
+  hydrated: false,
+  hydrating: false,
   traceFilter: {
     search: "",
     types: [],
@@ -246,6 +269,12 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       activeSessionId: session.id,
       expandedNodeIds: new Set(),
     }));
+    // Durable live sessions: register on disk (async, fire-and-forget)
+    if (session.durable !== false && session.source === "live") {
+      void registerDurableSession(session).catch((e) =>
+        console.warn("[spok] durable register failed", e)
+      );
+    }
     return session.id;
   },
 
@@ -259,7 +288,8 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       return { sessions: { ...s.sessions, [id]: next } };
     }),
 
-  deleteSession: (id) =>
+  deleteSession: (id) => {
+    void deleteDurableSession(id);
     set((s) => {
       const { [id]: _removed, ...rest } = s.sessions;
       void _removed;
@@ -267,12 +297,56 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         sessions: rest,
         activeSessionId: s.activeSessionId === id ? null : s.activeSessionId,
       };
-    }),
+    });
+  },
+
+  hydrateSession: (session, opts) => {
+    const activate = opts?.activate !== false;
+    set((s) => ({
+      sessions: { ...s.sessions, [session.id]: session },
+      activeSessionId: activate ? session.id : s.activeSessionId,
+      expandedNodeIds: activate
+        ? new Set(Object.keys(session.nodes))
+        : s.expandedNodeIds,
+    }));
+  },
+
+  setHydrated: (v) => set({ hydrated: v }),
+  setHydrating: (v) => set({ hydrating: v }),
+
+  persistSessionNow: (sessionId) => {
+    const session = get().sessions[sessionId];
+    if (!session || session.durable === false) return;
+    flushDurableSession(sessionId);
+    void saveDurableSnapshot(session);
+  },
 
   applyStreamEvent: (sessionId, event) => {
+    const stamped = stampStreamEvent(event, {
+      sessionId,
+      provider: event.provider ?? "spok",
+    });
+
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session) return s;
+      // Use stamped event for the rest of the reducer
+      event = stamped;
+
+      const appendLog = (updated: Session): Session => {
+        const prevLog = session.eventLog ?? [];
+        // Keep a bounded in-memory window; durable disk holds the full append-only log
+        const MAX_MEM = 8_000;
+        const nextLog =
+          prevLog.length >= MAX_MEM
+            ? [...prevLog.slice(prevLog.length - MAX_MEM + 1), stamped]
+            : [...prevLog, stamped];
+        return {
+          ...updated,
+          eventLog: nextLog,
+          eventCount: (session.eventCount ?? prevLog.length) + 1,
+        };
+      };
 
       const nodes = { ...session.nodes };
       const files = { ...session.files };
@@ -281,19 +355,19 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       const expanded = new Set(s.expandedNodeIds);
 
       if (event.type === "session_start") {
-        const updated: Session = {
+        const updated = appendLog({
           ...session,
           status: "running",
           metrics: { ...session.metrics, startedAt: event.timestamp },
           updatedAt: Date.now(),
-        };
+        });
         return {
           sessions: { ...s.sessions, [sessionId]: updated },
         };
       }
 
       if (event.type === "session_end") {
-        const updated: Session = {
+        const updated = appendLog({
           ...session,
           status: event.status === "error" ? "error" : "completed",
           metrics: {
@@ -301,7 +375,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
             endedAt: event.timestamp,
           },
           updatedAt: Date.now(),
-        };
+        });
         updated.metrics = recomputeMetrics(updated);
         return { sessions: { ...s.sessions, [sessionId]: updated } };
       }
@@ -365,7 +439,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
           if (parentId) expanded.add(parentId);
 
           const fileTree = buildFileTree(Object.values(files));
-          const updated: Session = {
+          const updated = appendLog({
             ...session,
             nodes,
             files,
@@ -379,7 +453,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
                 : session.status,
             updatedAt: Date.now(),
             metrics: session.metrics,
-          };
+          });
           updated.metrics = recomputeMetrics(updated);
           return {
             sessions: { ...s.sessions, [sessionId]: updated },
@@ -484,7 +558,11 @@ export const useSpokStore = create<SpokState>((set, get) => ({
           summary: event.summary || (event.content ? event.content.slice(0, 120) : undefined),
           timestamp: existingNode?.timestamp ?? event.timestamp,
           durationMs: event.durationMs,
-          status: event.status ?? (event.type === "error" ? "error" : "success"),
+          status:
+            event.status ??
+            (event.type === "error" || event.type === "parser_error"
+              ? "error"
+              : "success"),
           children: existingNode?.children ?? [],
           links,
           depth,
@@ -506,7 +584,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       if (resolvedParent) expanded.add(resolvedParent);
 
       const fileTree = buildFileTree(Object.values(files));
-      const updated: Session = {
+      const updated = appendLog({
         ...session,
         nodes,
         files,
@@ -522,7 +600,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
             : session.status,
         updatedAt: Date.now(),
         metrics: session.metrics,
-      };
+      });
       if (!updated.metrics.startedAt) {
         updated.metrics = { ...updated.metrics, startedAt: event.timestamp };
       }
@@ -533,6 +611,18 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         expandedNodeIds: expanded,
       };
     });
+
+    // Append-only durable log (batched). Skip sample/paste playback noise unless durable.
+    const session = get().sessions[sessionId];
+    if (
+      session &&
+      session.durable !== false &&
+      (session.source === "live" ||
+        session.source === "resume" ||
+        session.source === "import")
+    ) {
+      enqueueDurableEvents(sessionId, [stamped]);
+    }
   },
 
   applyStreamEvents: (sessionId, events) => {

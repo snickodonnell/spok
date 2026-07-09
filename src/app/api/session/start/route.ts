@@ -4,7 +4,14 @@ import {
   type SpawnOptionsWithoutStdio,
 } from "child_process";
 import { existsSync } from "fs";
-import path from "path";
+import {
+  authorizePrivilegedRequest,
+  denyFromAuthorize,
+  isCommandAllowed,
+  policyDenialResponse,
+} from "@/lib/security/local-api";
+import { requireTrustedCwd } from "@/lib/security/workspace-trust";
+import { redactSecrets } from "@/lib/security/secrets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +62,9 @@ function spawnCli(
 }
 
 export async function POST(req: Request) {
+  const auth = authorizePrivilegedRequest(req, "session_start");
+  if (!auth.ok) return denyFromAuthorize(auth);
+
   let body: StartBody;
   try {
     body = (await req.json()) as StartBody;
@@ -68,19 +78,49 @@ export async function POST(req: Request) {
   const args = (body.args ?? [])
     .filter((a): a is string => a != null && String(a).length >= 0)
     .map((a) => String(a));
-  const cwd = body.cwd || process.cwd();
 
-  if (body.cwd && !existsSync(body.cwd)) {
+  if (!isCommandAllowed(command)) {
+    return policyDenialResponse(403, {
+      error: `Command not allowed: ${command}. Only the Grok CLI is permitted by default (set SPOK_ALLOW_CUSTOM_COMMANDS=1 to override).`,
+      code: "command_not_allowed",
+      policy: "command_profile",
+      action: "session_start",
+      details: { command },
+    });
+  }
+
+  const trust = requireTrustedCwd(body.cwd || process.cwd());
+  if (!trust.ok) {
+    return policyDenialResponse(403, {
+      error: trust.reason,
+      code: "untrusted_cwd",
+      policy: "workspace_trust",
+      action: "session_start",
+      details: { cwd: trust.path },
+    });
+  }
+  const cwd = trust.path;
+
+  if (!existsSync(cwd)) {
     return Response.json(
-      { error: `Working directory does not exist: ${body.cwd}` },
+      { error: `Working directory does not exist: ${cwd}` },
       { status: 400 }
     );
   }
+
+  // Client-supplied env is ignored in Phase 0 (safer default). Process inherits server env only.
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+    SPOK_SESSION_ID: sessionId,
+  };
 
   const encoder = new TextEncoder();
   let child: ChildProcessWithoutNullStreams | null = null;
   let closed = false;
   const cmdline = formatCommandLine(command, args);
+  const safeArgvPreview = redactSecrets(JSON.stringify([command, ...args])).text;
 
   const stream = new ReadableStream({
     start(controller) {
@@ -99,7 +139,7 @@ export async function POST(req: Request) {
           type: "system",
           timestamp: Date.now(),
           title: "Harness",
-          content: `Spawning: ${cmdline}\ncwd=${cwd}\nargv=${JSON.stringify([command, ...args])}`,
+          content: `Spawning: ${redactSecrets(cmdline).text}\ncwd=${cwd}\nargv=${safeArgvPreview}`,
           status: "running",
         },
       });
@@ -107,13 +147,7 @@ export async function POST(req: Request) {
       try {
         child = spawnCli(command, args, {
           cwd,
-          env: {
-            ...process.env,
-            ...body.env,
-            FORCE_COLOR: "0",
-            NO_COLOR: "1",
-            SPOK_SESSION_ID: sessionId,
-          },
+          env: childEnv,
         });
       } catch (e) {
         push({
@@ -157,13 +191,7 @@ export async function POST(req: Request) {
             const quoted = formatCommandLine(command, args);
             child = spawn("cmd.exe", ["/d", "/s", "/c", quoted], {
               cwd,
-              env: {
-                ...process.env,
-                ...body.env,
-                FORCE_COLOR: "0",
-                NO_COLOR: "1",
-                SPOK_SESSION_ID: sessionId,
-              },
+              env: childEnv,
               shell: false,
               windowsHide: true,
             }) as ChildProcessWithoutNullStreams;
@@ -271,6 +299,9 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const auth = authorizePrivilegedRequest(req, "session_stop");
+  if (!auth.ok) return denyFromAuthorize(auth);
+
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get("sessionId");
   if (!sessionId) {
@@ -284,5 +315,3 @@ export async function DELETE(req: Request) {
   processes.delete(sessionId);
   return Response.json({ ok: true });
 }
-
-void path;

@@ -16,7 +16,9 @@ import { parseBulkText } from "@/lib/parser";
 import { parseUnifiedDiff } from "@/lib/diff-utils";
 import { playEvents } from "@/lib/playback";
 import { SAMPLES } from "@/lib/samples";
-import type { ExportPayload, Session } from "@/lib/types";
+import { parseImportPayload } from "@/lib/export-session";
+import { replayEvents } from "@/lib/session-replay";
+import { registerDurableSession } from "@/lib/session-persist-client";
 import { toast } from "sonner";
 import { Sparkles } from "lucide-react";
 
@@ -113,26 +115,57 @@ export function ImportDialog() {
   const onFile = async (file: File) => {
     const text = await file.text();
     try {
-      const json = JSON.parse(text) as ExportPayload | Session | { events: unknown[] };
-      if ("session" in json && json.session) {
-        importSession(json.session as Session);
-        toast.success("Session JSON imported");
+      const json = JSON.parse(text) as unknown;
+      // Spok export v1/v2 or bare session
+      try {
+        const parsed = parseImportPayload(json);
+        if (parsed.fromEvents && parsed.events.length > 0) {
+          const rebuilt = replayEvents(parsed.events, {
+            id: parsed.session.id,
+            name: parsed.session.name || file.name,
+            source: "import",
+            status: "completed",
+            createdAt: parsed.session.createdAt,
+            config: parsed.session.config,
+            grokFlags: parsed.session.grokFlags,
+            promptHistory: parsed.session.promptHistory,
+          });
+          rebuilt.rawLog = parsed.session.rawLog ?? [];
+          rebuilt.eventLog = parsed.events;
+          rebuilt.eventCount = parsed.events.length;
+          rebuilt.durable = true;
+          const id = importSession(rebuilt);
+          void registerDurableSession(rebuilt).catch(() => undefined);
+          useSpokStore.getState().persistSessionNow(id);
+          toast.success(
+            `Imported v${parsed.formatVersion} · replayed ${parsed.events.length} events`
+          );
+        } else {
+          const id = importSession({
+            ...parsed.session,
+            source: "import",
+            durable: true,
+          });
+          void registerDurableSession(
+            useSpokStore.getState().sessions[id]
+          ).catch(() => undefined);
+          toast.success(`Imported session snapshot (v${parsed.formatVersion})`);
+        }
         setOpen(false);
         return;
+      } catch {
+        /* try other shapes */
       }
-      if ("nodes" in json && "files" in json) {
-        importSession(json as Session);
-        toast.success("Session imported");
-        setOpen(false);
-        return;
-      }
-      if ("events" in json && Array.isArray(json.events)) {
+
+      const obj = json as { events?: unknown[] };
+      if ("events" in obj && Array.isArray(obj.events)) {
         const id = createSession({
           name: file.name,
           source: "import",
           status: "completed",
+          durable: true,
         });
-        applyStreamEvents(id, json.events as never[]);
+        applyStreamEvents(id, obj.events as never[]);
         updateSession(id, { status: "completed" });
         toast.success("Events imported");
         setOpen(false);
@@ -262,7 +295,9 @@ export function ImportDialog() {
 
           <TabsContent value="file" className="space-y-3 pt-2">
             <p className="text-xs text-phosphor-green/50">
-              Import a Spok session export JSON, events array, or raw log file.
+              Import a Spok export (v1 snapshot or v2 with event log), events array,
+              or raw log. v2 files are replayed from the ordered event log for a
+              faithful rebuild.
             </p>
             <input
               ref={fileRef}

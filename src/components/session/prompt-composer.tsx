@@ -23,10 +23,13 @@ import { runHarness } from "@/lib/harness";
 import {
   defaultGrokFlags,
   filterSlashCommands,
+  permissionModeLabel,
   resolveRun,
   type GrokRunFlags,
   type SlashCommand,
 } from "@/lib/grok-commands";
+import { localFetch } from "@/lib/local-api-client";
+import { buildExportPayload } from "@/lib/export-session";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -36,7 +39,8 @@ function flagsFromSession(raw?: Record<string, unknown>): GrokRunFlags {
   return {
     ...d,
     ...raw,
-    alwaysApprove: raw.alwaysApprove !== false,
+    // only true when explicitly set — safer default than treating missing as true
+    alwaysApprove: raw.alwaysApprove === true,
     noPlan: !!raw.noPlan,
     noSubagents: !!raw.noSubagents,
     noMemory: !!raw.noMemory,
@@ -109,7 +113,7 @@ export function PromptComposer() {
   const stopRun = useCallback(async () => {
     abortRef.current?.abort();
     if (session) {
-      await fetch(
+      await localFetch(
         `/api/session/start?sessionId=${encodeURIComponent(session.id)}`,
         { method: "DELETE" }
       ).catch(() => undefined);
@@ -164,17 +168,17 @@ export function PromptComposer() {
       if (resolved.action === "export") {
         const s = exportActiveSession();
         if (!s) return;
-        const blob = new Blob(
-          [JSON.stringify({ version: 1, exportedAt: Date.now(), session: s }, null, 2)],
-          { type: "application/json" }
-        );
+        const payload = buildExportPayload(s);
+        const blob = new Blob([JSON.stringify(payload, null, 2)], {
+          type: "application/json",
+        });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
         a.download = `spok-session-${s.id}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        toast.success("Exported");
+        toast.success("Exported (secrets redacted)");
         return;
       }
       return;
@@ -308,19 +312,63 @@ export function PromptComposer() {
         </div>
       )}
 
-      {/* Sticky flags strip */}
+      {/* Sticky flags strip + permission mode */}
       <div className="flex flex-wrap items-center gap-1.5 border-b border-phosphor-green/10 px-3 py-1.5">
         <Terminal className="h-3 w-3 text-phosphor-green/40" />
         <span className="font-mono text-[10px] text-phosphor-green/40">
           {session.config.cwd}
         </span>
         <span className="text-phosphor-green/20">·</span>
+        <label className="inline-flex items-center gap-1" title="Permission mode for Grok tool execution">
+          <span className="text-[9px] uppercase tracking-wider text-phosphor-green/35">
+            perm
+          </span>
+          <select
+            className="h-5 max-w-[140px] rounded border border-phosphor-green/25 bg-black/60 px-1 font-mono text-[10px] text-phosphor-green outline-none focus:border-phosphor-amber/50"
+            value={flags.alwaysApprove ? "always-approve" : flags.permissionMode || "manual"}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "always-approve") {
+                setGrokFlags(session.id, {
+                  alwaysApprove: true,
+                  permissionMode: undefined,
+                });
+                toast.message("always-approve ON — tools run without prompts");
+              } else if (v === "manual") {
+                setGrokFlags(session.id, {
+                  alwaysApprove: false,
+                  permissionMode: undefined,
+                });
+              } else {
+                setGrokFlags(session.id, {
+                  alwaysApprove: false,
+                  permissionMode: v,
+                });
+              }
+            }}
+          >
+            <option value="manual">manual (safe)</option>
+            <option value="default">default</option>
+            <option value="acceptEdits">acceptEdits</option>
+            <option value="plan">plan</option>
+            <option value="auto">auto</option>
+            <option value="dontAsk">dontAsk</option>
+            <option value="bypassPermissions">bypassPermissions</option>
+            <option value="always-approve">always-approve (yolo)</option>
+          </select>
+        </label>
+        <Badge
+          variant={flags.alwaysApprove ? "amber" : "muted"}
+          title={
+            flags.alwaysApprove
+              ? "Auto-approves all tool executions — use only in trusted disposable workspaces"
+              : "Manual / CLI permission mode — safer default"
+          }
+        >
+          {permissionModeLabel(flags)}
+        </Badge>
         {flags.model && <Badge variant="cyan">model:{flags.model}</Badge>}
-        {flags.alwaysApprove && <Badge variant="amber">always-approve</Badge>}
         {flags.effort && <Badge variant="magenta">effort:{flags.effort}</Badge>}
-        {flags.permissionMode && (
-          <Badge variant="muted">perm:{flags.permissionMode}</Badge>
-        )}
         {flags.debug && <Badge variant="error">debug</Badge>}
         {flags.noPlan && <Badge variant="muted">no-plan</Badge>}
         {isLive && (

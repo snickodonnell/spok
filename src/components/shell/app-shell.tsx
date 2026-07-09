@@ -20,7 +20,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WelcomeScreen } from "./welcome-screen";
 import { cn } from "@/lib/utils";
 import { useGitWatch } from "@/hooks/use-git-watch";
+import { useSessionHydration } from "@/hooks/use-session-hydration";
 import type { ViewMode } from "@/lib/types";
+import { Loader2 } from "lucide-react";
 
 export function AppShell() {
   const viewMode = useSpokStore((s) => s.viewMode);
@@ -28,7 +30,11 @@ export function AppShell() {
   const sessions = useSpokStore((s) => s.sessions);
   const scanlines = useSpokStore((s) => s.scanlines);
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
+  const hydrating = useSpokStore((s) => s.hydrating);
+  const hydrated = useSpokStore((s) => s.hydrated);
   const activeSession = activeSessionId ? sessions[activeSessionId] : null;
+
+  useSessionHydration();
 
   // Only poll git while a harness run is in progress (not on idle/ready workspace).
   // End-of-run refresh is handled once in runHarness; manual refresh is on Diff panel.
@@ -60,9 +66,22 @@ export function AppShell() {
   }, []);
 
   const hasSessions = Object.keys(sessions).length > 0;
-  const showWelcome = !activeSessionId && !hasSessions;
+  const showWelcome = hydrated && !activeSessionId && !hasSessions;
 
   function renderMain() {
+    if (hydrating && !hasSessions) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-phosphor-green/60">
+          <Loader2 className="h-6 w-6 animate-spin text-phosphor-cyan" />
+          <div className="font-mono text-xs uppercase tracking-[0.2em]">
+            Restoring sessions…
+          </div>
+          <p className="max-w-sm text-center text-[11px] text-phosphor-green/35">
+            Loading durable logs from disk so you can continue where you left off.
+          </p>
+        </div>
+      );
+    }
     if (showWelcome) return <WelcomeScreen />;
     switch (viewMode) {
       case "workspace":

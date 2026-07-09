@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spok Stream Contracts"
+  short_description: "Evolve Grok stream parsing and fixtures"
+  default_prompt: "Use $spok-stream-contracts to update Spok stream parsing safely."

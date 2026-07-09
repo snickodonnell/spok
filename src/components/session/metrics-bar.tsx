@@ -41,6 +41,8 @@ export function MetricsBar() {
       ? Date.now() - (m.startedAt ?? session.createdAt)
       : m.elapsedMs;
 
+  const eventCount = session.eventCount ?? session.eventLog?.length ?? 0;
+
   const items = [
     { icon: Clock, label: formatDuration(elapsed), tip: "Elapsed" },
     { icon: Brain, label: String(m.thinkingSteps), tip: "Thinking steps" },
@@ -60,6 +62,14 @@ export function MetricsBar() {
   return (
     <div className="flex h-8 items-center gap-3 overflow-x-auto border-b border-phosphor-green/15 px-3 text-[11px]">
       <StatusPill status={session.status} />
+      {session.source === "resume" && (
+        <span
+          title="Restored from durable session log"
+          className="rounded border border-phosphor-cyan/30 bg-phosphor-cyan/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-phosphor-cyan"
+        >
+          restored
+        </span>
+      )}
       {items.map((item) => (
         <span
           key={item.tip}
@@ -70,6 +80,14 @@ export function MetricsBar() {
           <span className="font-mono">{item.label}</span>
         </span>
       ))}
+      {eventCount > 0 && (
+        <span
+          title="Normalized events in log"
+          className="font-mono text-phosphor-green/40"
+        >
+          {eventCount} evt
+        </span>
+      )}
       <span className="ml-auto truncate font-mono text-phosphor-green/40">
         {session.name}
       </span>

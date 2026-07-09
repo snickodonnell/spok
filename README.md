@@ -2,6 +2,8 @@
 
 **Spok** is a production-quality desktop-ready app that wraps [Grok Build](https://x.ai) sessions with **live** thinking-trace and repository-diff visualization.
 
+> Product roadmap and security audit: [`docs/HARNESS_AUDIT_AND_ROADMAP.md`](docs/HARNESS_AUDIT_AND_ROADMAP.md)
+
 Watch reasoning steps, tool calls, plan updates, sub-agents, and code changes stream in as they happen — not after the fact — with a retro tech / CRT phosphor aesthetic.
 
 ![Spok](https://img.shields.io/badge/Spok-Live%20Harness-33ff66?style=flat-square&labelColor=0a100c)
@@ -50,6 +52,16 @@ Production build:
 npm run build
 npm start
 ```
+
+Tests (parser fixtures, session replay, durable store, security helpers):
+
+```bash
+npm test
+```
+
+### Durable sessions
+
+Live workspaces append normalized events to disk under **`~/.spok/sessions/<id>/`** (override with `SPOK_SESSIONS_DIR`). On launch, Spok restores recent sessions from those logs so you can continue after a refresh. Exports are **v2** (snapshot + event log); v1 snapshot JSON still imports.
 
 ---
 
@@ -148,6 +160,10 @@ spok/
 2. **Parser** turns lines into `StreamEvent`s
 3. **Store** materializes a `Session` with a node graph + `FileDiff` map
 4. **UI** virtualizes the trace tree and renders Monaco diffs; selecting a node with a file link opens the related diff
+
+### Planning docs
+
+- [Harness audit and roadmap](docs/HARNESS_AUDIT_AND_ROADMAP.md) - current-state audit, correction recommendations, world-class feature catalog, phased implementation roadmap, and generated implementation skills.
 
 ### Stream event shape (NDJSON)
 

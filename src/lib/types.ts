@@ -155,11 +155,22 @@ export interface Session {
   timelineCursor: number | null;
   rawLog: string[];
   error?: string;
-  source: "live" | "import" | "sample" | "paste" | "playback";
+  source: "live" | "import" | "sample" | "paste" | "playback" | "resume";
   /** Prompt / slash history for workspace composer */
   promptHistory: PromptTurn[];
   /** Sticky Grok CLI flags (serialized plain object) */
   grokFlags?: Record<string, unknown>;
+  /**
+   * In-memory normalized event log for export/replay.
+   * Durable copy also lives under ~/.spok/sessions/<id>/events.ndjson.
+   */
+  eventLog?: StreamEvent[];
+  /** Whether this session is persisted on disk */
+  durable?: boolean;
+  /** Last durable flush timestamp */
+  lastPersistedAt?: number;
+  /** Count of normalized events written (disk or memory) */
+  eventCount?: number;
 }
 
 export interface SampleSessionMeta {
@@ -190,9 +201,28 @@ export type StreamEventType =
   | "error"
   | "system"
   | "goal"
-  | "raw";
+  | "raw"
+  | "parser_error";
+
+export type StreamEventProvider =
+  | "grok"
+  | "spok"
+  | "import"
+  | "harness"
+  | "unknown";
+
+export type StreamEventSeverity =
+  | "debug"
+  | "info"
+  | "warn"
+  | "error"
+  | "parser"
+  | "runtime"
+  | "policy";
 
 export interface StreamEvent {
+  /** Schema version; omit only on legacy imports (migrated on load). */
+  version?: number;
   type: StreamEventType;
   timestamp: number;
   sessionId?: string;
@@ -213,13 +243,58 @@ export interface StreamEvent {
   links?: TraceLink[];
   subagentId?: string;
   durationMs?: number;
+  /** Origin of the event (provider adapter or harness). */
+  provider?: StreamEventProvider;
+  /** Pointer into append-only raw log when available. */
+  rawEventId?: string;
+  /** Process / harness run identity. */
+  runId?: string;
+  /** User prompt turn identity. */
+  turnId?: string;
+  severity?: StreamEventSeverity;
+  /** Count of secret redactions applied to this event. */
+  redactions?: number;
 }
 
-export interface ExportPayload {
+/** Legacy v1 export: snapshot only. */
+export interface ExportPayloadV1 {
   version: 1;
   exportedAt: number;
   session: Session;
 }
+
+/**
+ * v2 export: snapshot + ordered event log for faithful replay.
+ * Importers should prefer `events` when present.
+ */
+export interface ExportPayloadV2 {
+  version: 2;
+  exportedAt: number;
+  session: Session;
+  events: StreamEvent[];
+  /** Optional raw line log for debugging */
+  rawLog?: string[];
+}
+
+export type ExportPayload = ExportPayloadV1 | ExportPayloadV2;
+
+/** On-disk session index entry (also returned by /api/sessions). */
+export type SessionMetaRecord = {
+  id: string;
+  name: string;
+  status: SessionStatus;
+  createdAt: number;
+  updatedAt: number;
+  source: Session["source"];
+  cwd: string;
+  command: string;
+  eventCount: number;
+  rawCount: number;
+  pinned?: boolean;
+  formatVersion: number;
+  grokFlags?: Record<string, unknown>;
+  error?: string;
+};
 
 export type ViewMode = "workspace" | "unified" | "trace" | "diff" | "log" | "overview";
 
