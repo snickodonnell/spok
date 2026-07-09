@@ -12,31 +12,30 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSpokStore } from "@/lib/store";
-import { parseTextLine } from "@/lib/parser";
 import { toast } from "sonner";
 import {
   DirectoryNavigator,
   saveRecentDir,
 } from "@/components/shell/directory-navigator";
-import { FolderOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 
 const LAST_CWD_KEY = "spok.lastCwd";
 const LAST_CMD_KEY = "spok.lastCommand";
 
+/**
+ * Step 1 only: pick a working directory (and optional CLI binary),
+ * then open the full workspace where prompts are entered.
+ */
 export function LaunchDialog() {
   const open = useSpokStore((s) => s.launchOpen);
   const setOpen = useSpokStore((s) => s.setLaunchOpen);
   const createSession = useSpokStore((s) => s.createSession);
+  const setViewMode = useSpokStore((s) => s.setViewMode);
   const applyStreamEvent = useSpokStore((s) => s.applyStreamEvent);
-  const appendRawLog = useSpokStore((s) => s.appendRawLog);
-  const updateSession = useSpokStore((s) => s.updateSession);
 
   const [cwd, setCwd] = useState("");
   const [command, setCommand] = useState("grok");
-  const [args, setArgs] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [launching, setLaunching] = useState(false);
-  const [browserOpen, setBrowserOpen] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -50,14 +49,12 @@ export function LaunchDialog() {
     }
   }, [open]);
 
-  const onLaunch = async () => {
+  const openWorkspace = () => {
     if (!cwd.trim()) {
-      toast.error("Select a working directory for Grok to run in");
-      setBrowserOpen(true);
+      toast.error("Select a working directory for Grok");
       return;
     }
 
-    setLaunching(true);
     saveRecentDir(cwd);
     try {
       localStorage.setItem(LAST_CWD_KEY, cwd);
@@ -66,205 +63,76 @@ export function LaunchDialog() {
       /* ignore */
     }
 
+    const base = cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
     const sessionId = createSession({
-      name: prompt.slice(0, 60) || `Live ${new Date().toLocaleTimeString()}`,
+      name: base,
       source: "live",
-      status: "starting",
+      status: "ready",
       config: {
         cwd,
-        command,
-        args: args ? args.split(/\s+/) : [],
+        command: command.trim() || "grok",
+        args: [],
         autoScroll: true,
         playbackSpeed: 1,
       },
     });
 
     applyStreamEvent(sessionId, {
-      type: "session_start",
+      type: "system",
       timestamp: Date.now(),
-      title: "Session starting",
-      content: `${command} ${args}`.trim() + `\ncwd: ${cwd}`,
+      title: "Workspace ready",
+      content: `Repo: ${cwd}\nCLI: ${command.trim() || "grok"}\n\nType a prompt below, or / for Grok commands.`,
+      status: "success",
     });
 
-    try {
-      const res = await fetch("/api/session/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          cwd: cwd || undefined,
-          command,
-          args: [
-            ...(args ? args.split(/\s+/).filter(Boolean) : []),
-            ...(prompt ? [prompt] : []),
-          ],
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || "Failed to start session");
-      }
-
-      if (!res.body) throw new Error("No response stream");
-
-      updateSession(sessionId, { status: "running" });
-      setOpen(false);
-      toast.success(`Live session in ${cwd}`);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      (async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              appendRawLog(sessionId, line);
-              try {
-                const parsed = JSON.parse(line) as {
-                  type?: string;
-                  data?: string;
-                  event?: unknown;
-                };
-                if (parsed.type === "stdout" || parsed.type === "stderr") {
-                  const text = parsed.data ?? "";
-                  for (const l of text.split("\n").filter(Boolean)) {
-                    applyStreamEvent(sessionId, parseTextLine(l));
-                  }
-                } else if (parsed.type === "event" && parsed.event) {
-                  applyStreamEvent(sessionId, parsed.event as never);
-                } else if (parsed.type === "exit") {
-                  updateSession(sessionId, {
-                    status:
-                      (parsed as { code?: number }).code === 0
-                        ? "completed"
-                        : "error",
-                  });
-                  applyStreamEvent(sessionId, {
-                    type: "session_end",
-                    timestamp: Date.now(),
-                    content: `Process exited with code ${(parsed as { code?: number }).code}`,
-                    status:
-                      (parsed as { code?: number }).code === 0
-                        ? "success"
-                        : "error",
-                  });
-                } else {
-                  applyStreamEvent(sessionId, parseTextLine(line));
-                }
-              } catch {
-                applyStreamEvent(sessionId, parseTextLine(line));
-              }
-            }
-          }
-          const s = useSpokStore.getState().sessions[sessionId];
-          if (s && (s.status === "running" || s.status === "starting")) {
-            updateSession(sessionId, { status: "completed" });
-            applyStreamEvent(sessionId, {
-              type: "session_end",
-              timestamp: Date.now(),
-              content: "Stream ended",
-              status: "success",
-            });
-          }
-        } catch (e) {
-          updateSession(sessionId, {
-            status: "error",
-            error: e instanceof Error ? e.message : "Stream error",
-          });
-          toast.error("Session stream error");
-        }
-      })();
-    } catch (e) {
-      updateSession(sessionId, {
-        status: "error",
-        error: e instanceof Error ? e.message : "Launch failed",
-      });
-      applyStreamEvent(sessionId, {
-        type: "error",
-        timestamp: Date.now(),
-        title: "Launch failed",
-        content:
-          e instanceof Error
-            ? e.message
-            : "Could not spawn process. Is the Grok CLI installed and on PATH?",
-        status: "error",
-      });
-      toast.error(
-        e instanceof Error
-          ? e.message
-          : "Launch failed — use samples or import if CLI is unavailable"
-      );
-    } finally {
-      setLaunching(false);
-    }
+    setViewMode("workspace");
+    setOpen(false);
+    toast.success(`Workspace open · ${base}`);
   };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Launch Grok Build</DialogTitle>
+          <DialogTitle>Open workspace</DialogTitle>
           <DialogDescription>
-            Pick the local repo Grok will run in, then launch a CLI session.
-            Traces and diffs stream live into Spok. CLI:{" "}
-            <code className="text-phosphor-cyan">grok</code>
+            Choose the local repo Grok will run in. You&apos;ll enter prompts and
+            slash commands on the next screen — with live thinking and diffs
+            permanently visible.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-1">
-          {/* Working directory */}
-          <div>
-            <div className="mb-1.5 flex items-center justify-between">
-              <label className="block text-[10px] uppercase tracking-widest text-phosphor-green/45">
-                Working directory (repo)
-              </label>
-              <button
-                type="button"
-                onClick={() => setBrowserOpen((v) => !v)}
-                className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-phosphor-cyan/70 hover:text-phosphor-cyan"
-              >
-                <FolderOpen className="h-3 w-3" />
-                {browserOpen ? "Hide browser" : "Browse folders"}
-                {browserOpen ? (
-                  <ChevronUp className="h-3 w-3" />
-                ) : (
-                  <ChevronDown className="h-3 w-3" />
-                )}
-              </button>
-            </div>
-
-            <div className="mb-2 flex items-center gap-2 rounded border border-phosphor-green/20 bg-black/30 px-2 py-1.5">
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-phosphor-amber" />
-              <span
-                className="min-w-0 flex-1 truncate font-mono text-xs text-phosphor-green"
-                title={cwd}
-              >
-                {cwd || "No folder selected — browse below"}
-              </span>
-            </div>
-
-            {browserOpen && open && (
-              <DirectoryNavigator
-                value={cwd}
-                onChange={setCwd}
-                onConfirm={(p) => {
-                  setCwd(p);
-                  toast.success(`Repo set: ${p}`);
-                }}
-                compact
-              />
-            )}
+          <div className="flex items-center gap-2 rounded border border-phosphor-green/20 bg-black/30 px-2 py-1.5">
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-phosphor-amber" />
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-xs text-phosphor-green"
+              title={cwd}
+            >
+              {cwd || "No folder selected"}
+            </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          {open && (
+            <DirectoryNavigator
+              value={cwd}
+              onChange={setCwd}
+              onConfirm={(p) => {
+                setCwd(p);
+              }}
+              compact
+            />
+          )}
+
+          <button
+            type="button"
+            className="text-[10px] uppercase tracking-wider text-phosphor-green/40 hover:text-phosphor-cyan"
+            onClick={() => setShowAdvanced((v) => !v)}
+          >
+            {showAdvanced ? "Hide advanced" : "Advanced · CLI binary"}
+          </button>
+
+          {showAdvanced && (
             <div>
               <label className="mb-1 block text-[10px] uppercase tracking-widest text-phosphor-green/45">
                 Command
@@ -275,36 +143,15 @@ export function LaunchDialog() {
                 placeholder="grok"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-[10px] uppercase tracking-widest text-phosphor-green/45">
-                Extra args
-              </label>
-              <Input
-                value={args}
-                onChange={(e) => setArgs(e.target.value)}
-                placeholder="optional flags"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-[10px] uppercase tracking-widest text-phosphor-green/45">
-              Prompt / task
-            </label>
-            <Input
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Refactor the auth middleware…"
-            />
-          </div>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={onLaunch} disabled={launching || !cwd.trim()}>
-            {launching ? "Starting…" : "Launch session"}
+          <Button onClick={openWorkspace} disabled={!cwd.trim()}>
+            Open workspace
           </Button>
         </DialogFooter>
       </DialogContent>

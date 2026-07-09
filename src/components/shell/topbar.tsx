@@ -70,7 +70,7 @@ export function Topbar() {
       <div className="ml-auto flex items-center gap-1">
         <Button variant="ghost" size="sm" onClick={() => setLaunchOpen(true)}>
           <Play className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Launch</span>
+          <span className="hidden sm:inline">Open repo</span>
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
           <Upload className="h-3.5 w-3.5" />

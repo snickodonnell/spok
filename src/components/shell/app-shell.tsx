@@ -15,10 +15,12 @@ import { TracePanel } from "@/components/trace/trace-panel";
 import { DiffPanel } from "@/components/diff/diff-panel";
 import { LogPanel } from "@/components/session/log-panel";
 import { OverviewPanel } from "@/components/session/overview-panel";
+import { Workspace } from "@/components/session/workspace";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WelcomeScreen } from "./welcome-screen";
 import { cn } from "@/lib/utils";
 import { useGitWatch } from "@/hooks/use-git-watch";
+import type { ViewMode } from "@/lib/types";
 
 export function AppShell() {
   const viewMode = useSpokStore((s) => s.viewMode);
@@ -28,33 +30,29 @@ export function AppShell() {
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
   const activeSession = activeSessionId ? sessions[activeSessionId] : null;
 
+  // Only poll git while a harness run is in progress (not on idle/ready workspace).
+  // End-of-run refresh is handled once in runHarness; manual refresh is on Diff panel.
   useGitWatch(
     activeSession?.config.cwd || undefined,
     !!activeSession &&
-      (activeSession.status === "running" || activeSession.status === "starting") &&
-      !!activeSession.config.cwd
+      !!activeSession.config.cwd &&
+      (activeSession.status === "running" || activeSession.status === "starting")
   );
 
-  // Global keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
         return;
-      if ((e.metaKey || e.ctrlKey) && e.key === "1") {
+      const map: Record<string, ViewMode> = {
+        "1": "workspace",
+        "2": "trace",
+        "3": "diff",
+        "4": "overview",
+        "5": "log",
+      };
+      if ((e.metaKey || e.ctrlKey) && map[e.key]) {
         e.preventDefault();
-        useSpokStore.getState().setViewMode("unified");
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "2") {
-        e.preventDefault();
-        useSpokStore.getState().setViewMode("trace");
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "3") {
-        e.preventDefault();
-        useSpokStore.getState().setViewMode("diff");
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "4") {
-        e.preventDefault();
-        useSpokStore.getState().setViewMode("overview");
+        useSpokStore.getState().setViewMode(map[e.key]);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -63,6 +61,37 @@ export function AppShell() {
 
   const hasSessions = Object.keys(sessions).length > 0;
   const showWelcome = !activeSessionId && !hasSessions;
+
+  function renderMain() {
+    if (showWelcome) return <WelcomeScreen />;
+    switch (viewMode) {
+      case "workspace":
+        return <Workspace />;
+      case "unified":
+        return (
+          <Group orientation="horizontal" className="h-full">
+            <Panel defaultSize={42} minSize={25}>
+              <div className="h-full border-r border-phosphor-green/10">
+                <TracePanel />
+              </div>
+            </Panel>
+            <Separator className="w-1 bg-phosphor-green/15 hover:bg-phosphor-green/40 transition-colors" />
+            <Panel defaultSize={58} minSize={30}>
+              <DiffPanel />
+            </Panel>
+          </Group>
+        );
+      case "trace":
+        return <TracePanel />;
+      case "diff":
+        return <DiffPanel />;
+      case "log":
+        return <LogPanel />;
+      case "overview":
+      default:
+        return <OverviewPanel />;
+    }
+  }
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -78,31 +107,7 @@ export function AppShell() {
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar />
             <MetricsBar />
-            <main className="min-h-0 flex-1">
-              {showWelcome ? (
-                <WelcomeScreen />
-              ) : viewMode === "unified" ? (
-                <Group orientation="horizontal" className="h-full">
-                  <Panel defaultSize={42} minSize={25}>
-                    <div className="h-full border-r border-phosphor-green/10">
-                      <TracePanel />
-                    </div>
-                  </Panel>
-                  <Separator className="w-1 bg-phosphor-green/15 hover:bg-phosphor-green/40 transition-colors" />
-                  <Panel defaultSize={58} minSize={30}>
-                    <DiffPanel />
-                  </Panel>
-                </Group>
-              ) : viewMode === "trace" ? (
-                <TracePanel />
-              ) : viewMode === "diff" ? (
-                <DiffPanel />
-              ) : viewMode === "log" ? (
-                <LogPanel />
-              ) : (
-                <OverviewPanel />
-              )}
-            </main>
+            <main className="min-h-0 flex-1">{renderMain()}</main>
             {!showWelcome && <Timeline />}
           </div>
         </div>

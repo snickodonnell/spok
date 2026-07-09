@@ -1,0 +1,699 @@
+import { nanoid } from "nanoid";
+import type { DiffStatus, StreamEvent } from "./types";
+
+/**
+ * Parse Grok Build `--output-format streaming-json` lines and Spok harness envelopes
+ * into user-friendly StreamEvents.
+ *
+ * Grok streams ACP-style messages:
+ * {
+ *   method: "session/update",
+ *   params: {
+ *     update: {
+ *       sessionUpdate: "agent_thought_chunk" | "agent_message_chunk" | "tool_call" | ...
+ *       content, toolCallId, title, rawInput, ...
+ *     }
+ *   }
+ * }
+ */
+
+export type IngestResult = {
+  events: StreamEvent[];
+  /** Human-readable log line for the raw log panel */
+  logLine?: string;
+};
+
+type Json = Record<string, unknown>;
+
+function asObj(v: unknown): Json | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : null;
+}
+
+function textFromContent(content: unknown): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c) => {
+        const o = asObj(c);
+        if (!o) return "";
+        if (typeof o.text === "string") return o.text;
+        if (o.type === "diff") {
+          const path = String(o.path ?? "file");
+          return `Diff: ${path}`;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  const o = asObj(content);
+  if (!o) return "";
+  if (typeof o.text === "string") return o.text;
+  if (typeof o.message === "string") return o.message;
+  return "";
+}
+
+function tsOf(obj: Json, fallback = Date.now()): number {
+  if (typeof obj.timestamp === "number") {
+    // Grok sometimes uses seconds-like big ints; treat as ms if huge
+    const t = obj.timestamp;
+    return t < 1e12 ? t * 1000 : t;
+  }
+  if (typeof obj.ts === "string") {
+    const p = Date.parse(obj.ts);
+    if (!Number.isNaN(p)) return p;
+  }
+  const meta = asObj(obj._meta);
+  if (meta && typeof meta.agentTimestampMs === "number") return meta.agentTimestampMs;
+  return fallback;
+}
+
+function toolNameFromUpdate(update: Json): string {
+  const meta = asObj(update._meta);
+  const xai = meta ? asObj(meta["x.ai/tool"]) : null;
+  if (xai && typeof xai.name === "string") return xai.name;
+  if (typeof update.title === "string" && update.title && !update.title.includes(" ")) {
+    return update.title;
+  }
+  if (typeof update.title === "string") {
+    // "Write `path`" → write
+    const m = update.title.match(/^(Write|Edit|Read|List|Delete|Run)\b/i);
+    if (m) return m[1].toLowerCase() === "write" ? "write" : m[1].toLowerCase();
+  }
+  return typeof update.title === "string" ? update.title : "tool";
+}
+
+function pathFromUpdate(update: Json): string | undefined {
+  const raw = asObj(update.rawInput);
+  if (raw) {
+    for (const k of [
+      "file_path",
+      "path",
+      "target_file",
+      "target_directory",
+      "old_path",
+      "new_path",
+    ]) {
+      if (typeof raw[k] === "string" && raw[k]) return String(raw[k]);
+    }
+  }
+  const locs = update.locations;
+  if (Array.isArray(locs) && locs[0]) {
+    const p = asObj(locs[0]);
+    if (p && typeof p.path === "string") return p.path;
+  }
+  const content = update.content;
+  if (Array.isArray(content)) {
+    for (const c of content) {
+      const o = asObj(c);
+      if (o && typeof o.path === "string") return o.path;
+    }
+  }
+  // Title like Write `C:\dev\...`
+  if (typeof update.title === "string") {
+    const m = update.title.match(/`([^`]+)`/);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+function relPath(p: string | undefined, cwd?: string): string | undefined {
+  if (!p) return undefined;
+  let out = p.replace(/\\/g, "/");
+  if (cwd) {
+    const c = cwd.replace(/\\/g, "/").replace(/\/$/, "");
+    if (out.toLowerCase().startsWith(c.toLowerCase() + "/")) {
+      out = out.slice(c.length + 1);
+    }
+  }
+  return out;
+}
+
+function diffsFromContent(
+  content: unknown,
+  cwd?: string
+): Array<{ path: string; oldContent: string; newContent: string }> {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ path: string; oldContent: string; newContent: string }> = [];
+  for (const c of content) {
+    const o = asObj(c);
+    if (!o || o.type !== "diff") continue;
+    const path = relPath(String(o.path ?? ""), cwd);
+    if (!path) continue;
+    out.push({
+      path,
+      oldContent: typeof o.oldText === "string" ? o.oldText : "",
+      newContent: typeof o.newText === "string" ? o.newText : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * Stateful coalescer: merges consecutive thought/message chunks into single nodes.
+ */
+export class GrokStreamIngestor {
+  private thoughtId: string | null = null;
+  private thoughtText = "";
+  private messageId: string | null = null;
+  private messageText = "";
+  private toolNodes = new Map<string, string>(); // toolCallId → trace node id
+  private cwd: string;
+
+  constructor(cwd = "") {
+    this.cwd = cwd;
+  }
+
+  setCwd(cwd: string) {
+    this.cwd = cwd;
+  }
+
+  /** Reset coalescing at end of a run */
+  resetTurn() {
+    this.thoughtId = null;
+    this.thoughtText = "";
+    this.messageId = null;
+    this.messageText = "";
+  }
+
+  ingestLine(line: string, timestamp = Date.now()): IngestResult {
+    const trimmed = line.replace(/\r$/, "").trim();
+    if (!trimmed) return { events: [] };
+
+    // Harness NDJSON envelope from /api/session/start
+    try {
+      const env = JSON.parse(trimmed) as Json;
+      if (env.type === "stdout" || env.type === "stderr") {
+        const data = String(env.data ?? "");
+        const events: StreamEvent[] = [];
+        let lastLog: string | undefined;
+        for (const sub of data.split("\n")) {
+          if (!sub.trim()) continue;
+          const r = this.ingestPayloadLine(sub, timestamp);
+          events.push(...r.events);
+          if (r.logLine) lastLog = r.logLine;
+        }
+        return {
+          events,
+          logLine:
+            env.type === "stderr"
+              ? `[stderr] ${lastLog ?? data.slice(0, 200)}`
+              : lastLog,
+        };
+      }
+      if (env.type === "event" && env.event) {
+        return {
+          events: [env.event as StreamEvent],
+          logLine: formatLogFromEvent(env.event as StreamEvent),
+        };
+      }
+      if (env.type === "exit") {
+        const code = typeof env.code === "number" ? env.code : null;
+        const ok = code === 0;
+        const ev: StreamEvent = {
+          type: "system",
+          timestamp,
+          id: nanoid(10),
+          title: ok ? "Run complete" : "Run failed",
+          content: `Process exited with code ${code}`,
+          status: ok ? "success" : "error",
+        };
+        return { events: [ev], logLine: ev.content };
+      }
+      // Fall through — might be a Grok stream line itself
+      return this.ingestPayloadLine(trimmed, timestamp);
+    } catch {
+      return this.ingestPayloadLine(trimmed, timestamp);
+    }
+  }
+
+  private ingestPayloadLine(line: string, timestamp: number): IngestResult {
+    const trimmed = line.trim();
+    if (!trimmed) return { events: [] };
+
+    let obj: Json;
+    try {
+      obj = JSON.parse(trimmed) as Json;
+    } catch {
+      // plain text
+      return {
+        events: [
+          {
+            type: "message",
+            timestamp,
+            id: nanoid(10),
+            title: "Output",
+            content: trimmed,
+            status: "success",
+          },
+        ],
+        logLine: trimmed.slice(0, 300),
+      };
+    }
+
+    // Spok native event
+    if (
+      typeof obj.type === "string" &&
+      [
+        "thinking",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "file_change",
+        "message",
+        "system",
+        "error",
+        "goal",
+        "plan",
+      ].includes(obj.type) &&
+      !obj.method
+    ) {
+      const ev = obj as unknown as StreamEvent;
+      if (!ev.id) ev.id = nanoid(10);
+      if (!ev.timestamp) ev.timestamp = timestamp;
+      return { events: [ev], logLine: formatLogFromEvent(ev) };
+    }
+
+    // Grok ACP session/update
+    if (obj.method === "session/update" || asObj(obj.params)?.update) {
+      return this.ingestSessionUpdate(obj, timestamp);
+    }
+
+    // Grok events.jsonl style: { type: "turn_started" | "phase_changed" | ... }
+    if (typeof obj.type === "string" && !obj.method) {
+      return this.ingestGrokEvent(obj, timestamp);
+    }
+
+    // Unknown JSON — show compact friendly form, not raw dump as title
+    return {
+      events: [
+        {
+          type: "system",
+          timestamp,
+          id: nanoid(10),
+          title: "Stream event",
+          content: summarizeUnknownJson(obj),
+          status: "success",
+          meta: obj,
+        },
+      ],
+      logLine: summarizeUnknownJson(obj),
+    };
+  }
+
+  private ingestSessionUpdate(obj: Json, timestamp: number): IngestResult {
+    const params = asObj(obj.params) ?? {};
+    const update = asObj(params.update) ?? asObj(obj.update) ?? {};
+    const kind = String(update.sessionUpdate ?? "");
+    const t = tsOf(obj, timestamp);
+    const events: StreamEvent[] = [];
+
+    switch (kind) {
+      case "user_message_chunk": {
+        const text = textFromContent(update.content);
+        if (text) {
+          events.push({
+            type: "goal",
+            timestamp: t,
+            id: nanoid(10),
+            title: "You",
+            content: text,
+            status: "success",
+          });
+        }
+        break;
+      }
+
+      case "agent_thought_chunk": {
+        const chunk = textFromContent(update.content);
+        if (!chunk) break;
+        this.thoughtText = this.thoughtText
+          ? mergeChunk(this.thoughtText, chunk)
+          : chunk;
+        if (!this.thoughtId) this.thoughtId = nanoid(10);
+        // Close open message coalesce when thinking resumes
+        this.messageId = null;
+        this.messageText = "";
+        events.push({
+          type: "thinking",
+          timestamp: t,
+          id: this.thoughtId,
+          title: "Thinking",
+          content: this.thoughtText,
+          summary: this.thoughtText.slice(0, 140),
+          status: "running",
+        });
+        break;
+      }
+
+      case "agent_message_chunk": {
+        const chunk = textFromContent(update.content);
+        if (!chunk) break;
+        // Finalize thinking
+        if (this.thoughtId) {
+          events.push({
+            type: "thinking",
+            timestamp: t,
+            id: this.thoughtId,
+            title: "Thinking",
+            content: this.thoughtText,
+            summary: this.thoughtText.slice(0, 140),
+            status: "success",
+          });
+          this.thoughtId = null;
+          this.thoughtText = "";
+        }
+        this.messageText = this.messageText
+          ? mergeChunk(this.messageText, chunk)
+          : chunk;
+        if (!this.messageId) this.messageId = nanoid(10);
+        events.push({
+          type: "message",
+          timestamp: t,
+          id: this.messageId,
+          title: "Grok",
+          content: this.messageText,
+          summary: this.messageText.slice(0, 140),
+          status: "running",
+        });
+        break;
+      }
+
+      case "tool_call": {
+        // Finalize open thought/message
+        this.flushOpenText(events, t);
+        const toolCallId = String(update.toolCallId ?? nanoid(10));
+        const name = toolNameFromUpdate(update);
+        const nodeId = nanoid(10);
+        this.toolNodes.set(toolCallId, nodeId);
+        const path = relPath(pathFromUpdate(update), this.cwd);
+        const raw = asObj(update.rawInput);
+        const inputPreview = raw
+          ? JSON.stringify(raw, null, 0).slice(0, 400)
+          : "";
+        events.push({
+          type: "tool_call",
+          timestamp: t,
+          id: nodeId,
+          title: `Tool: ${name}`,
+          content: inputPreview || String(update.title ?? name),
+          toolName: name,
+          path,
+          status: "running",
+          meta: { toolCallId, rawInput: raw ?? undefined },
+        });
+
+        // write/search_replace may include content in rawInput
+        if (
+          (name === "write" || name === "search_replace") &&
+          path &&
+          raw &&
+          typeof raw.content === "string"
+        ) {
+          events.push({
+            type: "file_change",
+            timestamp: t,
+            id: nanoid(10),
+            parentId: nodeId,
+            title: `File: ${path}`,
+            content: `${name === "write" ? "Wrote" : "Edited"} ${path}`,
+            path,
+            oldContent: typeof raw.old_string === "string" ? "" : "",
+            newContent: String(raw.content),
+            diffStatus: "modified" as DiffStatus,
+            status: "success",
+          });
+        }
+        break;
+      }
+
+      case "tool_call_update": {
+        const toolCallId = String(update.toolCallId ?? "");
+        const nodeId = this.toolNodes.get(toolCallId) ?? nanoid(10);
+        const name = toolNameFromUpdate(update);
+        const path = relPath(pathFromUpdate(update), this.cwd);
+        const statusMeta = asObj(asObj(update._meta)?.updateParams);
+        const st = statusMeta?.status;
+        const status: StreamEvent["status"] =
+          st === "Failed" || st === "error"
+            ? "error"
+            : st === "Completed" || st === "success"
+              ? "success"
+              : "running";
+
+        const contentBits: string[] = [];
+        if (typeof update.title === "string") contentBits.push(update.title);
+        const text = textFromContent(update.content);
+        if (text && !text.startsWith("Diff:")) contentBits.push(text);
+
+        events.push({
+          type: status === "running" ? "tool_call" : "tool_result",
+          timestamp: t,
+          id: nodeId,
+          title:
+            status === "running"
+              ? `Tool: ${name}`
+              : `Result: ${name}`,
+          content: contentBits.join("\n") || name,
+          toolName: name,
+          path,
+          status: status === "running" ? "running" : status,
+          meta: { toolCallId },
+        });
+
+        // Diffs attached to tool updates (write results)
+        for (const d of diffsFromContent(update.content, this.cwd)) {
+          events.push({
+            type: "file_change",
+            timestamp: t,
+            id: nanoid(10),
+            parentId: nodeId,
+            title: `File: ${d.path}`,
+            content: `Changed ${d.path}`,
+            path: d.path,
+            oldContent: d.oldContent,
+            newContent: d.newContent,
+            diffStatus: (!d.oldContent && d.newContent
+              ? "added"
+              : d.oldContent && !d.newContent
+                ? "deleted"
+                : "modified") as DiffStatus,
+            status: "success",
+          });
+        }
+
+        // rawInput with full content for write
+        const raw = asObj(update.rawInput);
+        if (
+          path &&
+          raw &&
+          typeof raw.content === "string" &&
+          (name === "write" || String(update.kind) === "edit")
+        ) {
+          const already = diffsFromContent(update.content, this.cwd).some(
+            (d) => d.path === path
+          );
+          if (!already) {
+            events.push({
+              type: "file_change",
+              timestamp: t,
+              id: nanoid(10),
+              parentId: nodeId,
+              title: `File: ${path}`,
+              content: `Wrote ${path}`,
+              path,
+              oldContent: "",
+              newContent: String(raw.content),
+              diffStatus: "added",
+              status: "success",
+            });
+          }
+        }
+        break;
+      }
+
+      case "turn_completed":
+      case "task_completed": {
+        this.flushOpenText(events, t, true);
+        const summary =
+          textFromContent(update.content) ||
+          (kind === "task_completed" ? "Task completed" : "Turn completed");
+        events.push({
+          type: "system",
+          timestamp: t,
+          id: nanoid(10),
+          title: kind === "task_completed" ? "Task complete" : "Turn complete",
+          content: summary,
+          status: "success",
+        });
+        this.resetTurn();
+        break;
+      }
+
+      case "task_backgrounded": {
+        events.push({
+          type: "system",
+          timestamp: t,
+          id: nanoid(10),
+          title: "Backgrounded",
+          content: textFromContent(update.content) || "Task moved to background",
+          status: "success",
+        });
+        break;
+      }
+
+      default: {
+        if (kind) {
+          events.push({
+            type: "system",
+            timestamp: t,
+            id: nanoid(10),
+            title: humanizeSessionUpdate(kind),
+            content: textFromContent(update.content) || kind,
+            status: "success",
+            meta: { sessionUpdate: kind },
+          });
+        }
+      }
+    }
+
+    const logLine =
+      events.length > 0
+        ? formatLogFromEvent(events[events.length - 1])
+        : undefined;
+    return { events, logLine };
+  }
+
+  private ingestGrokEvent(obj: Json, timestamp: number): IngestResult {
+    const type = String(obj.type);
+    const t = tsOf(obj, timestamp);
+    if (type === "turn_started") {
+      this.resetTurn();
+      return {
+        events: [
+          {
+            type: "system",
+            timestamp: t,
+            id: nanoid(10),
+            title: "Turn started",
+            content: `Model: ${obj.model_id ?? "—"} · session ${String(obj.session_id ?? "").slice(0, 8)}`,
+            status: "running",
+          },
+        ],
+        logLine: `Turn started (${obj.model_id ?? "model"})`,
+      };
+    }
+    if (type === "phase_changed") {
+      return {
+        events: [
+          {
+            type: "system",
+            timestamp: t,
+            id: nanoid(10),
+            title: "Phase",
+            content: humanizeSessionUpdate(String(obj.phase ?? "")),
+            status: "running",
+          },
+        ],
+        logLine: `Phase: ${obj.phase}`,
+      };
+    }
+    if (type === "loop_started") {
+      return { events: [], logLine: `Loop ${obj.loop_index}` };
+    }
+    return {
+      events: [
+        {
+          type: "system",
+          timestamp: t,
+          id: nanoid(10),
+          title: humanizeSessionUpdate(type),
+          content: summarizeUnknownJson(obj),
+          status: "success",
+        },
+      ],
+      logLine: type,
+    };
+  }
+
+  private flushOpenText(
+    events: StreamEvent[],
+    t: number,
+    finalize = false
+  ) {
+    if (this.thoughtId && this.thoughtText) {
+      events.push({
+        type: "thinking",
+        timestamp: t,
+        id: this.thoughtId,
+        title: "Thinking",
+        content: this.thoughtText,
+        summary: this.thoughtText.slice(0, 140),
+        status: finalize ? "success" : "success",
+      });
+      this.thoughtId = null;
+      this.thoughtText = "";
+    }
+    if (this.messageId && this.messageText) {
+      events.push({
+        type: "message",
+        timestamp: t,
+        id: this.messageId,
+        title: "Grok",
+        content: this.messageText,
+        summary: this.messageText.slice(0, 140),
+        status: "success",
+      });
+      this.messageId = null;
+      this.messageText = "";
+    }
+  }
+}
+
+function mergeChunk(prev: string, chunk: string): string {
+  // Streamed tokens sometimes include leading space; avoid double spaces at join
+  if (!prev) return chunk;
+  if (chunk.startsWith(" ") || chunk.startsWith("\n") || prev.endsWith("\n")) {
+    return prev + chunk;
+  }
+  // Overlapping prefix (rare)
+  if (chunk.startsWith(prev.slice(-20))) return prev + chunk.slice(20);
+  return prev + chunk;
+}
+
+function humanizeSessionUpdate(s: string): string {
+  return s
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim() || "Update";
+}
+
+function summarizeUnknownJson(obj: Json): string {
+  const keys = Object.keys(obj).slice(0, 8).join(", ");
+  if (typeof obj.message === "string") return obj.message;
+  if (typeof obj.error === "string") return obj.error;
+  return keys ? `{ ${keys} }` : "{}";
+}
+
+export function formatLogFromEvent(ev: StreamEvent): string {
+  const title = ev.title || ev.type;
+  const body = (ev.content || "").replace(/\s+/g, " ").slice(0, 200);
+  return body ? `${title}: ${body}` : title;
+}
+
+/**
+ * Apply events to store with upsert semantics for same id (chunk coalescing).
+ */
+export function applyEventsWithUpsert(
+  applyStreamEvent: (sessionId: string, event: StreamEvent) => void,
+  sessionId: string,
+  events: StreamEvent[],
+  existingNodes: Record<string, { id: string }>
+) {
+  for (const ev of events) {
+    // Always apply — store should replace node with same id when present
+    applyStreamEvent(sessionId, ev);
+  }
+  void existingNodes;
+}

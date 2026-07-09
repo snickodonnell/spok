@@ -81,6 +81,7 @@ function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
     running: "bg-phosphor-green/20 text-phosphor-green border-phosphor-green/40",
     starting: "bg-phosphor-amber/20 text-phosphor-amber border-phosphor-amber/40",
+    ready: "bg-phosphor-cyan/15 text-phosphor-cyan border-phosphor-cyan/30",
     completed: "bg-phosphor-cyan/15 text-phosphor-cyan border-phosphor-cyan/30",
     error: "bg-red-500/15 text-red-400 border-red-500/40",
     stopped: "bg-white/5 text-white/50 border-white/15",

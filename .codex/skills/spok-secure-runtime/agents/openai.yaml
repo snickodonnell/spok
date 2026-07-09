@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spok Secure Runtime"
+  short_description: "Harden process, filesystem, and git execution"
+  default_prompt: "Use -secure-runtime to harden Spok's local execution boundary."

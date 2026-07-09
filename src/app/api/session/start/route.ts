@@ -1,4 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import {
+  spawn,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptionsWithoutStdio,
+} from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 
@@ -20,6 +24,36 @@ function ndjson(obj: unknown): string {
   return JSON.stringify(obj) + "\n";
 }
 
+/** Quote for display / Windows cmd if we ever need a shell fallback */
+function quoteArg(arg: string): string {
+  if (arg.length === 0) return '""';
+  // Safe unquoted token
+  if (!/[\s"&<>|^%!()]/.test(arg)) return arg;
+  // Windows cmd double-quote escaping: " -> ""
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function formatCommandLine(command: string, args: string[]): string {
+  return [command, ...args.map(quoteArg)].join(" ");
+}
+
+/**
+ * Spawn without a shell so multi-word argv (e.g. -p "Audit this repo…")
+ * is preserved. shell:true on Windows re-tokenizes and breaks prompts.
+ */
+function spawnCli(
+  command: string,
+  args: string[],
+  options: SpawnOptionsWithoutStdio
+): ChildProcessWithoutNullStreams {
+  // shell: false — CreateProcess / execve receive real argv array
+  return spawn(command, args, {
+    ...options,
+    shell: false,
+    windowsHide: true,
+  }) as ChildProcessWithoutNullStreams;
+}
+
 export async function POST(req: Request) {
   let body: StartBody;
   try {
@@ -30,7 +64,10 @@ export async function POST(req: Request) {
 
   const sessionId = body.sessionId || crypto.randomUUID();
   const command = body.command || process.env.SPOK_GROK_CMD || "grok";
-  const args = body.args ?? [];
+  // Coerce every arg to string; drop null/undefined; never re-split
+  const args = (body.args ?? [])
+    .filter((a): a is string => a != null && String(a).length >= 0)
+    .map((a) => String(a));
   const cwd = body.cwd || process.cwd();
 
   if (body.cwd && !existsSync(body.cwd)) {
@@ -43,6 +80,7 @@ export async function POST(req: Request) {
   const encoder = new TextEncoder();
   let child: ChildProcessWithoutNullStreams | null = null;
   let closed = false;
+  const cmdline = formatCommandLine(command, args);
 
   const stream = new ReadableStream({
     start(controller) {
@@ -61,13 +99,13 @@ export async function POST(req: Request) {
           type: "system",
           timestamp: Date.now(),
           title: "Harness",
-          content: `Spawning: ${command} ${args.join(" ")} (cwd=${cwd})`,
+          content: `Spawning: ${cmdline}\ncwd=${cwd}\nargv=${JSON.stringify([command, ...args])}`,
           status: "running",
         },
       });
 
       try {
-        child = spawn(command, args, {
+        child = spawnCli(command, args, {
           cwd,
           env: {
             ...process.env,
@@ -76,8 +114,6 @@ export async function POST(req: Request) {
             NO_COLOR: "1",
             SPOK_SESSION_ID: sessionId,
           },
-          shell: process.platform === "win32",
-          windowsHide: true,
         });
       } catch (e) {
         push({
@@ -110,6 +146,74 @@ export async function POST(req: Request) {
       });
 
       child.on("error", (err) => {
+        // On Windows, bare "grok" without shell may fail if only a .cmd shim exists.
+        // Retry once via cmd.exe /c with properly quoted arguments.
+        if (
+          process.platform === "win32" &&
+          !child?.pid &&
+          (err as NodeJS.ErrnoException).code === "ENOENT"
+        ) {
+          try {
+            const quoted = formatCommandLine(command, args);
+            child = spawn("cmd.exe", ["/d", "/s", "/c", quoted], {
+              cwd,
+              env: {
+                ...process.env,
+                ...body.env,
+                FORCE_COLOR: "0",
+                NO_COLOR: "1",
+                SPOK_SESSION_ID: sessionId,
+              },
+              shell: false,
+              windowsHide: true,
+            }) as ChildProcessWithoutNullStreams;
+            processes.set(sessionId, child);
+            child.stdout.setEncoding("utf8");
+            child.stderr.setEncoding("utf8");
+            child.stdout.on("data", (chunk: string) => {
+              push({ type: "stdout", data: chunk, sessionId });
+            });
+            child.stderr.on("data", (chunk: string) => {
+              push({ type: "stderr", data: chunk, sessionId });
+            });
+            child.on("close", onClose);
+            child.on("error", (err2) => {
+              push({
+                type: "event",
+                event: {
+                  type: "error",
+                  timestamp: Date.now(),
+                  title: "Process error",
+                  content: err2.message,
+                  status: "error",
+                },
+              });
+            });
+            push({
+              type: "event",
+              event: {
+                type: "system",
+                timestamp: Date.now(),
+                title: "Harness",
+                content: `Retried via cmd.exe /c with quoted argv`,
+                status: "running",
+              },
+            });
+            return;
+          } catch (e2) {
+            push({
+              type: "event",
+              event: {
+                type: "error",
+                timestamp: Date.now(),
+                title: "Spawn retry failed",
+                content: e2 instanceof Error ? e2.message : String(e2),
+                status: "error",
+              },
+            });
+          }
+        }
+
         push({
           type: "event",
           event: {
@@ -126,7 +230,7 @@ export async function POST(req: Request) {
         });
       });
 
-      child.on("close", (code, signal) => {
+      function onClose(code: number | null, signal: NodeJS.Signals | null) {
         processes.delete(sessionId);
         push({
           type: "exit",
@@ -142,7 +246,9 @@ export async function POST(req: Request) {
             /* already closed */
           }
         }
-      });
+      }
+
+      child.on("close", onClose);
     },
     cancel() {
       closed = true;
@@ -179,5 +285,4 @@ export async function DELETE(req: Request) {
   return Response.json({ ok: true });
 }
 
-// Silence unused import warning in some bundlers
 void path;

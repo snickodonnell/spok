@@ -210,11 +210,17 @@ export function streamEventToNodeType(type: StreamEventType): TraceNodeType {
 
 /** Try to extract file paths mentioned in free text */
 export function extractPaths(text: string): string[] {
-  const re = /(?:^|[\s`"'(])((?:src|app|lib|components|pages|hooks|api|public|tests?|scripts?)\/[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/gm;
   const found = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    found.add(m[1]);
+  const patterns = [
+    /(?:^|[\s`"'(])((?:src|app|lib|components|pages|hooks|api|public|tests?|scripts?)\/[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/gm,
+    /(?:^|[\s`"'(])([a-zA-Z0-9_.-]+\.(?:md|ts|tsx|js|jsx|json|py|rs|go|css|html|yml|yaml|toml))\b/gm,
+    /`([^`]+?\.[a-zA-Z0-9]+)`/g,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      found.add(m[1].replace(/\\/g, "/"));
+    }
   }
   return [...found];
 }

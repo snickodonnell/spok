@@ -138,7 +138,7 @@ export function CommandPalette() {
           >
             <Item
               icon={Play}
-              label="Launch Grok Build session"
+              label="Open repo workspace"
               onSelect={() => {
                 setOpen(false);
                 setLaunchOpen(true);
@@ -159,6 +159,7 @@ export function CommandPalette() {
             heading="Views"
             className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-phosphor-green/40"
           >
+            <Item icon={LayoutGrid} label="Workspace (prompt + live trace)" onSelect={() => { setViewMode("workspace"); setOpen(false); }} />
             <Item icon={LayoutGrid} label="Unified view" onSelect={() => { setViewMode("unified"); setOpen(false); }} />
             <Item icon={Brain} label="Trace view" onSelect={() => { setViewMode("trace"); setOpen(false); }} />
             <Item icon={FileCode2} label="Diff view" onSelect={() => { setViewMode("diff"); setOpen(false); }} />

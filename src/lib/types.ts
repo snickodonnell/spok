@@ -2,6 +2,7 @@
 
 export type SessionStatus =
   | "idle"
+  | "ready"
   | "starting"
   | "running"
   | "paused"
@@ -128,6 +129,14 @@ export interface SessionConfig {
   playbackSpeed: number;
 }
 
+export interface PromptTurn {
+  id: string;
+  text: string;
+  label: string;
+  timestamp: number;
+  status: "pending" | "running" | "success" | "error" | "cancelled";
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -147,6 +156,10 @@ export interface Session {
   rawLog: string[];
   error?: string;
   source: "live" | "import" | "sample" | "paste" | "playback";
+  /** Prompt / slash history for workspace composer */
+  promptHistory: PromptTurn[];
+  /** Sticky Grok CLI flags (serialized plain object) */
+  grokFlags?: Record<string, unknown>;
 }
 
 export interface SampleSessionMeta {
@@ -187,6 +200,7 @@ export interface StreamEvent {
   parentId?: string | null;
   title?: string;
   content?: string;
+  summary?: string;
   toolName?: string;
   status?: TraceNode["status"];
   path?: string;
@@ -207,7 +221,7 @@ export interface ExportPayload {
   session: Session;
 }
 
-export type ViewMode = "unified" | "trace" | "diff" | "log" | "overview";
+export type ViewMode = "workspace" | "unified" | "trace" | "diff" | "log" | "overview";
 
 export type TraceFilter = {
   search: string;

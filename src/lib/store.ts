@@ -40,7 +40,7 @@ function emptyMetrics(): SessionMetrics {
 
 function createSession(partial?: Partial<Session>): Session {
   const now = Date.now();
-  return {
+  const base: Session = {
     id: nanoid(12),
     name: partial?.name ?? `Session ${new Date(now).toLocaleString()}`,
     status: "idle",
@@ -57,7 +57,13 @@ function createSession(partial?: Partial<Session>): Session {
     timelineCursor: null,
     rawLog: [],
     source: partial?.source ?? "live",
+    promptHistory: [],
+  };
+  return {
+    ...base,
     ...partial,
+    config: { ...defaultConfig, ...partial?.config },
+    promptHistory: partial?.promptHistory ?? [],
   };
 }
 
@@ -66,8 +72,11 @@ function recomputeMetrics(session: Session): SessionMetrics {
   const files = Object.values(session.files);
   const startedAt = session.metrics.startedAt ?? session.createdAt;
   const endedAt =
-    session.status === "completed" || session.status === "error" || session.status === "stopped"
-      ? session.metrics.endedAt ?? session.updatedAt
+    session.status === "completed" ||
+    session.status === "error" ||
+    session.status === "stopped" ||
+    session.status === "ready"
+      ? session.metrics.endedAt
       : null;
   return {
     startedAt,
@@ -87,6 +96,39 @@ function attachChild(nodes: Record<string, TraceNode>, parentId: string | null, 
   if (!parentId || !nodes[parentId]) return;
   if (!nodes[parentId].children.includes(childId)) {
     nodes[parentId].children = [...nodes[parentId].children, childId];
+  }
+}
+
+function normalizeRepoPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\.?\//, "");
+}
+
+/** Upsert a trace node; preserves children when updating an existing id */
+function upsertNode(
+  nodes: Record<string, TraceNode>,
+  rootTraceIds: string[],
+  node: TraceNode
+) {
+  const existing = nodes[node.id];
+  if (existing) {
+    nodes[node.id] = {
+      ...existing,
+      ...node,
+      children: existing.children,
+      // Keep parent unless explicitly re-parented
+      parentId: node.parentId ?? existing.parentId,
+      depth: node.parentId
+        ? node.depth
+        : existing.depth,
+      links: node.links.length ? node.links : existing.links,
+    };
+    return;
+  }
+  nodes[node.id] = node;
+  if (!node.parentId) {
+    if (!rootTraceIds.includes(node.id)) rootTraceIds.push(node.id);
+  } else {
+    attachChild(nodes, node.parentId, node.id);
   }
 }
 
@@ -138,12 +180,20 @@ interface SpokState {
   importSession: (session: Session) => string;
   exportActiveSession: () => Session | null;
   upsertFileDiff: (sessionId: string, file: FileDiff, relatedTraceId?: string) => void;
+  pushPromptTurn: (sessionId: string, turn: import("./types").PromptTurn) => void;
+  updatePromptTurn: (
+    sessionId: string,
+    turnId: string,
+    patch: Partial<import("./types").PromptTurn>
+  ) => void;
+  clearSessionTraces: (sessionId: string) => void;
+  setGrokFlags: (sessionId: string, flags: Record<string, unknown>) => void;
 }
 
 export const useSpokStore = create<SpokState>((set, get) => ({
   sessions: {},
   activeSessionId: null,
-  viewMode: "unified",
+  viewMode: "workspace",
   sidebarOpen: true,
   commandPaletteOpen: false,
   importOpen: false,
@@ -259,9 +309,12 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       // File / diff events
       if (event.type === "file_change" || event.type === "diff") {
         if (event.path) {
-          const existing = Object.values(files).find((f) => f.path === event.path);
+          const path = normalizeRepoPath(event.path);
+          const existing = Object.values(files).find(
+            (f) => normalizeRepoPath(f.path) === path || f.path.endsWith(path)
+          );
           const fd = createFileDiff({
-            path: event.path,
+            path: existing?.path ?? path,
             oldPath: event.oldPath,
             oldContent: event.oldContent ?? existing?.oldContent ?? "",
             newContent: event.newContent ?? existing?.newContent ?? "",
@@ -273,45 +326,41 @@ export const useSpokStore = create<SpokState>((set, get) => ({
             fd.id = existing.id;
             fd.relatedTraceIds = [...existing.relatedTraceIds];
           }
-          if (event.id) {
-            if (!fd.relatedTraceIds.includes(event.id)) {
-              fd.relatedTraceIds.push(event.id);
-            }
+          if (event.id && !fd.relatedTraceIds.includes(event.id)) {
+            fd.relatedTraceIds.push(event.id);
           }
           files[fd.id] = fd;
           selectedFileId = fd.id;
 
-          // Also create a trace node for the change
           const nodeId = event.id || nanoid(10);
+          const prev = nodes[nodeId];
           const parentId =
             event.parentId ??
-            (session.selectedTraceId && nodes[session.selectedTraceId]
-              ? session.selectedTraceId
-              : rootTraceIds[rootTraceIds.length - 1] ?? null);
+            prev?.parentId ??
+            null;
           const depth = parentId && nodes[parentId] ? nodes[parentId].depth + 1 : 0;
-          const node: TraceNode = {
+          upsertNode(nodes, rootTraceIds, {
             id: nodeId,
             parentId,
             type: "file_change",
-            title: event.title || `File: ${event.path}`,
-            content: event.content || `${event.diffStatus ?? "modified"} ${event.path}`,
+            title: event.title || `File: ${path}`,
+            content:
+              event.content || `${event.diffStatus ?? "modified"} ${path}`,
+            summary: path,
             timestamp: event.timestamp,
             status: "success",
-            children: [],
+            children: prev?.children ?? [],
             links: [
               {
                 kind: "file",
                 targetId: fd.id,
-                path: event.path,
-                label: event.path,
+                path,
+                label: path,
               },
             ],
             depth,
             meta: event.meta,
-          };
-          nodes[nodeId] = node;
-          if (!parentId) rootTraceIds.push(nodeId);
-          else attachChild(nodes, parentId, nodeId);
+          });
           expanded.add(nodeId);
           if (parentId) expanded.add(parentId);
 
@@ -324,7 +373,10 @@ export const useSpokStore = create<SpokState>((set, get) => ({
             rootTraceIds,
             selectedFileId,
             selectedTraceId: nodeId,
-            status: session.status === "idle" ? "running" : session.status,
+            status:
+              session.status === "idle" || session.status === "ready"
+                ? "running"
+                : session.status,
             updatedAt: Date.now(),
             metrics: session.metrics,
           };
@@ -337,30 +389,35 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         }
       }
 
-      // Generic trace node
+      // Generic trace node (upsert by id for chunk coalescing)
       const nodeId = event.id || nanoid(10);
-      const parentId =
-        event.parentId ??
-        (session.selectedTraceId && nodes[session.selectedTraceId]
-          ? null // don't auto-nest everything under selected
-          : null);
+      const existingNode = nodes[nodeId];
 
-      // Prefer nesting tool results under last tool call
-      let resolvedParent = parentId;
-      if (event.type === "tool_result") {
-        const toolCalls = Object.values(nodes)
-          .filter((n) => n.type === "tool_call")
-          .sort((a, b) => b.timestamp - a.timestamp);
-        if (toolCalls[0]) resolvedParent = toolCalls[0].id;
+      let resolvedParent = event.parentId ?? existingNode?.parentId ?? null;
+      if (event.type === "tool_result" && !resolvedParent) {
+        // Prefer explicit id match via meta.toolCallId
+        const toolCallId = event.meta?.toolCallId as string | undefined;
+        if (toolCallId) {
+          const match = Object.values(nodes).find(
+            (n) => n.meta?.toolCallId === toolCallId || n.id === toolCallId
+          );
+          if (match) resolvedParent = match.id;
+        }
+        if (!resolvedParent) {
+          const toolCalls = Object.values(nodes)
+            .filter((n) => n.type === "tool_call")
+            .sort((a, b) => b.timestamp - a.timestamp);
+          if (toolCalls[0]) resolvedParent = toolCalls[0].id;
+        }
       }
       if (
         !resolvedParent &&
+        !existingNode &&
         (event.type === "thinking" ||
           event.type === "tool_call" ||
           event.type === "plan" ||
           event.type === "subagent_start")
       ) {
-        // attach under latest root-ish running node if any
         const lastRoot = rootTraceIds[rootTraceIds.length - 1];
         if (lastRoot && nodes[lastRoot]?.type === "goal") {
           resolvedParent = lastRoot;
@@ -368,13 +425,26 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       }
 
       const depth =
-        resolvedParent && nodes[resolvedParent] ? nodes[resolvedParent].depth + 1 : 0;
+        resolvedParent && nodes[resolvedParent]
+          ? nodes[resolvedParent].depth + 1
+          : existingNode?.depth ?? 0;
 
-      const links = [...(event.links ?? [])];
+      const links = [...(event.links ?? existingNode?.links ?? [])];
       const paths = extractPaths(event.content || "");
-      for (const p of paths) {
-        const f = Object.values(files).find((x) => x.path === p || x.path.endsWith(p));
-        if (f) {
+      // also match bare filenames like plan.md
+      const bareFile = event.path
+        ? [event.path]
+        : (event.content || "").match(
+            /(?:^|[\s`"'])([a-zA-Z0-9_.-]+\.(?:md|ts|tsx|js|json|py|rs|go|css|html))\b/g
+          ) ?? [];
+      for (const p of [...paths, ...bareFile.map((x) => x.trim())]) {
+        const clean = p.replace(/^[\s`"']+/, "");
+        const f = Object.values(files).find(
+          (x) =>
+            normalizeRepoPath(x.path) === normalizeRepoPath(clean) ||
+            x.path.endsWith(clean)
+        );
+        if (f && !links.some((l) => l.targetId === f.id)) {
           links.push({ kind: "file", targetId: f.id, path: f.path, label: f.path });
           if (!f.relatedTraceIds.includes(nodeId)) {
             files[f.id] = {
@@ -385,25 +455,45 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         }
       }
 
-      const node: TraceNode = {
-        id: nodeId,
-        parentId: resolvedParent,
-        type: streamEventToNodeType(event.type),
-        title: event.title || event.type,
-        content: event.content || "",
-        summary: event.content ? event.content.slice(0, 120) : undefined,
-        timestamp: event.timestamp,
-        durationMs: event.durationMs,
-        status: event.status ?? (event.type === "error" ? "error" : "success"),
-        children: [],
-        links,
-        depth,
-        toolName: event.toolName,
-        subagentId: event.subagentId,
-        meta: event.meta,
-      };
+      // tool_call update with same id as tool_result: update status on same node
+      if (event.type === "tool_result" && existingNode?.type === "tool_call") {
+        upsertNode(nodes, rootTraceIds, {
+          ...existingNode,
+          type: "tool_call",
+          title: event.title || existingNode.title,
+          content: event.content || existingNode.content,
+          summary: event.content
+            ? event.content.slice(0, 120)
+            : existingNode.summary,
+          timestamp: existingNode.timestamp,
+          durationMs: event.durationMs,
+          status: event.status ?? "success",
+          children: existingNode.children,
+          links,
+          depth: existingNode.depth,
+          toolName: event.toolName || existingNode.toolName,
+          meta: { ...existingNode.meta, ...event.meta },
+        });
+      } else {
+        upsertNode(nodes, rootTraceIds, {
+          id: nodeId,
+          parentId: resolvedParent,
+          type: streamEventToNodeType(event.type),
+          title: event.title || event.type,
+          content: event.content || "",
+          summary: event.summary || (event.content ? event.content.slice(0, 120) : undefined),
+          timestamp: existingNode?.timestamp ?? event.timestamp,
+          durationMs: event.durationMs,
+          status: event.status ?? (event.type === "error" ? "error" : "success"),
+          children: existingNode?.children ?? [],
+          links,
+          depth,
+          toolName: event.toolName,
+          subagentId: event.subagentId,
+          meta: event.meta,
+        });
+      }
 
-      // Mark parent tool_call success when result arrives
       if (event.type === "tool_result" && resolvedParent && nodes[resolvedParent]) {
         nodes[resolvedParent] = {
           ...nodes[resolvedParent],
@@ -412,9 +502,6 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         };
       }
 
-      nodes[nodeId] = node;
-      if (!resolvedParent) rootTraceIds.push(nodeId);
-      else attachChild(nodes, resolvedParent, nodeId);
       expanded.add(nodeId);
       if (resolvedParent) expanded.add(resolvedParent);
 
@@ -428,7 +515,9 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         selectedTraceId: nodeId,
         selectedFileId,
         status:
-          session.status === "idle" || session.status === "starting"
+          session.status === "idle" ||
+          session.status === "starting" ||
+          session.status === "ready"
             ? "running"
             : session.status,
         updatedAt: Date.now(),
@@ -565,7 +654,11 @@ export const useSpokStore = create<SpokState>((set, get) => ({
 
   importSession: (session) => {
     const id = session.id || nanoid(12);
-    const withId = { ...session, id };
+    const withId: Session = {
+      ...session,
+      id,
+      promptHistory: session.promptHistory ?? [],
+    };
     set((s) => ({
       sessions: { ...s.sessions, [id]: withId },
       activeSessionId: id,
@@ -599,6 +692,84 @@ export const useSpokStore = create<SpokState>((set, get) => ({
             selectedFileId: id,
             updatedAt: Date.now(),
             metrics: recomputeMetrics({ ...session, files }),
+          },
+        },
+      };
+    }),
+
+  pushPromptTurn: (sessionId, turn) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            promptHistory: [...(session.promptHistory ?? []), turn],
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    }),
+
+  updatePromptTurn: (sessionId, turnId, patch) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            promptHistory: (session.promptHistory ?? []).map((t) =>
+              t.id === turnId ? { ...t, ...patch } : t
+            ),
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    }),
+
+  clearSessionTraces: (sessionId) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            rootTraceIds: [],
+            nodes: {},
+            files: {},
+            fileTree: [],
+            selectedTraceId: null,
+            selectedFileId: null,
+            timelineCursor: null,
+            rawLog: [],
+            promptHistory: [],
+            metrics: emptyMetrics(),
+            status: "ready",
+            error: undefined,
+            updatedAt: Date.now(),
+          },
+        },
+        expandedNodeIds: new Set(),
+      };
+    }),
+
+  setGrokFlags: (sessionId, flags) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            grokFlags: { ...(session.grokFlags ?? {}), ...flags },
+            updatedAt: Date.now(),
           },
         },
       };

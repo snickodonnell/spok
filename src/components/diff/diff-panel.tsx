@@ -1,16 +1,16 @@
 "use client";
 
-import { Panel, Group, Separator } from "react-resizable-panels";
 import { useSpokStore } from "@/lib/store";
 import { FileTree } from "./file-tree";
 import { MonacoDiff } from "./monaco-diff";
 import { HunkNav } from "./hunk-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Download, Copy, Check } from "lucide-react";
+import { Download, Copy, Check, RefreshCw } from "lucide-react";
 import { unifiedDiffText } from "@/lib/diff-utils";
 import { useState } from "react";
 import { toast } from "sonner";
+import { refreshGitDiff } from "@/lib/harness";
 
 export function DiffPanel() {
   const session = useSpokStore((s) =>
@@ -20,6 +20,7 @@ export function DiffPanel() {
     ? session.files[session.selectedFileId]
     : null;
   const [copied, setCopied] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const copyDiff = async () => {
     if (!file) return;
@@ -40,14 +41,48 @@ export function DiffPanel() {
     URL.revokeObjectURL(url);
   };
 
+  const onRefresh = async () => {
+    if (!session?.config.cwd) return;
+    setRefreshing(true);
+    try {
+      await refreshGitDiff(session.id, session.config.cwd);
+      toast.success("Diff refreshed from git");
+    } catch {
+      toast.error("Could not refresh git diff");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const fileCount = session ? Object.keys(session.files).length : 0;
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-phosphor-green/15 px-3 py-2">
-        <h2 className="font-mono text-xs uppercase tracking-[0.2em] text-phosphor-green crt-glow">
-          Repo Diff
-        </h2>
+      <div className="flex items-center justify-between gap-2 border-b border-phosphor-green/15 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <h2 className="font-mono text-xs uppercase tracking-[0.2em] text-phosphor-green crt-glow">
+            Repo Diff
+          </h2>
+          <span className="font-mono text-[10px] text-phosphor-green/40">
+            {fileCount} file{fileCount === 1 ? "" : "s"}
+          </span>
+          {session?.config.cwd && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => void onRefresh()}
+              title="Refresh from git working tree"
+              disabled={refreshing}
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`}
+              />
+            </Button>
+          )}
+        </div>
         {file && (
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <Badge
               variant={
                 file.status === "added"
@@ -82,15 +117,16 @@ export function DiffPanel() {
           </div>
         )}
       </div>
-      <Group orientation="horizontal" className="flex-1">
-        <Panel defaultSize={26} minSize={16} maxSize={45}>
+
+      {/* Simple flex split — no nested resizable groups (avoids layout blowouts) */}
+      <div className="flex min-h-0 flex-1">
+        <div className="w-56 shrink-0 overflow-auto border-r border-phosphor-green/15">
           <FileTree />
-        </Panel>
-        <Separator className="w-1 bg-phosphor-green/15 hover:bg-phosphor-green/40 transition-colors" />
-        <Panel defaultSize={74} minSize={40}>
-          <MonacoDiff file={file} />
-        </Panel>
-      </Group>
+        </div>
+        <div className="min-w-0 flex-1">
+          <MonacoDiff file={file} className="h-full" />
+        </div>
+      </div>
     </div>
   );
 }

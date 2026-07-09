@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spok Harness Architecture"
+  short_description: "Plan and implement Spok harness roadmap work"
+  default_prompt: "Use -harness-architecture to plan the next Spok harness milestone."

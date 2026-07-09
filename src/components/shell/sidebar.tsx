@@ -11,6 +11,7 @@ import {
   Command,
   Trash2,
   Circle,
+  PanelsTopLeft,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import type { ViewMode } from "@/lib/types";
@@ -19,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const VIEWS: { mode: ViewMode; icon: typeof Brain; label: string }[] = [
+  { mode: "workspace", icon: PanelsTopLeft, label: "Workspace" },
   { mode: "unified", icon: LayoutGrid, label: "Unified" },
   { mode: "trace", icon: Brain, label: "Trace" },
   { mode: "diff", icon: FileCode2, label: "Diff" },
@@ -68,7 +70,7 @@ export function Sidebar() {
           onClick={() => setLaunchOpen(true)}
         >
           <Play className="h-3.5 w-3.5" />
-          Launch
+          Open repo
         </Button>
         <Button
           variant="outline"

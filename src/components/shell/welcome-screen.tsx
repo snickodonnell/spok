@@ -53,9 +53,10 @@ export function WelcomeScreen() {
             SPOK
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-phosphor-green/55">
-            Live harness & visualizer for Grok Build. Watch thinking traces and
-            repository diffs stream in real time — phosphor-green, CRT-flavored
-            visibility into everything the agent is thinking and changing.
+            Pick a repo, then work in a full workspace: prompts and{" "}
+            <code className="text-phosphor-cyan">/</code> commands at the bottom,
+            live thinking permanently on the side, diffs and metrics streaming as
+            Grok runs.
           </p>
         </div>
 
@@ -80,7 +81,7 @@ export function WelcomeScreen() {
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setLaunchOpen(true)}>
             <Play className="h-4 w-4" />
-            Launch Grok Build
+            Open a repo
           </Button>
           <Button variant="secondary" onClick={() => setImportOpen(true)}>
             <Upload className="h-4 w-4" />
@@ -127,11 +128,11 @@ export function WelcomeScreen() {
         </div>
 
         <p className="text-[11px] text-phosphor-green/30">
-          Tip: press <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl+K</kbd> for
-          the command palette ·{" "}
-          <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl+1</kbd> Unified ·{" "}
-          <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl+2</kbd> Trace ·{" "}
-          <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl+3</kbd> Diff
+          Tip:{" "}
+          <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl+K</kbd> palette ·{" "}
+          <kbd className="rounded border border-phosphor-green/20 px-1">Ctrl+1</kbd> Workspace ·
+          type <kbd className="rounded border border-phosphor-green/20 px-1">/</kbd> in the prompt
+          for Grok commands
         </p>
       </div>
     </div>
