@@ -233,6 +233,28 @@ export function unifiedDiffText(file: FileDiff): string {
   return lines.join("\n");
 }
 
+/** Unified patch for a single hunk (git apply --cached / -R). */
+export function hunkToUnifiedPatch(
+  file: FileDiff,
+  hunkIndex: number
+): string | null {
+  const hunk = file.hunks[hunkIndex];
+  if (!hunk) return null;
+  const a = file.oldPath ?? file.path;
+  const lines = [
+    `diff --git a/${a} b/${file.path}`,
+    `--- a/${a}`,
+    `+++ b/${file.path}`,
+    hunk.header,
+  ];
+  for (const line of hunk.lines) {
+    const prefix =
+      line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+    lines.push(prefix + line.content);
+  }
+  return lines.join("\n") + "\n";
+}
+
 export function parseUnifiedDiff(diffText: string): FileDiff[] {
   const files: FileDiff[] = [];
   const blocks = diffText.split(/^diff --git /m).filter(Boolean);

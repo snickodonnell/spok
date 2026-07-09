@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { CAPABILITY_HEADER } from "./local-api-shared";
+import { resolveCommandProfile } from "./command-profiles";
 
 export { CAPABILITY_HEADER };
 
@@ -21,6 +22,7 @@ export type LocalPolicyCode =
   | "untrusted_cwd"
   | "command_not_allowed"
   | "path_denied"
+  | "approval_required"
   | "forbidden";
 
 export type LocalPolicyDenial = {
@@ -201,11 +203,35 @@ export function denyFromAuthorize(result: Extract<AuthorizeResult, { ok: false }
   return policyDenialResponse(result.status, result.body);
 }
 
-/** Default allowlist: only the Grok CLI binary (basename match). */
+/**
+ * Coarse allowlist used by tests and simple gates.
+ * Full enforcement is `evaluatePolicy` (profiles, modes, grants, deny rules).
+ * Shell interpreters are always denied at this layer.
+ */
 export function isCommandAllowed(command: string): boolean {
+  if (matchShell(command)) return false;
   if (process.env.SPOK_ALLOW_CUSTOM_COMMANDS === "1") return true;
   const allowed = (process.env.SPOK_GROK_CMD || "grok").trim();
   const base = command.replace(/\\/g, "/").split("/").pop() || command;
   const allowedBase = allowed.replace(/\\/g, "/").split("/").pop() || allowed;
-  return base.toLowerCase() === allowedBase.toLowerCase();
+  if (base.toLowerCase() === allowedBase.toLowerCase()) return true;
+  // Known non-custom profiles pass the coarse gate (may still need approval).
+  return resolveCommandProfile(command).id !== "custom";
+}
+
+function matchShell(command: string): boolean {
+  const base = (
+    command.replace(/\\/g, "/").split("/").pop() || ""
+  ).toLowerCase();
+  return [
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+    "bash",
+    "sh",
+    "zsh",
+  ].includes(base);
 }

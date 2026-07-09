@@ -80,10 +80,36 @@ export function MonacoDiff({
     );
   }
 
+  if (file.isSecret) {
+    return (
+      <div
+        className={cn(
+          "flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-xs text-red-400/90",
+          className
+        )}
+      >
+        <p className="font-mono uppercase tracking-widest text-[10px]">Secret path</p>
+        <p className="max-w-sm text-phosphor-green/45">
+          This path matches Spok&apos;s secret deny list. Content is never loaded into the
+          diff viewer or export payload.
+        </p>
+      </div>
+    );
+  }
+
   if (file.isBinary) {
     return (
-      <div className={cn("flex h-full items-center justify-center text-xs text-phosphor-amber", className)}>
-        Binary file — diff not shown
+      <div
+        className={cn(
+          "flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-xs text-phosphor-amber",
+          className
+        )}
+      >
+        <p className="font-mono uppercase tracking-widest text-[10px]">Binary file</p>
+        <p className="max-w-sm text-phosphor-green/45">
+          Binary or oversized content is not previewed. You can still stage or discard it from
+          the Git panel.
+        </p>
       </div>
     );
   }

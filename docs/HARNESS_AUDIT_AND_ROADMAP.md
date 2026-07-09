@@ -74,7 +74,7 @@ Spok is organized around these surfaces:
 | P1 | The app lacks a durable settings and policy system. | Settings live in localStorage or session state; no project/user/managed scope. | Add layered settings: managed, user, project, local. Include permission rules, command profiles, env profiles, hooks, MCP servers, models, and UI preferences. |
 | P2 | UI style is memorable but not yet accessibility-ready. | CRT effects, scanlines, dense glow, and low-contrast phosphor text dominate the interface. | Keep the retro theme as an option, but add a quiet professional theme, reduced motion, high contrast, and accessible focus/keyboard states. |
 | P2 | No integrated terminal or command output panes beyond raw log. | Codex/Claude-style workflows rely on terminal context, background commands, and visible validation. | Add a terminal panel scoped to workspace/worktree with command history, running process list, and "send output to prompt" affordances. |
-| P2 | No hook, MCP, plugin, skill, or custom-agent management UI. | Current repo has no extension registry or lifecycle hooks. | Implement an extension center with MCP servers, hooks, skills, plugins, and custom agents. Start with read-only discovery, then add install/configure flows. |
+| P2 | No hook, MCP, plugin, skill, or custom-agent management UI. | **Addressed in Phase 4** — Extension Center + discovery APIs. | Live MCP invoke, marketplace install, and hook approval UX remain follow-ups. |
 | P2 | Build/package quality is early. | No CI config, no route tests, no Playwright coverage, no release/update path; Tauri icon list includes `icons/henry.w@example.net`. | Add CI, e2e smoke tests, package verification, crash/error reporting, proper app icons, signing/update plan, and desktop-specific security review. |
 
 ## Immediate Correction Plan
@@ -165,11 +165,11 @@ Spok is organized around these surfaces:
 
 ### Automation And Parallel Work
 
-- Background sessions visible from one screen.
-- Scheduled tasks for recurring prompts and repo checks.
-- Monitors for CI failures, dependency updates, issue changes, telemetry errors, and PR review feedback.
-- Parallel subagent/team workflows with separate traces and merged summaries.
-- Channels/webhooks that can push external events into a session.
+- Background sessions visible from one screen. **Done (Phase 5 Monitor).**
+- Scheduled tasks for recurring prompts and repo checks. **Done (Phase 5 schedules).**
+- Monitors for CI failures, dependency updates, issue changes, telemetry errors, and PR review feedback. *(channel ingest can feed these; specialized monitors later)*
+- Parallel subagent/team workflows with separate traces and merged summaries. **Done (Phase 5 lanes).**
+- Channels/webhooks that can push external events into a session. **Done (Phase 5 channels).**
 
 ### Desktop, Cloud, And Collaboration
 
@@ -269,73 +269,149 @@ Known gaps / follow-ups (not Phase 1 blockers):
 
 Target: 2 weeks
 
+**Status (2026-07-09): Implemented in tree.** Layered settings, permission modes/rules, approval overlay, command profiles, route policy enforcement, audit log, and Tauri CSP/capability hardening are live.
+
 Deliverables:
 
-- Layered settings model: managed, user, project, local.
-- Permission modes and permission rules.
-- Approval overlay for command, file, Git, and MCP actions.
-- Scoped command profiles for `grok`, `git`, package scripts, and tests.
-- Hardened Tauri capabilities and CSP.
+- [x] Layered settings model: managed, user, project, local.
+  - `src/lib/settings/*` + `GET/PUT /api/settings`; disk at `~/.spok/settings.json` and `.spok/settings.json`.
+  - Managed layer from `SPOK_PERMISSION_MODE`, `SPOK_ALLOW_CUSTOM_COMMANDS`, `SPOK_MANAGED_SETTINGS`.
+- [x] Permission modes and permission rules.
+  - Modes: `manual` | `plan` | `acceptEdits` | `auto` | `bypass` via `evaluatePolicy`.
+  - Default deny for shells; allow grok/git; custom requires approval.
+- [x] Approval overlay for command, file, Git, and MCP actions.
+  - Spawn path fully interactive (`approval_required` → overlay → allow once/always/deny).
+  - Grants persist under `~/.spok/approvals.json`; UI revoke in Settings → Grants.
+  - Git/browse evaluated server-side (deny blocks; ask reserved for future file/MCP UX).
+- [x] Scoped command profiles for `grok`, `git`, package scripts, and tests.
+  - `DEFAULT_COMMAND_PROFILES` + auto-profile allowlist in Settings.
+- [x] Hardened Tauri capabilities and CSP.
+  - Removed `shell:allow-spawn` / `shell:allow-execute`; keep `shell:allow-open` only.
+  - Explicit CSP in `tauri.conf.json`; fixed icon list (removed invalid entry).
 
 Acceptance criteria:
 
-- Custom command execution requires an explicit approval path.
-- Deny rules block matching actions before spawn or file read.
-- Approval decisions are recorded in the session audit log.
+- [x] Custom command execution requires an explicit approval path.
+- [x] Deny rules block matching actions before spawn or file read (secret paths + shell deny + plan mode).
+- [x] Approval decisions are recorded in the session audit log (`~/.spok/audit.ndjson` + session system events).
+
+Known gaps / follow-ups (not Phase 2 blockers):
+
+- MCP/hook actions are typed in the policy model but have no runtime callers yet (Phase 4).
+- File write approvals are model-ready; agent file writes still flow through Grok CLI, not a Spok write bridge.
+- Browse restriction to trusted roots is opt-in (default off so the open-repo picker stays usable).
 
 ### Phase 3: Git, Worktrees, And Review
 
 Target: 2-3 weeks
 
+**Status (2026-07-09): Implemented in tree.** Accurate Git status model, stage/unstage/discard (file + hunk), commit/branch/push/PR, Spok-managed worktrees with isolation guards, review comments linked to trace nodes, and confirm+audit for risky ops.
+
 Deliverables:
 
-- Accurate Git status model and large/binary diff handling.
-- Stage/revert by file and hunk.
-- Commit, branch, push, PR creation hooks.
-- Worktree create/list/handoff/cleanup.
-- Review mode with inline comments linked to trace nodes.
+- [x] Accurate Git status model and large/binary diff handling.
+  - `src/lib/git/*` porcelain parser, branch/upstream ahead-behind, binary/secret annotations.
+  - `GET /api/session/git` status snapshot; existing `git-diff` for content (secret/binary skip retained).
+- [x] Stage/revert by file and hunk.
+  - Stage/unstage/discard via closed-set `POST /api/session/git` actions.
+  - Hunk ops via `git apply --cached` / reverse patches from `hunkToUnifiedPatch`.
+  - Diff panel + Git panel affordances; plan mode is read-only for writes.
+- [x] Commit, branch, push, PR creation hooks.
+  - Commit (with amend) and branch create/checkout with confirmation on commit/checkout.
+  - Push / pull (ff-only) with confirmation; PR via `gh pr create` when available.
+- [x] Worktree create/list/handoff/cleanup.
+  - `worktree_add` / `list` / `remove`; registry at `~/.spok/worktrees.json`.
+  - Handoff creates an isolated session (`isolationGuard` + `mainCheckout`).
+- [x] Review mode with inline comments linked to trace nodes.
+  - Session `reviewComments` + Review toggle; comments link optional selected trace.
 
 Acceptance criteria:
 
-- A background worktree task cannot modify the local checkout.
-- Users can inspect, stage, commit, and export changes without leaving Spok.
-- Risky Git actions have confirmation and audit records.
+- [x] A background worktree task cannot modify the local checkout (`isolation_guard` on write ops when `cwd === mainCheckout`).
+- [x] Users can inspect, stage, commit, and export changes without leaving Spok (Git tab + Diff actions).
+- [x] Risky Git actions have confirmation and audit records (`confirm: true` + `~/.spok/audit.ndjson`).
+
+Known gaps / follow-ups (not Phase 3 blockers):
+
+- Hunk stage depends on patch apply fidelity; complex renames/mode-only changes may need git plumbing refinements.
+- PR flow requires local `gh` auth; no native GitHub API token UI yet (Phase 4/6 connectors).
+- Full-file content for tracked diffs still comes from unified diff reconstruction (Phase 1 note); binary/secret paths are annotated not fully previewed.
 
 ### Phase 4: Extensibility Layer
 
 Target: 3 weeks
 
+**Status (2026-07-09): Implemented in tree.** Extension Center UI, skill discovery (project + user + plugins), MCP registry with read-only tools + approval badges, hook lifecycle runner with trust review (including stop → trace events), plugin manifest draft (`spok.plugin/v1`), and custom agent presets are live.
+
 Deliverables:
 
-- Skill discovery under `.agents/skills`.
-- MCP server registry and read-only tool listing.
-- Hook lifecycle runner with trust review.
-- Plugin manifest draft for packaging skills, MCP, hooks, and commands.
-- Custom agent/subagent config model.
+- [x] Skill discovery under `.agents/skills`.
+  - Scans project `.agents/skills/*/SKILL.md` and user `~/.spok/skills`.
+  - Extension Center Skills tab: enable/disable, expand body, **Attach next turn** chips.
+  - Composer never auto-injects all skills; only opt-in compact skill index (paths + descriptions).
+- [x] MCP server registry and read-only tool listing.
+  - Project `.spok/mcp.json`, user servers in extension prefs, plugin contributions.
+  - Tools listed with approval state (`allow` / `ask` / `deny` / `untrusted`); no invoke bridge yet.
+- [x] Hook lifecycle runner with trust review.
+  - Events: session_start/end, prompt_submit, stop, tool/subagent, etc.
+  - Untrusted project/plugin hooks skip until Trust; builtin stop breadcrumb is trusted.
+  - `POST /api/extensions/hooks/run` + harness fires stop/session_end; composer fires prompt_submit.
+- [x] Plugin manifest draft for packaging skills, MCP, hooks, and commands.
+  - `spok.plugin.json` / `plugin.json` schema `spok.plugin/v1` under `~/.spok/plugins` or `.spok/plugins`.
+- [x] Custom agent/subagent config model.
+  - Builtin explorer / implementer / isolated-worker; user agents in prefs; select for next turn.
 
 Acceptance criteria:
 
-- A repo skill can guide implementation without bloating every prompt.
-- A hook can run on session stop and add a trace event.
-- MCP tools are visible with approval state before invocation.
+- [x] A repo skill can guide implementation without bloating every prompt (opt-in attach + compact index).
+- [x] A hook can run on session stop and add a trace event (builtin stop breadcrumb + user trace hooks).
+- [x] MCP tools are visible with approval state before invocation (read-only listing + policy badges).
+
+Known gaps / follow-ups (not Phase 4 blockers):
+
+- Live MCP tool invocation / OAuth login not wired (registry + policy only).
+- Command hooks require trust + policy allow; interactive approval for hooks is reserved.
+- Plugin install/marketplace UI not included — discover local folders only.
+- Skill body is not streamed into Grok’s native skill loader beyond cwd discovery; Spok attach is advisory context.
 
 ### Phase 5: Automation And Parallel Agents
 
 Target: 3-4 weeks
 
+**Status (2026-07-09): Implemented in tree.** Monitor panel, background queue (non-stealing sessions), trusted-only schedules, subagent lanes with merged summaries, local channel ingest, and in-app notifications are live.
+
 Deliverables:
 
-- Background session queue and monitor panel.
-- Scheduled prompts and recurring repo checks.
-- Subagent trace lanes and merged summaries.
-- Event channels/webhooks for external triggers.
-- Notifications for completion, approval needed, and failures.
+- [x] Background session queue and monitor panel.
+  - Client queue with concurrency (default 2); jobs create sessions with `activate: false`.
+  - **Monitor** UI (topbar/sidebar/⌘K): queue, history, cancel, open session.
+  - Composer **BG** button queues the current prompt without leaving the foreground.
+- [x] Scheduled prompts and recurring repo checks.
+  - Durable `~/.spok/schedules.json`; interval every N minutes/hours/days.
+  - Ticker while app is open; policy requires trusted cwd; isolate default on.
+  - Manual “Run now” / “Check schedules” from Monitor.
+- [x] Subagent trace lanes and merged summaries.
+  - `extractSubagentLanes` / `mergeSubagentSummaries`; workspace lane strip + Monitor Lanes tab.
+  - Thinking feed filters subagent noise when `hideSubagentFromThinking` (default true).
+- [x] Event channels/webhooks for external triggers.
+  - Channel registry + `POST /api/automation/channels/ingest` (capability token + channel secret).
+  - Ingest returns job blueprint for client queue (keeps approval UX interactive).
+- [x] Notifications for completion, approval needed, and failures.
+  - Notification drawer (bell); kinds for complete/fail/cancel/schedule/channel/approval.
+  - Toasts + deep-link actions to session or Monitor.
 
 Acceptance criteria:
 
-- Users can run multiple isolated tasks and compare results.
-- Scheduled tasks run only inside approved workspace/worktree policies.
-- Subagent results remain inspectable without polluting the main trace.
+- [x] Users can run multiple isolated tasks and compare results (queue + Compare tab).
+- [x] Scheduled tasks run only inside approved workspace/worktree policies (`evaluateAutomationCwdPolicy` + trust).
+- [x] Subagent results remain inspectable without polluting the main trace (lanes strip + filtered thinking).
+
+Known gaps / follow-ups (not Phase 5 blockers):
+
+- Schedule ticker only runs while the desktop/web app is open (no headless daemon).
+- Worktree auto-create for isolated jobs is preferred/flagged; full worktree provisioning still uses Phase 3 Git APIs manually.
+- Channel ingest requires the Spok app (or a local client) to process the queue after webhook accept.
+- OS-level notifications deferred to Phase 6 desktop hardening.
 
 ### Phase 6: Desktop Product Hardening
 
@@ -364,7 +440,7 @@ Acceptance criteria:
 5. ~~Add secret redaction utility and route it through logs, events, diffs, and export.~~ **Done (Phase 0).**
 6. Replace static slash-command assumptions with generated/verified Grok command metadata.
 7. Add durable `sessions/<id>/events.ndjson` and replay loader.
-8. Harden Tauri capabilities and remove the invalid icon entry.
+8. ~~Harden Tauri capabilities and remove the invalid icon entry.~~ **Done (Phase 2).**
 
 ## Generated Implementation Skills
 

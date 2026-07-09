@@ -16,6 +16,11 @@ import { buildFileTree, createFileDiff } from "./diff-utils";
 import { streamEventToNodeType, extractPaths } from "./parser";
 import { stampStreamEvent } from "./stream-event-schema";
 import {
+  isNonThoughtContent,
+  mergeStreamingText,
+  preferFullerText,
+} from "./trace-text";
+import {
   deleteDurableSession,
   enqueueDurableEvents,
   flushDurableSession,
@@ -152,6 +157,15 @@ interface SpokState {
   commandPaletteOpen: boolean;
   importOpen: boolean;
   launchOpen: boolean;
+  settingsOpen: boolean;
+  /** Extension Center dialog */
+  extensionsOpen: boolean;
+  /** Skill ids attached for the next prompt turn (cleared after submit). */
+  selectedSkillIds: string[];
+  /** Optional agent preset for the next prompt turn. */
+  selectedAgentId: string | null;
+  /** App-level permission mode (mirrors resolved settings). */
+  appPermissionMode: import("./settings/types").AppPermissionMode;
   traceFilter: TraceFilter;
   expandedNodeIds: Set<string>;
   linkedHighlightFileId: string | null;
@@ -167,6 +181,14 @@ interface SpokState {
   setCommandPaletteOpen: (open: boolean) => void;
   setImportOpen: (open: boolean) => void;
   setLaunchOpen: (open: boolean) => void;
+  setSettingsOpen: (open: boolean) => void;
+  setExtensionsOpen: (open: boolean) => void;
+  toggleSelectedSkill: (id: string) => void;
+  clearSelectedSkills: () => void;
+  setSelectedAgentId: (id: string | null) => void;
+  setAppPermissionMode: (
+    mode: import("./settings/types").AppPermissionMode
+  ) => void;
   setTraceFilter: (filter: Partial<TraceFilter>) => void;
   toggleExpanded: (id: string) => void;
   expandAll: () => void;
@@ -174,7 +196,14 @@ interface SpokState {
   setCrtEnabled: (v: boolean) => void;
   setScanlines: (v: boolean) => void;
 
-  createSession: (partial?: Partial<Session>) => string;
+  /**
+   * Create a session. When `activate` is false, the current active session
+   * is preserved (background jobs).
+   */
+  createSession: (
+    partial?: Partial<Session>,
+    opts?: { activate?: boolean }
+  ) => string;
   setActiveSession: (id: string | null) => void;
   updateSession: (id: string, patch: Partial<Session>) => void;
   deleteSession: (id: string) => void;
@@ -201,6 +230,25 @@ interface SpokState {
   importSession: (session: Session) => string;
   exportActiveSession: () => Session | null;
   upsertFileDiff: (sessionId: string, file: FileDiff, relatedTraceId?: string) => void;
+  /**
+   * Drop file diffs whose paths are not in `keepPaths`.
+   * Used after git status sync so committed/clean files leave the Diff panel.
+   */
+  pruneFileDiffs: (sessionId: string, keepPaths: Set<string> | string[]) => void;
+  addReviewComment: (
+    sessionId: string,
+    comment: Omit<import("./types").ReviewComment, "id" | "createdAt"> & {
+      id?: string;
+      createdAt?: number;
+    }
+  ) => void;
+  updateReviewComment: (
+    sessionId: string,
+    commentId: string,
+    patch: Partial<import("./types").ReviewComment>
+  ) => void;
+  removeReviewComment: (sessionId: string, commentId: string) => void;
+  setReviewMode: (sessionId: string, enabled: boolean) => void;
   pushPromptTurn: (sessionId: string, turn: import("./types").PromptTurn) => void;
   updatePromptTurn: (
     sessionId: string,
@@ -209,6 +257,35 @@ interface SpokState {
   ) => void;
   clearSessionTraces: (sessionId: string) => void;
   setGrokFlags: (sessionId: string, flags: Record<string, unknown>) => void;
+
+  // Phase 5 — automation / parallel
+  monitorOpen: boolean;
+  notificationsOpen: boolean;
+  setMonitorOpen: (open: boolean) => void;
+  setNotificationsOpen: (open: boolean) => void;
+  automationJobs: import("./automation/types").AutomationJob[];
+  automationMaxConcurrent: number;
+  enqueueJob: (job: import("./automation/types").AutomationJob) => void;
+  patchJob: (
+    id: string,
+    patch: Partial<import("./automation/types").AutomationJob>
+  ) => void;
+  clearFinishedJobs: () => void;
+  notifications: import("./automation/types").AppNotification[];
+  pushNotification: (n: import("./automation/types").AppNotification) => void;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
+  clearNotifications: () => void;
+  compareSessionIds: [string, string] | null;
+  setCompareSessionIds: (ids: [string, string] | null) => void;
+  selectedSubagentLaneId: string | null;
+  setSelectedSubagentLaneId: (id: string | null) => void;
+  setSessionSubagentLanes: (
+    sessionId: string,
+    lanes: import("./automation/types").SubagentLane[]
+  ) => void;
+  hideSubagentFromThinking: boolean;
+  setHideSubagentFromThinking: (v: boolean) => void;
 }
 
 export const useSpokStore = create<SpokState>((set, get) => ({
@@ -219,6 +296,19 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   commandPaletteOpen: false,
   importOpen: false,
   launchOpen: false,
+  settingsOpen: false,
+  extensionsOpen: false,
+  selectedSkillIds: [],
+  selectedAgentId: null,
+  appPermissionMode: "manual",
+  monitorOpen: false,
+  notificationsOpen: false,
+  automationJobs: [],
+  automationMaxConcurrent: 2,
+  notifications: [],
+  compareSessionIds: null,
+  selectedSubagentLaneId: null,
+  hideSubagentFromThinking: true,
   hydrated: false,
   hydrating: false,
   traceFilter: {
@@ -243,6 +333,17 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setImportOpen: (open) => set({ importOpen: open }),
   setLaunchOpen: (open) => set({ launchOpen: open }),
+  setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setExtensionsOpen: (open) => set({ extensionsOpen: open }),
+  toggleSelectedSkill: (id) =>
+    set((s) => ({
+      selectedSkillIds: s.selectedSkillIds.includes(id)
+        ? s.selectedSkillIds.filter((x) => x !== id)
+        : [...s.selectedSkillIds, id],
+    })),
+  clearSelectedSkills: () => set({ selectedSkillIds: [] }),
+  setSelectedAgentId: (id) => set({ selectedAgentId: id }),
+  setAppPermissionMode: (mode) => set({ appPermissionMode: mode }),
   setTraceFilter: (filter) =>
     set((s) => ({ traceFilter: { ...s.traceFilter, ...filter } })),
   toggleExpanded: (id) =>
@@ -262,12 +363,13 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   setCrtEnabled: (v) => set({ crtEnabled: v }),
   setScanlines: (v) => set({ scanlines: v }),
 
-  createSession: (partial) => {
+  createSession: (partial, opts) => {
     const session = createSession(partial);
+    const activate = opts?.activate !== false;
     set((s) => ({
       sessions: { ...s.sessions, [session.id]: session },
-      activeSessionId: session.id,
-      expandedNodeIds: new Set(),
+      activeSessionId: activate ? session.id : s.activeSessionId,
+      expandedNodeIds: activate ? new Set() : s.expandedNodeIds,
     }));
     // Durable live sessions: register on disk (async, fire-and-forget)
     if (session.durable !== false && session.source === "live") {
@@ -464,8 +566,48 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       }
 
       // Generic trace node (upsert by id for chunk coalescing)
-      const nodeId = event.id || nanoid(10);
-      const existingNode = nodes[nodeId];
+      // Fold thinking/reasoning fragments into the latest open thought node so
+      // the UI never ends up with one node per streamed word/digit.
+      let nodeId = event.id || nanoid(10);
+      let existingNode = nodes[nodeId];
+      const isThoughtType =
+        event.type === "thinking" || event.type === "reasoning";
+      if (isThoughtType) {
+        const incoming = event.content || "";
+        // Never fold CLI/Git noise into a thought node
+        if (
+          incoming &&
+          isNonThoughtContent(incoming) &&
+          !incoming.includes("\n")
+        ) {
+          event = { ...event, content: "", summary: undefined };
+        } else if (incoming) {
+          // Only coalesce same-id or true cumulative/stream deltas.
+          // Distinct status thoughts must stay permanent separate nodes.
+          const latestThought = Object.values(nodes)
+            .filter((n) => n.type === "thinking" || n.type === "reasoning")
+            .sort((a, b) => b.timestamp - a.timestamp)[0];
+          if (latestThought) {
+            const prev = latestThought.content || "";
+            const sameId = !!event.id && event.id === latestThought.id;
+            const cumulative =
+              incoming.startsWith(prev) ||
+              (prev.startsWith(incoming) && incoming.length < prev.length);
+            if (sameId || cumulative) {
+              nodeId = latestThought.id;
+              existingNode = latestThought;
+              event = {
+                ...event,
+                id: nodeId,
+                content: preferFullerText(
+                  mergeStreamingText(prev, incoming),
+                  preferFullerText(incoming, prev)
+                ),
+              };
+            }
+          }
+        }
+      }
 
       let resolvedParent = event.parentId ?? existingNode?.parentId ?? null;
       if (event.type === "tool_result" && !resolvedParent) {
@@ -549,26 +691,64 @@ export const useSpokStore = create<SpokState>((set, get) => ({
           meta: { ...existingNode.meta, ...event.meta },
         });
       } else {
+        // Streaming thoughts/messages: keep the fuller text when the same id
+        // is updated (cumulative chunks must not shrink content to one word).
+        const isProse =
+          event.type === "thinking" ||
+          event.type === "reasoning" ||
+          event.type === "message" ||
+          event.type === "plan" ||
+          event.type === "plan_update";
+        const nextContent = isProse
+          ? preferFullerText(
+              mergeStreamingText(
+                existingNode?.content || "",
+                event.content || ""
+              ),
+              preferFullerText(event.content, existingNode?.content)
+            )
+          : event.content !== undefined && event.content !== ""
+            ? event.content
+            : existingNode?.content || "";
+        const nextSummary = isProse
+          ? preferFullerText(
+              event.summary ||
+                (nextContent
+                  ? nextContent.replace(/\s+/g, " ").trim().slice(0, 160)
+                  : undefined),
+              existingNode?.summary
+            )
+          : event.summary ||
+            (nextContent
+              ? nextContent.split(/\r?\n/).find((l) => l.trim())?.trim().slice(0, 160)
+              : undefined) ||
+            existingNode?.summary;
+
         upsertNode(nodes, rootTraceIds, {
           id: nodeId,
           parentId: resolvedParent,
           type: streamEventToNodeType(event.type),
-          title: event.title || event.type,
-          content: event.content || "",
-          summary: event.summary || (event.content ? event.content.slice(0, 120) : undefined),
+          title: event.title || existingNode?.title || event.type,
+          content: nextContent,
+          summary: nextSummary,
           timestamp: existingNode?.timestamp ?? event.timestamp,
-          durationMs: event.durationMs,
+          durationMs: event.durationMs ?? existingNode?.durationMs,
           status:
             event.status ??
+            existingNode?.status ??
             (event.type === "error" || event.type === "parser_error"
               ? "error"
               : "success"),
           children: existingNode?.children ?? [],
           links,
           depth,
-          toolName: event.toolName,
-          subagentId: event.subagentId,
-          meta: event.meta,
+          toolName: event.toolName || existingNode?.toolName,
+          subagentId: event.subagentId || existingNode?.subagentId,
+          meta: {
+            ...existingNode?.meta,
+            ...event.meta,
+            ...(event.path ? { path: event.path } : {}),
+          },
         });
       }
 
@@ -771,7 +951,22 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         ...file.relatedTraceIds,
         ...(relatedTraceId ? [relatedTraceId] : []),
       ]);
-      files[id] = { ...file, id, relatedTraceIds: [...related] };
+      // Explicit booleans must win (including false). Only fall back when omitted.
+      const has = (k: keyof FileDiff) =>
+        Object.prototype.hasOwnProperty.call(file, k);
+
+      files[id] = {
+        ...existing,
+        ...file,
+        id,
+        relatedTraceIds: [...related],
+        staged: has("staged") ? file.staged : existing?.staged,
+        unstaged: has("unstaged") ? file.unstaged : existing?.unstaged,
+        untracked: has("untracked") ? file.untracked : existing?.untracked,
+        conflict: has("conflict") ? file.conflict : existing?.conflict,
+        isBinary: has("isBinary") ? file.isBinary : existing?.isBinary,
+        isSecret: has("isSecret") ? file.isSecret : existing?.isSecret,
+      };
       return {
         sessions: {
           ...s.sessions,
@@ -779,9 +974,129 @@ export const useSpokStore = create<SpokState>((set, get) => ({
             ...session,
             files,
             fileTree: buildFileTree(Object.values(files)),
-            selectedFileId: id,
+            // Don't steal focus on bulk refresh; select only if nothing selected
+            selectedFileId: session.selectedFileId ?? id,
             updatedAt: Date.now(),
             metrics: recomputeMetrics({ ...session, files }),
+          },
+        },
+      };
+    }),
+
+  pruneFileDiffs: (sessionId, keepPaths) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      const keep =
+        keepPaths instanceof Set
+          ? keepPaths
+          : new Set(
+              keepPaths.map((p) => p.replace(/\\/g, "/"))
+            );
+      const files: Record<string, FileDiff> = {};
+      let removed = false;
+      for (const [id, f] of Object.entries(session.files)) {
+        const key = f.path.replace(/\\/g, "/");
+        if (keep.has(key) || keep.has(f.path)) {
+          files[id] = f;
+        } else {
+          removed = true;
+        }
+      }
+      if (!removed) return s;
+      const selectedStill =
+        session.selectedFileId && files[session.selectedFileId]
+          ? session.selectedFileId
+          : null;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            files,
+            fileTree: buildFileTree(Object.values(files)),
+            selectedFileId: selectedStill,
+            updatedAt: Date.now(),
+            metrics: recomputeMetrics({ ...session, files }),
+          },
+        },
+      };
+    }),
+
+  addReviewComment: (sessionId, comment) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      const entry = {
+        id: comment.id ?? nanoid(10),
+        createdAt: comment.createdAt ?? Date.now(),
+        path: comment.path,
+        line: comment.line,
+        hunkId: comment.hunkId,
+        traceNodeId: comment.traceNodeId,
+        body: comment.body,
+        author: comment.author,
+        resolved: comment.resolved,
+      };
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            reviewComments: [...(session.reviewComments ?? []), entry],
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    }),
+
+  updateReviewComment: (sessionId, commentId, patch) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            reviewComments: (session.reviewComments ?? []).map((c) =>
+              c.id === commentId ? { ...c, ...patch } : c
+            ),
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    }),
+
+  removeReviewComment: (sessionId, commentId) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            reviewComments: (session.reviewComments ?? []).filter(
+              (c) => c.id !== commentId
+            ),
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    }),
+
+  setReviewMode: (sessionId, enabled) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            reviewMode: enabled,
+            updatedAt: Date.now(),
           },
         },
       };
@@ -864,4 +1179,66 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         },
       };
     }),
+
+  setMonitorOpen: (open) => set({ monitorOpen: open }),
+  setNotificationsOpen: (open) => set({ notificationsOpen: open }),
+
+  enqueueJob: (job) =>
+    set((s) => ({
+      automationJobs: [job, ...s.automationJobs].slice(0, 100),
+    })),
+
+  patchJob: (id, patch) =>
+    set((s) => ({
+      automationJobs: s.automationJobs.map((j) =>
+        j.id === id ? { ...j, ...patch } : j
+      ),
+    })),
+
+  clearFinishedJobs: () =>
+    set((s) => ({
+      automationJobs: s.automationJobs.filter((j) =>
+        ["queued", "running", "waiting_approval"].includes(j.status)
+      ),
+    })),
+
+  pushNotification: (n) =>
+    set((s) => ({
+      notifications: [n, ...s.notifications].slice(0, 80),
+    })),
+
+  markNotificationRead: (id) =>
+    set((s) => ({
+      notifications: s.notifications.map((n) =>
+        n.id === id ? { ...n, read: true } : n
+      ),
+    })),
+
+  markAllNotificationsRead: () =>
+    set((s) => ({
+      notifications: s.notifications.map((n) => ({ ...n, read: true })),
+    })),
+
+  clearNotifications: () => set({ notifications: [] }),
+
+  setCompareSessionIds: (ids) => set({ compareSessionIds: ids }),
+  setSelectedSubagentLaneId: (id) => set({ selectedSubagentLaneId: id }),
+
+  setSessionSubagentLanes: (sessionId, lanes) =>
+    set((s) => {
+      const session = s.sessions[sessionId];
+      if (!session) return s;
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            subagentLanes: lanes,
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    }),
+
+  setHideSubagentFromThinking: (v) => set({ hideSubagentFromThinking: v }),
 }));

@@ -6,21 +6,37 @@ import { MonacoDiff } from "./monaco-diff";
 import { HunkNav } from "./hunk-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Download, Copy, Check, RefreshCw } from "lucide-react";
+import {
+  Download,
+  Copy,
+  Check,
+  RefreshCw,
+  Plus,
+  Minus,
+  Trash2,
+} from "lucide-react";
 import { unifiedDiffText } from "@/lib/diff-utils";
 import { useState } from "react";
 import { toast } from "sonner";
 import { refreshGitDiff } from "@/lib/harness";
+import { runGitAndRefresh } from "@/lib/git/client";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function DiffPanel() {
   const session = useSpokStore((s) =>
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
   );
+  const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
   const file = session?.selectedFileId
     ? session.files[session.selectedFileId]
     : null;
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+
+  const planMode = appPermissionMode === "plan";
+  const canMutate = !!session?.config.cwd && !planMode;
 
   const copyDiff = async () => {
     if (!file) return;
@@ -51,6 +67,55 @@ export function DiffPanel() {
       toast.error("Could not refresh git diff");
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const stageFile = async () => {
+    if (!session?.config.cwd || !file) return;
+    setBusy(true);
+    try {
+      const r = await runGitAndRefresh(session.id, session.config.cwd, "stage", {
+        paths: [file.path],
+      });
+      if (r.ok) toast.success(`Staged ${file.path}`);
+      else toast.error(r.error || "Stage failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unstageFile = async () => {
+    if (!session?.config.cwd || !file) return;
+    setBusy(true);
+    try {
+      const r = await runGitAndRefresh(
+        session.id,
+        session.config.cwd,
+        "unstage",
+        { paths: [file.path] }
+      );
+      if (r.ok) toast.success(`Unstaged ${file.path}`);
+      else toast.error(r.error || "Unstage failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const discardFile = async () => {
+    if (!session?.config.cwd || !file) return;
+    setBusy(true);
+    try {
+      const r = await runGitAndRefresh(
+        session.id,
+        session.config.cwd,
+        "discard",
+        { paths: [file.path], confirm: true }
+      );
+      if (r.ok) toast.success(`Discarded ${file.path}`);
+      else toast.error(r.error || "Discard failed");
+    } finally {
+      setBusy(false);
+      setConfirmDiscard(false);
     }
   };
 
@@ -96,7 +161,27 @@ export function DiffPanel() {
             >
               {file.status}
             </Badge>
-            <span className="max-w-[240px] truncate font-mono text-[11px] text-phosphor-green/70">
+            {file.staged && (
+              <Badge variant="success" className="text-[9px]">
+                staged
+              </Badge>
+            )}
+            {file.untracked && (
+              <Badge variant="cyan" className="text-[9px]">
+                untracked
+              </Badge>
+            )}
+            {file.isBinary && (
+              <Badge variant="amber" className="text-[9px]">
+                binary
+              </Badge>
+            )}
+            {file.isSecret && (
+              <Badge variant="error" className="text-[9px]">
+                secret
+              </Badge>
+            )}
+            <span className="max-w-[200px] truncate font-mono text-[11px] text-phosphor-green/70">
               {file.path}
             </span>
             <span className="font-mono text-[11px]">
@@ -104,6 +189,46 @@ export function DiffPanel() {
               <span className="text-phosphor-red">-{file.deletions}</span>
             </span>
             <HunkNav file={file} />
+            {canMutate && (
+              <>
+                {(file.unstaged || file.untracked) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Stage file"
+                    disabled={busy}
+                    onClick={() => void stageFile()}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {file.staged && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    title="Unstage file"
+                    disabled={busy}
+                    onClick={() => void unstageFile()}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {(file.unstaged || file.untracked) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-red-400/80"
+                    title="Discard file changes"
+                    disabled={busy}
+                    onClick={() => setConfirmDiscard(true)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </>
+            )}
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={copyDiff}>
               {copied ? (
                 <Check className="h-3.5 w-3.5 text-phosphor-green" />
@@ -127,6 +252,18 @@ export function DiffPanel() {
           <MonacoDiff file={file} className="h-full" />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title="Discard file changes?"
+        description="Permanently discards unstaged or untracked changes for this path. This cannot be undone from Spok."
+        detail={file?.path}
+        tone="danger"
+        confirmLabel="Discard"
+        busy={busy}
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={() => void discardFile()}
+      />
     </div>
   );
 }

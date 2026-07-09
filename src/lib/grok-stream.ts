@@ -5,6 +5,15 @@ import {
   parseStreamEvent,
   stampStreamEvent,
 } from "./stream-event-schema";
+import {
+  isNonThoughtContent,
+  isStreamingContinuation,
+  isSystemPromptNoise,
+  isTechnicalCliNoise,
+  mergeStreamingText,
+} from "./trace-text";
+
+export { isSystemPromptNoise, isTechnicalCliNoise } from "./trace-text";
 
 /**
  * Parse Grok Build `--output-format streaming-json` lines and Spok harness envelopes
@@ -36,29 +45,129 @@ function asObj(v: unknown): Json | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : null;
 }
 
-function textFromContent(content: unknown): string {
-  if (!content) return "";
+/**
+ * Pull human-readable text out of Grok/ACP content shapes.
+ * Handles strings, {type:"text",text}, {data:"..."}, nested content, arrays.
+ * Never returns a useless key-list like "{ type, data }".
+ */
+function textFromContent(content: unknown, depth = 0): string {
+  if (content == null || depth > 6) return "";
   if (typeof content === "string") return content;
+  if (typeof content === "number" || typeof content === "boolean") {
+    return String(content);
+  }
   if (Array.isArray(content)) {
     return content
-      .map((c) => {
-        const o = asObj(c);
-        if (!o) return "";
-        if (typeof o.text === "string") return o.text;
-        if (o.type === "diff") {
-          const path = String(o.path ?? "file");
-          return `Diff: ${path}`;
-        }
-        return "";
-      })
+      .map((c) => textFromContent(c, depth + 1))
       .filter(Boolean)
-      .join("\n");
+      .join("");
   }
   const o = asObj(content);
   if (!o) return "";
-  if (typeof o.text === "string") return o.text;
-  if (typeof o.message === "string") return o.message;
+
+  // Prefer explicit text fields (order matters)
+  for (const key of [
+    "text",
+    "message",
+    "content",
+    "thinking",
+    "thought",
+    "reasoning",
+    "delta",
+    "output",
+    "value",
+    "data",
+  ]) {
+    const v = o[key];
+    if (typeof v === "string" && v.length) return v;
+    if (v && typeof v === "object") {
+      const nested = textFromContent(v, depth + 1);
+      if (nested) return nested;
+    }
+  }
+
+  // ACP-style typed parts without nested walk above
+  if (o.type === "diff") {
+    const path = String(o.path ?? "file");
+    return `Diff: ${path}`;
+  }
+
   return "";
+}
+
+/** Extract usable prose from a raw JSON object (stdout line). */
+function extractProseFromJson(obj: Json): string {
+  // Harness envelope
+  if (
+    (obj.type === "stdout" || obj.type === "stderr") &&
+    typeof obj.data === "string"
+  ) {
+    return "";
+  }
+  const direct = textFromContent(obj);
+  if (direct) return direct;
+  if (typeof obj.data === "string") return obj.data;
+  if (asObj(obj.data)) return textFromContent(obj.data);
+  if (asObj(obj.params)) {
+    const update = asObj(asObj(obj.params)?.update);
+    if (update) return textFromContent(update.content ?? update);
+  }
+  return "";
+}
+
+/**
+ * Grok streaming-json uses type names like "thought" and "text".
+ * Note: "thought".includes("think") is FALSE — must match explicitly.
+ */
+function isThoughtEventType(type: string): boolean {
+  const t = type.toLowerCase().replace(/-/g, "_");
+  return (
+    t === "thought" ||
+    t === "thoughts" ||
+    t === "thinking" ||
+    t === "reasoning" ||
+    t === "agent_thought" ||
+    t === "agent_thinking" ||
+    t === "thought_delta" ||
+    t === "thinking_delta" ||
+    t === "reasoning_delta" ||
+    t.endsWith("_thought") ||
+    t.endsWith("_thinking") ||
+    t.includes("thought_chunk") ||
+    t.includes("thinking_chunk")
+  );
+}
+
+function isAgentTextEventType(type: string): boolean {
+  const t = type.toLowerCase().replace(/-/g, "_");
+  return (
+    t === "text" ||
+    t === "message" ||
+    t === "assistant" ||
+    t === "assistant_message" ||
+    t === "agent_message" ||
+    t === "output_text" ||
+    t === "content" ||
+    t === "response" ||
+    t === "response_chunk" ||
+    t === "message_delta" ||
+    t === "text_delta" ||
+    t.includes("message_chunk")
+  );
+}
+
+function isThoughtSessionUpdate(kind: string): boolean {
+  const k = kind.toLowerCase().replace(/-/g, "_");
+  return (
+    k === "agent_thought_chunk" ||
+    k === "agent_thought" ||
+    k === "thought_chunk" ||
+    k === "thinking_chunk" ||
+    k === "agent_thinking_chunk" ||
+    k.includes("thought") ||
+    k.includes("thinking") ||
+    k.includes("reasoning")
+  );
 }
 
 function tsOf(obj: Json, fallback = Date.now()): number {
@@ -286,7 +395,26 @@ export class GrokStreamIngestor {
     try {
       obj = JSON.parse(trimmed) as Json;
     } catch {
-      // plain text
+      // plain text — never promote CLI/Git noise to thinking/message prose
+      if (isTechnicalCliNoise(trimmed) || isSystemPromptNoise(trimmed)) {
+        return this.finalize(
+          [
+            {
+              type: "system",
+              timestamp,
+              id: nanoid(10),
+              title: "CLI output",
+              content: trimmed,
+              status: "success",
+              provider: "grok",
+              severity: "debug",
+            },
+          ],
+          "grok",
+          trimmed.slice(0, 300),
+          trimmed
+        );
+      }
       return this.finalize(
         [
           {
@@ -305,7 +433,7 @@ export class GrokStreamIngestor {
       );
     }
 
-    // Spok native event
+    // Spok / Grok native event with type field (content may live in data/text)
     if (
       typeof obj.type === "string" &&
       [
@@ -326,7 +454,31 @@ export class GrokStreamIngestor {
       ].includes(obj.type) &&
       !obj.method
     ) {
-      const parsed = parseStreamEvent(obj, {
+      const prose =
+        textFromContent(obj.content) ||
+        textFromContent(obj.data) ||
+        (typeof obj.text === "string" ? obj.text : "") ||
+        (typeof obj.message === "string" ? obj.message : "");
+
+      // Never surface system-prompt dumps as thinking
+      if (
+        (obj.type === "thinking" || obj.type === "reasoning") &&
+        isSystemPromptNoise(prose)
+      ) {
+        return this.finalize([], "spok", undefined, trimmed);
+      }
+
+      const normalized = {
+        ...obj,
+        content: prose || String(obj.content ?? ""),
+        title:
+          typeof obj.title === "string"
+            ? obj.title
+            : obj.type === "thinking"
+              ? "Thinking"
+              : undefined,
+      };
+      const parsed = parseStreamEvent(normalized, {
         timestamp,
         provider: "spok",
       });
@@ -338,14 +490,15 @@ export class GrokStreamIngestor {
           trimmed
         );
       }
-      // Preserve unknown-shaped "native" with soft stamp
+      // Soft stamp — still prefer extracted prose over empty content
       const soft = stampStreamEvent(
         {
-          ...(obj as unknown as StreamEvent),
+          ...(normalized as unknown as StreamEvent),
           type: obj.type as StreamEvent["type"],
           timestamp:
             typeof obj.timestamp === "number" ? obj.timestamp : timestamp,
           id: typeof obj.id === "string" ? obj.id : nanoid(10),
+          content: prose,
           meta: {
             ...(typeof obj.meta === "object" && obj.meta
               ? (obj.meta as Record<string, unknown>)
@@ -360,14 +513,37 @@ export class GrokStreamIngestor {
       return this.finalize([soft], "spok", formatLogFromEvent(soft), trimmed);
     }
 
-    // Grok ACP session/update
+    // Grok ACP session/update (preferred structured path)
     if (obj.method === "session/update" || asObj(obj.params)?.update) {
       const r = this.ingestSessionUpdate(obj, timestamp);
       return this.finalize(r.events, "grok", r.logLine, trimmed);
     }
 
-    // Grok events.jsonl style: { type: "turn_started" | "phase_changed" | ... }
+    // Grok streaming-json typed events: { type: "thought"|"text"|..., text|data|content }
+    // These are what show up in the raw log as bare "thought" / "text" when mis-handled.
     if (typeof obj.type === "string" && !obj.method) {
+      const tname = String(obj.type);
+      const prose = extractProseFromJson(obj);
+
+      if (prose && isThoughtEventType(tname)) {
+        return this.finalize(
+          this.appendThoughtProse(prose, timestamp),
+          "grok",
+          prose.slice(0, 240),
+          trimmed
+        );
+      }
+
+      if (prose && isAgentTextEventType(tname)) {
+        return this.finalize(
+          this.appendMessageProse(prose, timestamp),
+          "grok",
+          prose.slice(0, 240),
+          trimmed
+        );
+      }
+
+      // Known harness lifecycle types
       const r = this.ingestGrokEvent(obj, timestamp);
       return this.finalize(r.events, "grok", r.logLine, trimmed);
     }
@@ -410,58 +586,21 @@ export class GrokStreamIngestor {
         break;
       }
 
-      case "agent_thought_chunk": {
+      case "agent_thought_chunk":
+      case "agent_thought":
+      case "thought_chunk":
+      case "thinking_chunk":
+      case "agent_thinking_chunk": {
         const chunk = textFromContent(update.content);
-        if (!chunk) break;
-        this.thoughtText = this.thoughtText
-          ? mergeChunk(this.thoughtText, chunk)
-          : chunk;
-        if (!this.thoughtId) this.thoughtId = nanoid(10);
-        // Close open message coalesce when thinking resumes
-        this.messageId = null;
-        this.messageText = "";
-        events.push({
-          type: "thinking",
-          timestamp: t,
-          id: this.thoughtId,
-          title: "Thinking",
-          content: this.thoughtText,
-          summary: this.thoughtText.slice(0, 140),
-          status: "running",
-        });
+        events.push(...this.appendThoughtProse(chunk, t));
         break;
       }
 
-      case "agent_message_chunk": {
+      case "agent_message_chunk":
+      case "agent_message":
+      case "message_chunk": {
         const chunk = textFromContent(update.content);
-        if (!chunk) break;
-        // Finalize thinking
-        if (this.thoughtId) {
-          events.push({
-            type: "thinking",
-            timestamp: t,
-            id: this.thoughtId,
-            title: "Thinking",
-            content: this.thoughtText,
-            summary: this.thoughtText.slice(0, 140),
-            status: "success",
-          });
-          this.thoughtId = null;
-          this.thoughtText = "";
-        }
-        this.messageText = this.messageText
-          ? mergeChunk(this.messageText, chunk)
-          : chunk;
-        if (!this.messageId) this.messageId = nanoid(10);
-        events.push({
-          type: "message",
-          timestamp: t,
-          id: this.messageId,
-          title: "Grok",
-          content: this.messageText,
-          summary: this.messageText.slice(0, 140),
-          status: "running",
-        });
+        events.push(...this.appendMessageProse(chunk, t));
         break;
       }
 
@@ -477,16 +616,28 @@ export class GrokStreamIngestor {
         const inputPreview = raw
           ? JSON.stringify(raw, null, 0).slice(0, 400)
           : "";
+        const humanTitle = path
+          ? `${name} · ${path}`
+          : typeof update.title === "string" && update.title
+            ? update.title
+            : name;
         events.push({
           type: "tool_call",
           timestamp: t,
           id: nodeId,
-          title: `Tool: ${name}`,
-          content: inputPreview || String(update.title ?? name),
+          title: humanTitle,
+          // Prefer human title for content; keep raw input in meta for Log / technical panel
+          content: humanTitle,
+          summary: path || name,
           toolName: name,
           path,
           status: "running",
-          meta: { toolCallId, rawInput: raw ?? undefined },
+          meta: {
+            toolCallId,
+            rawInput: raw ?? undefined,
+            path: path ?? undefined,
+            inputPreview: inputPreview || undefined,
+          },
         });
 
         // write/search_replace may include content in rawInput
@@ -532,19 +683,32 @@ export class GrokStreamIngestor {
         const text = textFromContent(update.content);
         if (text && !text.startsWith("Diff:")) contentBits.push(text);
 
+        const resultText = contentBits.join("\n").trim();
+        const human =
+          path != null
+            ? `${name} · ${path}`
+            : typeof update.title === "string" && update.title
+              ? update.title
+              : name;
         events.push({
           type: status === "running" ? "tool_call" : "tool_result",
           timestamp: t,
           id: nodeId,
-          title:
-            status === "running"
-              ? `Tool: ${name}`
-              : `Result: ${name}`,
-          content: contentBits.join("\n") || name,
+          title: human,
+          // Readable summary first; full result body when present (not raw tool wire format)
+          content:
+            resultText && !resultText.startsWith("{")
+              ? resultText
+              : human,
+          summary: path || resultText.slice(0, 140) || name,
           toolName: name,
           path,
           status: status === "running" ? "running" : status,
-          meta: { toolCallId },
+          meta: {
+            toolCallId,
+            path: path ?? undefined,
+            rawResult: resultText || undefined,
+          },
         });
 
         // Diffs attached to tool updates (write results)
@@ -629,17 +793,30 @@ export class GrokStreamIngestor {
       }
 
       default: {
-        if (kind) {
-          events.push({
-            type: "system",
-            timestamp: t,
-            id: nanoid(10),
-            title: humanizeSessionUpdate(kind),
-            content: textFromContent(update.content) || kind,
-            status: "success",
-            meta: { sessionUpdate: kind },
-          });
+        if (!kind) break;
+        // Catch any other thought/text sessionUpdate variants Grok may emit
+        if (isThoughtSessionUpdate(kind)) {
+          const chunk = textFromContent(update.content);
+          events.push(...this.appendThoughtProse(chunk, t));
+          break;
         }
+        if (
+          kind.toLowerCase().includes("message") ||
+          kind.toLowerCase().includes("text")
+        ) {
+          const chunk = textFromContent(update.content);
+          events.push(...this.appendMessageProse(chunk, t));
+          break;
+        }
+        events.push({
+          type: "system",
+          timestamp: t,
+          id: nanoid(10),
+          title: humanizeSessionUpdate(kind),
+          content: textFromContent(update.content) || kind,
+          status: "success",
+          meta: { sessionUpdate: kind },
+        });
       }
     }
 
@@ -705,9 +882,109 @@ export class GrokStreamIngestor {
   private flushOpenText(
     events: StreamEvent[],
     t: number,
-    finalize = false
+    _finalize = false
   ) {
+    // Seal open buffers as permanent segments (never discarded when the
+    // next tool/phase starts — terminal Grok clears these; Spok keeps them).
     if (this.thoughtId && this.thoughtText) {
+      if (!isNonThoughtContent(this.thoughtText)) {
+        events.push({
+          type: "thinking",
+          timestamp: t,
+          id: this.thoughtId,
+          title: "Thinking",
+          content: this.thoughtText,
+          summary: this.thoughtText.slice(0, 140),
+          status: "success",
+          meta: { permanent: true },
+        });
+      }
+      this.thoughtId = null;
+      this.thoughtText = "";
+    }
+    if (this.messageId && this.messageText) {
+      if (!isTechnicalCliNoise(this.messageText)) {
+        events.push({
+          type: "message",
+          timestamp: t,
+          id: this.messageId,
+          title: "Progress",
+          content: this.messageText,
+          summary: this.messageText.slice(0, 140),
+          status: "success",
+          meta: { permanent: true, progress: true },
+        });
+      }
+      this.messageId = null;
+      this.messageText = "";
+    }
+  }
+
+  /**
+   * Append prose into the current thought segment (or start one).
+   * Shared by ACP thought chunks and raw {type:"thought", text} events.
+   */
+  private appendThoughtProse(chunk: string, t: number): StreamEvent[] {
+    if (!chunk) return [];
+    if (isNonThoughtContent(chunk)) {
+      if (isTechnicalCliNoise(chunk)) {
+        return [
+          {
+            type: "system",
+            timestamp: t,
+            id: nanoid(10),
+            title: "CLI output",
+            content: chunk,
+            status: "success",
+            severity: "debug",
+          },
+        ];
+      }
+      return [];
+    }
+
+    const next = this.thoughtText ? mergeChunk(this.thoughtText, chunk) : chunk;
+    if (isNonThoughtContent(next) && !next.includes("\n")) {
+      this.thoughtText = "";
+      this.thoughtId = null;
+      return [];
+    }
+
+    this.thoughtText = next;
+    if (!this.thoughtId) this.thoughtId = nanoid(10);
+    // New thought phase: close open message so progress lines stay permanent
+    this.messageId = null;
+    this.messageText = "";
+
+    return [
+      {
+        type: "thinking",
+        timestamp: t,
+        id: this.thoughtId,
+        title: "Thinking",
+        content: this.thoughtText,
+        summary: this.thoughtText.slice(0, 140),
+        status: "running",
+        meta: { permanent: true },
+      },
+    ];
+  }
+
+  /**
+   * Append prose into the current message/progress segment.
+   * Seals prior progress when the CLI would "clear and replace" the status line.
+   */
+  private appendMessageProse(chunk: string, t: number): StreamEvent[] {
+    if (!chunk || isSystemPromptNoise(chunk)) return [];
+
+    const events: StreamEvent[] = [];
+
+    // Seal open thinking before message work
+    if (
+      this.thoughtId &&
+      this.thoughtText &&
+      !isNonThoughtContent(this.thoughtText)
+    ) {
       events.push({
         type: "thinking",
         timestamp: t,
@@ -715,36 +992,69 @@ export class GrokStreamIngestor {
         title: "Thinking",
         content: this.thoughtText,
         summary: this.thoughtText.slice(0, 140),
-        status: finalize ? "success" : "success",
+        status: "success",
+        meta: { permanent: true },
       });
       this.thoughtId = null;
       this.thoughtText = "";
+    } else {
+      this.thoughtId = null;
+      this.thoughtText = "";
     }
-    if (this.messageId && this.messageText) {
+
+    if (isTechnicalCliNoise(chunk)) {
+      events.push({
+        type: "system",
+        timestamp: t,
+        id: nanoid(10),
+        title: "CLI output",
+        content: chunk,
+        status: "success",
+        severity: "debug",
+      });
+      return events;
+    }
+
+    // Non-continuation → seal previous progress so history is not overwritten
+    if (
+      this.messageId &&
+      this.messageText &&
+      !isStreamingContinuation(this.messageText, chunk)
+    ) {
       events.push({
         type: "message",
         timestamp: t,
         id: this.messageId,
-        title: "Grok",
+        title: "Progress",
         content: this.messageText,
         summary: this.messageText.slice(0, 140),
         status: "success",
+        meta: { permanent: true, progress: true },
       });
       this.messageId = null;
       this.messageText = "";
     }
+
+    this.messageText = this.messageText
+      ? mergeChunk(this.messageText, chunk)
+      : chunk;
+    if (!this.messageId) this.messageId = nanoid(10);
+    events.push({
+      type: "message",
+      timestamp: t,
+      id: this.messageId,
+      title: "Grok",
+      content: this.messageText,
+      summary: this.messageText.slice(0, 140),
+      status: "running",
+      meta: { permanent: true },
+    });
+    return events;
   }
 }
 
 function mergeChunk(prev: string, chunk: string): string {
-  // Streamed tokens sometimes include leading space; avoid double spaces at join
-  if (!prev) return chunk;
-  if (chunk.startsWith(" ") || chunk.startsWith("\n") || prev.endsWith("\n")) {
-    return prev + chunk;
-  }
-  // Overlapping prefix (rare)
-  if (chunk.startsWith(prev.slice(-20))) return prev + chunk.slice(20);
-  return prev + chunk;
+  return mergeStreamingText(prev, chunk);
 }
 
 function humanizeSessionUpdate(s: string): string {
@@ -755,10 +1065,14 @@ function humanizeSessionUpdate(s: string): string {
 }
 
 function summarizeUnknownJson(obj: Json): string {
-  const keys = Object.keys(obj).slice(0, 8).join(", ");
+  const prose = extractProseFromJson(obj);
+  if (prose && !isSystemPromptNoise(prose)) return prose.slice(0, 300);
   if (typeof obj.message === "string") return obj.message;
   if (typeof obj.error === "string") return obj.error;
-  return keys ? `{ ${keys} }` : "{}";
+  // Prefer a short type label over "{ type, data }" key lists in the UI
+  if (typeof obj.type === "string") return String(obj.type);
+  const keys = Object.keys(obj).slice(0, 6).join(", ");
+  return keys ? `event (${keys})` : "event";
 }
 
 export function formatLogFromEvent(ev: StreamEvent): string {

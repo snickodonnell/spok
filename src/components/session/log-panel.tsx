@@ -21,6 +21,9 @@ export function LogPanel() {
         <h2 className="font-mono text-xs uppercase tracking-[0.2em] text-phosphor-green crt-glow">
           Raw Log
         </h2>
+        <p className="mt-0.5 text-[10px] text-phosphor-green/35">
+          Stream envelopes, tool payloads, and wire format — thinking prose is in the Trace
+        </p>
       </div>
       <div className="flex-1 overflow-auto bg-black/50 p-3 font-mono text-[11px] leading-relaxed">
         {!session || session.rawLog.length === 0 ? (

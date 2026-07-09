@@ -15,6 +15,11 @@ import {
   Square,
   Terminal,
   Slash,
+  Puzzle,
+  Sparkles,
+  Bot,
+  X,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +35,17 @@ import {
 } from "@/lib/grok-commands";
 import { localFetch } from "@/lib/local-api-client";
 import { buildExportPayload } from "@/lib/export-session";
+import {
+  applyHookResultsToSession,
+  fetchExtensions,
+  runSessionHooks,
+} from "@/lib/extensions-client";
+import {
+  buildSkillAttachmentSnippet,
+  buildAgentBrief,
+} from "@/lib/extensions/format";
+import type { CustomAgentConfig, SkillDescriptor } from "@/lib/extensions/types";
+import { enqueueBackgroundJob } from "@/lib/background-runner";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -60,12 +76,22 @@ export function PromptComposer() {
   const setGrokFlags = useSpokStore((s) => s.setGrokFlags);
   const exportActiveSession = useSpokStore((s) => s.exportActiveSession);
   const applyStreamEvent = useSpokStore((s) => s.applyStreamEvent);
+  const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
+  const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
+  const selectedSkillIds = useSpokStore((s) => s.selectedSkillIds);
+  const toggleSelectedSkill = useSpokStore((s) => s.toggleSelectedSkill);
+  const clearSelectedSkills = useSpokStore((s) => s.clearSelectedSkills);
+  const selectedAgentId = useSpokStore((s) => s.selectedAgentId);
+  const setSelectedAgentId = useSpokStore((s) => s.setSelectedAgentId);
 
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
+  const [skillCatalog, setSkillCatalog] = useState<SkillDescriptor[]>([]);
+  const [agentCatalog, setAgentCatalog] = useState<CustomAgentConfig[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -93,6 +119,33 @@ export function PromptComposer() {
     setSlashOpen(slashQuery !== null && slashMatches.length > 0);
     setSlashIdx(0);
   }, [slashQuery, slashMatches.length]);
+
+  // Lightweight extension catalog for chip labels (not full bodies)
+  useEffect(() => {
+    if (!session?.config.cwd) return;
+    let cancelled = false;
+    void fetchExtensions(session.config.cwd)
+      .then((bundle) => {
+        if (cancelled) return;
+        setSkillCatalog(bundle.skills.filter((s) => s.enabled));
+        setAgentCatalog(bundle.agents);
+      })
+      .catch(() => {
+        /* optional */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.config.cwd, session?.id]);
+
+  const attachedSkills = useMemo(
+    () => skillCatalog.filter((s) => selectedSkillIds.includes(s.id)),
+    [skillCatalog, selectedSkillIds]
+  );
+  const selectedAgent = useMemo(
+    () => agentCatalog.find((a) => a.id === selectedAgentId) ?? null,
+    [agentCatalog, selectedAgentId]
+  );
 
   const applySlash = useCallback(
     (cmd: SlashCommand) => {
@@ -185,6 +238,55 @@ export function PromptComposer() {
     }
 
     const turnId = nanoid(8);
+
+    // Opt-in skill/agent context — compact index only, never every repo skill
+    const skillSnippet =
+      attachedSkills.length > 0
+        ? buildSkillAttachmentSnippet(attachedSkills)
+        : "";
+    const agentSnippet = selectedAgent
+      ? buildAgentBrief(selectedAgent, { includeSystemPrompt: true })
+      : "";
+    const extensionPreamble = [agentSnippet, skillSnippet]
+      .filter(Boolean)
+      .join("\n\n");
+
+    // Prefer injecting as a system trace + light prompt prefix only when attached
+    if (extensionPreamble) {
+      applyStreamEvent(session.id, {
+        type: "system",
+        timestamp: Date.now(),
+        title: "Extensions for this turn",
+        content: extensionPreamble,
+        status: "success",
+        severity: "info",
+        provider: "spok",
+        meta: {
+          skills: attachedSkills.map((s) => s.id),
+          agentId: selectedAgent?.id,
+        },
+      });
+    }
+
+    // Rebuild args if we need to prefix the user prompt (prompt runs only)
+    let runArgs = resolved.args;
+    if (
+      extensionPreamble &&
+      resolved.type === "prompt" &&
+      Array.isArray(resolved.args)
+    ) {
+      // Grok headless prompts usually end with the freeform prompt string
+      const args = [...resolved.args];
+      const last = args[args.length - 1];
+      if (typeof last === "string" && last === text) {
+        args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${text}`;
+        runArgs = args;
+      } else if (typeof last === "string" && last.includes(text)) {
+        args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${last}`;
+        runArgs = args;
+      }
+    }
+
     pushPromptTurn(session.id, {
       id: turnId,
       text,
@@ -195,16 +297,33 @@ export function PromptComposer() {
     setValue("");
     setHint(null);
     setBusy(true);
+    clearSelectedSkills();
+    // keep agent selection sticky across turns (user can clear)
 
     const ac = new AbortController();
     abortRef.current = ac;
 
     try {
+      // prompt_submit hooks (trace only unless trusted command hooks exist)
+      try {
+        const { results } = await runSessionHooks({
+          event: "prompt_submit",
+          sessionId: session.id,
+          cwd: session.config.cwd,
+          vars: { prompt: text.slice(0, 200) },
+        });
+        applyHookResultsToSession(session.id, results, (sid, ev) => {
+          applyStreamEvent(sid, ev);
+        });
+      } catch {
+        /* non-fatal */
+      }
+
       await runHarness({
         sessionId: session.id,
         cwd: session.config.cwd,
         command: session.config.command || "grok",
-        args: resolved.args,
+        args: runArgs,
         label: resolved.label,
         signal: ac.signal,
       });
@@ -232,6 +351,9 @@ export function PromptComposer() {
     exportActiveSession,
     pushPromptTurn,
     updatePromptTurn,
+    attachedSkills,
+    selectedAgent,
+    clearSelectedSkills,
   ]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -319,9 +441,17 @@ export function PromptComposer() {
           {session.config.cwd}
         </span>
         <span className="text-phosphor-green/20">·</span>
-        <label className="inline-flex items-center gap-1" title="Permission mode for Grok tool execution">
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="inline-flex items-center gap-1 rounded border border-phosphor-cyan/25 px-1.5 py-0.5 font-mono text-[9px] text-phosphor-cyan/80 hover:border-phosphor-cyan/50 hover:bg-phosphor-cyan/5"
+          title="Spok app permission mode (Settings)"
+        >
+          app:{appPermissionMode}
+        </button>
+        <label className="inline-flex items-center gap-1" title="Grok CLI permission flags for this session">
           <span className="text-[9px] uppercase tracking-wider text-phosphor-green/35">
-            perm
+            cli
           </span>
           <select
             className="h-5 max-w-[140px] rounded border border-phosphor-green/25 bg-black/60 px-1 font-mono text-[10px] text-phosphor-green outline-none focus:border-phosphor-amber/50"
@@ -362,7 +492,7 @@ export function PromptComposer() {
           title={
             flags.alwaysApprove
               ? "Auto-approves all tool executions — use only in trusted disposable workspaces"
-              : "Manual / CLI permission mode — safer default"
+              : "Grok CLI permission mode for this session"
           }
         >
           {permissionModeLabel(flags)}
@@ -382,6 +512,42 @@ export function PromptComposer() {
       {hint && (
         <div className="border-b border-phosphor-cyan/20 bg-phosphor-cyan/5 px-3 py-1.5 text-[11px] text-phosphor-cyan/80">
           {hint}
+        </div>
+      )}
+
+      {/* Extension chips — only when user attached something */}
+      {(attachedSkills.length > 0 || selectedAgent) && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-phosphor-cyan/15 bg-phosphor-cyan/5 px-3 py-1.5">
+          <Sparkles className="h-3 w-3 text-phosphor-cyan/70" />
+          <span className="text-[9px] uppercase tracking-widest text-phosphor-cyan/50">
+            This turn
+          </span>
+          {selectedAgent && (
+            <button
+              type="button"
+              onClick={() => setSelectedAgentId(null)}
+              className="inline-flex items-center gap-1 rounded border border-phosphor-cyan/30 bg-black/40 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-cyan hover:border-phosphor-cyan/60"
+            >
+              <Bot className="h-2.5 w-2.5" />
+              {selectedAgent.name}
+              <X className="h-2.5 w-2.5 opacity-60" />
+            </button>
+          )}
+          {attachedSkills.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => toggleSelectedSkill(s.id)}
+              className="inline-flex items-center gap-1 rounded border border-phosphor-green/30 bg-black/40 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-green/80 hover:border-phosphor-green/60"
+              title={s.description}
+            >
+              {s.name}
+              <X className="h-2.5 w-2.5 opacity-60" />
+            </button>
+          ))}
+          <span className="text-[9px] text-phosphor-green/35">
+            Compact skill index only — not full bodies
+          </span>
         </div>
       )}
 
@@ -434,15 +600,46 @@ export function PromptComposer() {
               Stop
             </Button>
           ) : (
-            <Button
-              size="sm"
-              onClick={() => void submit()}
-              disabled={!value.trim()}
-              title="Send (Enter)"
-            >
-              <CornerDownLeft className="h-3.5 w-3.5" />
-              Send
-            </Button>
+            <>
+              <Button
+                size="sm"
+                onClick={() => void submit()}
+                disabled={!value.trim()}
+                title="Send (Enter)"
+              >
+                <CornerDownLeft className="h-3.5 w-3.5" />
+                Send
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!value.trim() || !session.config.cwd}
+                title="Queue as background job — keeps this session free"
+                onClick={() => {
+                  const text = value.trim();
+                  if (!text || !session.config.cwd) return;
+                  enqueueBackgroundJob({
+                    title: text.slice(0, 48),
+                    prompt: text,
+                    cwd: session.config.cwd,
+                    isolate: true,
+                    parentSessionId: session.id,
+                  });
+                  setValue("");
+                  toast.success("Queued in background", {
+                    description: "Open Monitor to track progress",
+                    action: {
+                      label: "Monitor",
+                      onClick: () =>
+                        useSpokStore.getState().setMonitorOpen(true),
+                    },
+                  });
+                }}
+              >
+                <Layers className="h-3.5 w-3.5" />
+                BG
+              </Button>
+            </>
           )}
           {busy && (
             <span className="inline-flex items-center justify-center gap-1 text-[10px] text-phosphor-amber">
@@ -462,7 +659,20 @@ export function PromptComposer() {
           <kbd className="rounded border border-phosphor-green/20 px-1">/</kbd>{" "}
           commands
         </span>
-        <span className="font-mono">{session.config.command || "grok"}</span>
+        <button
+          type="button"
+          onClick={() => setExtensionsOpen(true)}
+          className="inline-flex items-center gap-1 font-mono text-phosphor-green/40 hover:text-phosphor-cyan"
+          title="Open Extension Center"
+        >
+          <Puzzle className="h-3 w-3" />
+          extensions
+          {skillCatalog.length > 0 && (
+            <span className="text-phosphor-green/25">
+              · {skillCatalog.length} skills
+            </span>
+          )}
+        </button>
       </div>
     </div>
   );

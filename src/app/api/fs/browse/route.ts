@@ -5,7 +5,16 @@ import os from "os";
 import {
   authorizePrivilegedRequest,
   denyFromAuthorize,
+  policyDenialResponse,
 } from "@/lib/security/local-api";
+import { getResolvedSettings } from "@/lib/settings/settings-fs";
+import { evaluatePolicy } from "@/lib/security/permission-policy";
+import { getActiveGrants } from "@/lib/security/approvals";
+import {
+  isTrustedWorkspacePath,
+  listTrustedRoots,
+} from "@/lib/security/workspace-trust";
+import { canonicalizePath } from "@/lib/security/paths";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,22 +89,57 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const rawPath = searchParams.get("path");
-  const showHidden = searchParams.get("hidden") === "1";
   const dirsOnly = searchParams.get("dirsOnly") !== "0";
 
-  const home = os.homedir();
-  const roots = isWindows()
-    ? await listWindowsDrives()
-    : ["/", home];
+  const settings = getResolvedSettings(rawPath || undefined);
+  const policy = evaluatePolicy({
+    settings,
+    action: "browse",
+    path: rawPath || undefined,
+    grants: getActiveGrants(),
+  });
+  if (policy.decision === "deny") {
+    return policyDenialResponse(403, {
+      error: policy.reason,
+      code: "path_denied",
+      policy: "path_policy",
+      action: "fs_browse",
+      details: { policy: policy.policy },
+    });
+  }
 
-  // Empty path → home (or roots listing mode)
-  let target = rawPath?.trim() || home;
+  const showHidden =
+    searchParams.get("hidden") === "1" || settings.showHiddenFolders;
+
+  const home = os.homedir();
+  const trusted = listTrustedRoots();
+  const restrict = settings.browseRestrictedToTrusted && trusted.length > 0;
+
+  const roots = restrict
+    ? trusted
+    : isWindows()
+      ? await listWindowsDrives()
+      : ["/", home];
+
+  // Empty path → home (or first trusted root when restricted)
+  let target = rawPath?.trim() || (restrict ? trusted[0] : home);
 
   // Normalize Windows paths: accept forward slashes
   if (isWindows()) {
     target = target.replace(/\//g, "\\");
   }
   target = path.resolve(target);
+
+  if (restrict && !isTrustedWorkspacePath(target)) {
+    return policyDenialResponse(403, {
+      error:
+        "Browse is restricted to trusted workspace roots. Disable the setting or open a repo first.",
+      code: "path_denied",
+      policy: "path_policy",
+      action: "fs_browse",
+      details: { path: canonicalizePath(target), trusted },
+    });
+  }
 
   if (!(await exists(target))) {
     return Response.json(

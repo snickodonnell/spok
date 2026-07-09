@@ -50,12 +50,16 @@ function TreeNode({
   selectedId,
   onSelect,
   search,
+  stagedIds,
+  untrackedIds,
 }: {
   node: FileTreeNode;
   depth: number;
   selectedId: string | null;
   onSelect: (fileId: string) => void;
   search: string;
+  stagedIds: Set<string>;
+  untrackedIds: Set<string>;
 }) {
   const [open, setOpen] = useState(true);
   const q = search.trim().toLowerCase();
@@ -117,6 +121,8 @@ function TreeNode({
               selectedId={selectedId}
               onSelect={onSelect}
               search={search}
+              stagedIds={stagedIds}
+              untrackedIds={untrackedIds}
             />
           ))}
       </div>
@@ -124,6 +130,9 @@ function TreeNode({
   }
 
   const selected = node.fileId === selectedId;
+  const isStaged = node.fileId ? stagedIds.has(node.fileId) : false;
+  const isUntracked = node.fileId ? untrackedIds.has(node.fileId) : false;
+
   return (
     <button
       type="button"
@@ -138,6 +147,19 @@ function TreeNode({
     >
       <FileCode2 className={cn("h-3.5 w-3.5 shrink-0", statusColor(node.status))} />
       <span className="truncate">{node.name}</span>
+      {isStaged && (
+        <span
+          className="text-[9px] font-bold text-phosphor-green"
+          title="Staged"
+        >
+          S
+        </span>
+      )}
+      {isUntracked && (
+        <span className="text-[9px] text-phosphor-cyan" title="Untracked">
+          ?
+        </span>
+      )}
       <span className={cn("ml-auto text-[10px] font-bold", statusColor(node.status))}>
         {statusLetter(node.status)}
       </span>
@@ -165,6 +187,10 @@ export function FileTree() {
   const files = Object.values(session.files);
   const totalAdd = files.reduce((s, f) => s + f.additions, 0);
   const totalDel = files.reduce((s, f) => s + f.deletions, 0);
+  const stagedIds = new Set(files.filter((f) => f.staged).map((f) => f.id));
+  const untrackedIds = new Set(
+    files.filter((f) => f.untracked).map((f) => f.id)
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -201,6 +227,8 @@ export function FileTree() {
               selectedId={session.selectedFileId}
               onSelect={selectFile}
               search={search}
+              stagedIds={stagedIds}
+              untrackedIds={untrackedIds}
             />
           ))
         )}

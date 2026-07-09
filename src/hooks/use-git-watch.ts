@@ -2,8 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import { useSpokStore } from "@/lib/store";
-import { createFileDiff, parseUnifiedDiff } from "@/lib/diff-utils";
 import { localFetch } from "@/lib/local-api-client";
+import { syncDiffsFromGit } from "@/lib/git/client";
 
 /**
  * Poll git working tree for live diffs while a harness run is in progress.
@@ -14,7 +14,6 @@ export function useGitWatch(
   enabled: boolean,
   intervalMs = 2500
 ) {
-  const upsertFileDiff = useSpokStore((s) => s.upsertFileDiff);
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
   const lastKey = useRef("");
 
@@ -25,50 +24,32 @@ export function useGitWatch(
 
     const tick = async () => {
       try {
-        const res = await localFetch(
-          `/api/session/git-diff?cwd=${encodeURIComponent(cwd)}`
+        // Lightweight status fingerprint first
+        const stRes = await localFetch(
+          `/api/session/git?cwd=${encodeURIComponent(cwd)}`
         );
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as {
-          diff?: string;
-          status?: string;
-          files?: Array<{
-            path: string;
-            status: string;
-            oldContent?: string;
-            newContent?: string;
-          }>;
+        if (!stRes.ok || cancelled) return;
+        const st = (await stRes.json()) as {
+          timestamp?: number;
+          stagedCount?: number;
+          unstagedCount?: number;
+          untrackedCount?: number;
+          files?: Array<{ path: string; code: string }>;
+          branch?: { current?: string | null; headOid?: string | null };
         };
-
-        const key = `${data.status ?? ""}\n${data.diff ?? ""}\n${(data.files ?? [])
-          .map((f) => f.path + (f.newContent?.length ?? 0))
-          .join("|")}`;
+        const key = [
+          st.branch?.current,
+          st.branch?.headOid,
+          st.stagedCount,
+          st.unstagedCount,
+          st.untrackedCount,
+          (st.files ?? []).map((f) => f.path + f.code).join("|"),
+        ].join("\n");
         if (key === lastKey.current) return;
         lastKey.current = key;
 
-        if (data.diff) {
-          for (const f of parseUnifiedDiff(data.diff)) {
-            upsertFileDiff(activeSessionId, f);
-          }
-        }
-
-        for (const f of data.files ?? []) {
-          if (f.newContent == null && f.oldContent == null) continue;
-          upsertFileDiff(
-            activeSessionId,
-            createFileDiff({
-              path: f.path,
-              oldContent: f.oldContent ?? "",
-              newContent: f.newContent ?? "",
-              status:
-                f.status === "added" || f.status === "untracked"
-                  ? "added"
-                  : f.status === "deleted"
-                    ? "deleted"
-                    : "modified",
-            })
-          );
-        }
+        if (cancelled) return;
+        await syncDiffsFromGit(activeSessionId, cwd);
       } catch {
         /* ignore poll errors */
       }
@@ -80,5 +61,5 @@ export function useGitWatch(
       cancelled = true;
       clearInterval(id);
     };
-  }, [cwd, enabled, intervalMs, activeSessionId, upsertFileDiff]);
+  }, [cwd, enabled, intervalMs, activeSessionId]);
 }

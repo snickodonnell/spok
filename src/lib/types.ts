@@ -92,7 +92,45 @@ export interface FileDiff {
   /** Trace node ids that produced this change */
   relatedTraceIds: string[];
   isBinary?: boolean;
+  /** Secret path denied from content preview */
+  isSecret?: boolean;
+  /** Staging areas from git status (Phase 3). */
+  staged?: boolean;
+  unstaged?: boolean;
+  untracked?: boolean;
+  conflict?: boolean;
   timestamp: number;
+}
+
+/** Inline review comment linked to a path / optional trace node (Phase 3). */
+export interface ReviewComment {
+  id: string;
+  path: string;
+  line?: number;
+  hunkId?: string;
+  traceNodeId?: string;
+  body: string;
+  author: "user" | "agent" | "system";
+  createdAt: number;
+  resolved?: boolean;
+}
+
+/** Lightweight branch/worktree snapshot cached on the session. */
+export interface SessionGitSummary {
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  conflictCount: number;
+  clean: boolean;
+  isWorktree: boolean;
+  mainWorktreePath: string | null;
+  repoRoot: string | null;
+  headOid: string | null;
+  updatedAt: number;
 }
 
 export interface FileTreeNode {
@@ -127,6 +165,15 @@ export interface SessionConfig {
   env?: Record<string, string>;
   autoScroll: boolean;
   playbackSpeed: number;
+  /**
+   * When set, this session is bound to a Spok-managed worktree and must not
+   * mutate the main checkout (isolation guard).
+   */
+  worktreePath?: string;
+  /** Main repo checkout when running inside an isolated worktree. */
+  mainCheckout?: string;
+  /** Isolation enabled for background / worktree sessions. */
+  isolationGuard?: boolean;
 }
 
 export interface PromptTurn {
@@ -171,6 +218,19 @@ export interface Session {
   lastPersistedAt?: number;
   /** Count of normalized events written (disk or memory) */
   eventCount?: number;
+  /** Cached git branch/status summary for status line + Git panel. */
+  gitSummary?: SessionGitSummary;
+  /** Review-mode comments for this session. */
+  reviewComments?: ReviewComment[];
+  /** When true, review pane is emphasized in the Git panel. */
+  reviewMode?: boolean;
+  /**
+   * Subagent lanes extracted for parallel-agent UX (Phase 5).
+   * Kept on the session so lanes survive focus switches.
+   */
+  subagentLanes?: import("./automation/types").SubagentLane[];
+  /** True when this session was created for a background/scheduled job. */
+  backgroundJob?: boolean;
 }
 
 export interface SampleSessionMeta {

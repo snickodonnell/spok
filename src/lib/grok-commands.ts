@@ -357,7 +357,7 @@ export type ResolvedRun =
       flags?: Partial<GrokRunFlags>;
     };
 
-function baseFlagsArgs(flags: GrokRunFlags): string[] {
+export function baseFlagsArgs(flags: GrokRunFlags): string[] {
   const args: string[] = [];
   if (flags.model) args.push("-m", flags.model);
   if (flags.effort) args.push("--reasoning-effort", flags.effort);

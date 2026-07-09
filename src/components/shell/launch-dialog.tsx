@@ -13,11 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSpokStore } from "@/lib/store";
 import { toast } from "sonner";
-import {
-  DirectoryNavigator,
-  saveRecentDir,
-} from "@/components/shell/directory-navigator";
-import { trustWorkspace } from "@/lib/local-api-client";
+import { DirectoryNavigator } from "@/components/shell/directory-navigator";
+import { openWorkspaceSession } from "@/lib/workspace-session";
 import { FolderOpen } from "lucide-react";
 
 const LAST_CWD_KEY = "spok.lastCwd";
@@ -30,9 +27,6 @@ const LAST_CMD_KEY = "spok.lastCommand";
 export function LaunchDialog() {
   const open = useSpokStore((s) => s.launchOpen);
   const setOpen = useSpokStore((s) => s.setLaunchOpen);
-  const createSession = useSpokStore((s) => s.createSession);
-  const setViewMode = useSpokStore((s) => s.setViewMode);
-  const applyStreamEvent = useSpokStore((s) => s.applyStreamEvent);
 
   const [cwd, setCwd] = useState("");
   const [command, setCommand] = useState("grok");
@@ -56,55 +50,21 @@ export function LaunchDialog() {
       return;
     }
 
-    let trustedRoot = cwd;
     try {
-      const trusted = await trustWorkspace(cwd);
-      trustedRoot = trusted.root;
+      const base =
+        cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
+      const { name } = await openWorkspaceSession({
+        cwd,
+        command,
+        name: base,
+      });
+      setOpen(false);
+      toast.success(`Workspace open · ${name}`);
     } catch (e) {
       toast.error(
-        e instanceof Error ? e.message : "Failed to trust workspace root"
+        e instanceof Error ? e.message : "Failed to open workspace"
       );
-      return;
     }
-
-    saveRecentDir(trustedRoot);
-    try {
-      localStorage.setItem(LAST_CWD_KEY, trustedRoot);
-      localStorage.setItem(LAST_CMD_KEY, command);
-    } catch {
-      /* ignore */
-    }
-
-    const base =
-      trustedRoot.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
-    const sessionId = createSession({
-      name: base,
-      source: "live",
-      status: "ready",
-      config: {
-        cwd: trustedRoot,
-        command: command.trim() || "grok",
-        args: [],
-        autoScroll: true,
-        playbackSpeed: 1,
-      },
-    });
-
-    applyStreamEvent(sessionId, {
-      type: "system",
-      timestamp: Date.now(),
-      title: "Workspace ready",
-      content: `Repo: ${trustedRoot}\nCLI: ${command.trim() || "grok"}\nTrusted: yes\nDurable: yes (events saved under ~/.spok/sessions)\nPermission: manual (safe default)\n\nType a prompt below, or / for Grok commands. Enable always-approve only when intentional.`,
-      status: "success",
-      provider: "spok",
-    });
-
-    // Snapshot empty-ready workspace so it appears after restart even with few events
-    useSpokStore.getState().persistSessionNow(sessionId);
-
-    setViewMode("workspace");
-    setOpen(false);
-    toast.success(`Workspace open · ${base}`);
   };
 
   return (

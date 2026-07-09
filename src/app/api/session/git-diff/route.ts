@@ -14,6 +14,10 @@ import {
   normalizeRepoRelativePath,
   redactSecrets,
 } from "@/lib/security/secrets";
+import { getResolvedSettings } from "@/lib/settings/settings-fs";
+import { evaluatePolicy } from "@/lib/security/permission-policy";
+import { getActiveGrants } from "@/lib/security/approvals";
+import { appendAuditEvent } from "@/lib/security/audit";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +63,35 @@ export async function GET(req: Request) {
     });
   }
   const cwd = trust.path;
+
+  const settings = getResolvedSettings(cwd);
+  const policy = evaluatePolicy({
+    settings,
+    action: "git",
+    cwd,
+    command: "git",
+    args: ["status", "diff"],
+    grants: getActiveGrants(),
+  });
+  if (policy.decision === "deny") {
+    appendAuditEvent({
+      type: "policy_denial",
+      timestamp: Date.now(),
+      action: "git",
+      cwd,
+      command: "git",
+      policy: policy.policy,
+      decision: "blocked",
+      details: { reason: policy.reason },
+    });
+    return policyDenialResponse(403, {
+      error: policy.reason,
+      code: "command_not_allowed",
+      policy: "command_profile",
+      action: "git_diff",
+      details: { policy: policy.policy },
+    });
+  }
 
   if (!existsSync(cwd)) {
     return Response.json({ error: "Directory not found" }, { status: 404 });

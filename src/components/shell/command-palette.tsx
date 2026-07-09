@@ -15,7 +15,20 @@ import {
   Sparkles,
   Monitor,
   Keyboard,
+  Settings,
+  Shield,
+  GitBranch,
+  RefreshCw,
+  Plus,
+  Puzzle,
+  Layers,
+  Bell,
 } from "lucide-react";
+import { syncDiffsFromGit } from "@/lib/git/client";
+import {
+  openWorkspaceSession,
+  resolveCurrentWorkspace,
+} from "@/lib/workspace-session";
 import { SAMPLES } from "@/lib/samples";
 import { playEvents } from "@/lib/playback";
 import { buildExportPayload } from "@/lib/export-session";
@@ -27,6 +40,11 @@ export function CommandPalette() {
   const setViewMode = useSpokStore((s) => s.setViewMode);
   const setLaunchOpen = useSpokStore((s) => s.setLaunchOpen);
   const setImportOpen = useSpokStore((s) => s.setImportOpen);
+  const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
+  const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
+  const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
+  const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
+  const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
   const createSession = useSpokStore((s) => s.createSession);
   const applyStreamEvent = useSpokStore((s) => s.applyStreamEvent);
   const appendRawLog = useSpokStore((s) => s.appendRawLog);
@@ -38,6 +56,9 @@ export function CommandPalette() {
   const setScanlines = useSpokStore((s) => s.setScanlines);
   const expandAll = useSpokStore((s) => s.expandAll);
   const collapseAll = useSpokStore((s) => s.collapseAll);
+  const activeSessionId = useSpokStore((s) => s.activeSessionId);
+  const sessions = useSpokStore((s) => s.sessions);
+  const setReviewMode = useSpokStore((s) => s.setReviewMode);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -141,6 +162,34 @@ export function CommandPalette() {
               }}
             />
             <Item
+              icon={Plus}
+              label="New session in current workspace"
+              onSelect={() => {
+                const ws = resolveCurrentWorkspace();
+                if (!ws) {
+                  toast.error("No workspace yet — open a repo first");
+                  setOpen(false);
+                  setLaunchOpen(true);
+                  return;
+                }
+                void openWorkspaceSession({
+                  cwd: ws.cwd,
+                  command: ws.command,
+                })
+                  .then(({ name }) => {
+                    setOpen(false);
+                    toast.success(`New session · ${name}`);
+                  })
+                  .catch((e) => {
+                    toast.error(
+                      e instanceof Error
+                        ? e.message
+                        : "Could not start a new session"
+                    );
+                  });
+              }}
+            />
+            <Item
               icon={Upload}
               label="Import / paste trace"
               onSelect={() => {
@@ -149,6 +198,46 @@ export function CommandPalette() {
               }}
             />
             <Item icon={Download} label="Export active session" onSelect={exportSession} />
+            <Item
+              icon={Settings}
+              label="Settings & permissions"
+              onSelect={() => {
+                setOpen(false);
+                setSettingsOpen(true);
+              }}
+            />
+            <Item
+              icon={Puzzle}
+              label="Extension Center (skills, MCP, hooks)"
+              onSelect={() => {
+                setOpen(false);
+                setExtensionsOpen(true);
+              }}
+            />
+            <Item
+              icon={Layers}
+              label="Monitor (background jobs & schedules)"
+              onSelect={() => {
+                setOpen(false);
+                setMonitorOpen(true);
+              }}
+            />
+            <Item
+              icon={Bell}
+              label="Notifications"
+              onSelect={() => {
+                setOpen(false);
+                setNotificationsOpen(true);
+              }}
+            />
+            <Item
+              icon={Shield}
+              label={`Permission mode: ${appPermissionMode}`}
+              onSelect={() => {
+                setOpen(false);
+                setSettingsOpen(true);
+              }}
+            />
           </Command.Group>
 
           <Command.Group
@@ -159,8 +248,53 @@ export function CommandPalette() {
             <Item icon={LayoutGrid} label="Unified view" onSelect={() => { setViewMode("unified"); setOpen(false); }} />
             <Item icon={Brain} label="Trace view" onSelect={() => { setViewMode("trace"); setOpen(false); }} />
             <Item icon={FileCode2} label="Diff view" onSelect={() => { setViewMode("diff"); setOpen(false); }} />
+            <Item
+              icon={GitBranch}
+              label="Workspace · Git panel"
+              onSelect={() => {
+                setViewMode("workspace");
+                setOpen(false);
+                toast.message("Open the Git tab in the workspace right pane");
+              }}
+            />
             <Item icon={ScrollText} label="Log view" onSelect={() => { setViewMode("log"); setOpen(false); }} />
             <Item icon={BarChart3} label="Overview" onSelect={() => { setViewMode("overview"); setOpen(false); }} />
+          </Command.Group>
+
+          <Command.Group
+            heading="Git"
+            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-phosphor-green/40"
+          >
+            <Item
+              icon={RefreshCw}
+              label="Refresh git status & diffs"
+              onSelect={() => {
+                const s = activeSessionId ? sessions[activeSessionId] : null;
+                if (!s?.config.cwd) {
+                  toast.error("No workspace cwd");
+                  return;
+                }
+                void syncDiffsFromGit(s.id, s.config.cwd).then(() => {
+                  toast.success("Git status refreshed");
+                  setOpen(false);
+                });
+              }}
+            />
+            <Item
+              icon={GitBranch}
+              label="Toggle review mode"
+              onSelect={() => {
+                if (!activeSessionId) {
+                  toast.error("No active session");
+                  return;
+                }
+                const s = sessions[activeSessionId];
+                setReviewMode(activeSessionId, !s?.reviewMode);
+                setViewMode("workspace");
+                setOpen(false);
+                toast.message(s?.reviewMode ? "Review mode off" : "Review mode on");
+              }}
+            />
           </Command.Group>
 
           <Command.Group

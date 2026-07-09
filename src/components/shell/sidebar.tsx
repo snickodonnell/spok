@@ -14,6 +14,12 @@ import {
   PanelsTopLeft,
   HardDrive,
   History,
+  Settings,
+  Shield,
+  Plus,
+  Puzzle,
+  Layers,
+  Bell,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import type { Session, ViewMode } from "@/lib/types";
@@ -21,6 +27,11 @@ import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+import {
+  openWorkspaceSession,
+  resolveCurrentWorkspace,
+} from "@/lib/workspace-session";
 
 const VIEWS: { mode: ViewMode; icon: typeof Brain; label: string }[] = [
   { mode: "workspace", icon: PanelsTopLeft, label: "Workspace" },
@@ -42,10 +53,43 @@ export function Sidebar() {
   const setLaunchOpen = useSpokStore((s) => s.setLaunchOpen);
   const setImportOpen = useSpokStore((s) => s.setImportOpen);
   const setCommandPaletteOpen = useSpokStore((s) => s.setCommandPaletteOpen);
+  const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
+  const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
+  const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
+  const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
+  const automationJobs = useSpokStore((s) => s.automationJobs);
+  const notifications = useSpokStore((s) => s.notifications);
+  const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const activeJobs = automationJobs.filter((j) =>
+    ["queued", "running", "waiting_approval"].includes(j.status)
+  ).length;
+  const unreadNotes = notifications.filter((n) => !n.read).length;
 
   if (!open) return null;
 
   const list = Object.values(sessions).sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const startNewSessionInWorkspace = async () => {
+    const ws = resolveCurrentWorkspace();
+    if (!ws) {
+      toast.message("Pick a repo first", {
+        description: "Open a workspace, then use + to start another session there.",
+      });
+      setLaunchOpen(true);
+      return;
+    }
+    try {
+      const { name } = await openWorkspaceSession({
+        cwd: ws.cwd,
+        command: ws.command,
+      });
+      toast.success(`New session · ${name}`);
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Could not start a new session"
+      );
+    }
+  };
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-phosphor-green/15 bg-crt-panel">
@@ -94,6 +138,56 @@ export function Sidebar() {
           Commands
           <span className="ml-auto text-[10px] text-phosphor-green/35">⌘K</span>
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() => setMonitorOpen(true)}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          Monitor
+          {activeJobs > 0 && (
+            <span className="ml-auto rounded bg-phosphor-amber/20 px-1 font-mono text-[9px] text-phosphor-amber">
+              {activeJobs}
+            </span>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() => setNotificationsOpen(true)}
+        >
+          <Bell className="h-3.5 w-3.5" />
+          Alerts
+          {unreadNotes > 0 && (
+            <span className="ml-auto rounded bg-phosphor-cyan/20 px-1 font-mono text-[9px] text-phosphor-cyan">
+              {unreadNotes}
+            </span>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() => setExtensionsOpen(true)}
+        >
+          <Puzzle className="h-3.5 w-3.5" />
+          Extensions
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <Settings className="h-3.5 w-3.5" />
+          Settings
+          <span className="ml-auto inline-flex items-center gap-1 text-[9px] text-phosphor-cyan/60">
+            <Shield className="h-2.5 w-2.5" />
+            {appPermissionMode}
+          </span>
+        </Button>
       </div>
 
       <div className="border-b border-phosphor-green/15 p-2">
@@ -119,15 +213,26 @@ export function Sidebar() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col p-2">
-        <div className="mb-1 flex items-center justify-between px-1">
+        <div className="mb-1 flex items-center justify-between gap-1 px-1">
           <span className="text-[10px] uppercase tracking-widest text-phosphor-green/40">
             Sessions
           </span>
-          {list.length > 0 && (
-            <span className="font-mono text-[9px] text-phosphor-green/30">
-              {list.length}
-            </span>
-          )}
+          <div className="flex items-center gap-0.5">
+            {list.length > 0 && (
+              <span className="font-mono text-[9px] text-phosphor-green/30">
+                {list.length}
+              </span>
+            )}
+            <button
+              type="button"
+              className="inline-flex h-6 w-6 items-center justify-center rounded border border-phosphor-green/20 text-phosphor-green/70 transition-colors hover:border-phosphor-green/40 hover:bg-phosphor-green/10 hover:text-phosphor-green"
+              title="New session in current workspace"
+              aria-label="New session in current workspace"
+              onClick={() => void startNewSessionInWorkspace()}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
         <ScrollArea className="flex-1">
           {list.length === 0 ? (

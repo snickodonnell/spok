@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSpokStore } from "@/lib/store";
 import { formatDuration } from "@/lib/utils";
+import { GitStatusPill } from "@/components/git/git-status-pill";
 import {
   Wrench,
   Brain,
@@ -12,6 +13,7 @@ import {
   Clock,
   Plus,
   Minus,
+  MessageSquare,
 } from "lucide-react";
 
 export function MetricsBar() {
@@ -42,6 +44,7 @@ export function MetricsBar() {
       : m.elapsedMs;
 
   const eventCount = session.eventCount ?? session.eventLog?.length ?? 0;
+  const reviewCount = session.reviewComments?.filter((c) => !c.resolved).length ?? 0;
 
   const items = [
     { icon: Clock, label: formatDuration(elapsed), tip: "Elapsed" },
@@ -70,6 +73,15 @@ export function MetricsBar() {
           restored
         </span>
       )}
+      {session.config.isolationGuard && (
+        <span
+          title="Worktree isolation: writes to main checkout are blocked"
+          className="rounded border border-phosphor-magenta/35 bg-phosphor-magenta/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-phosphor-magenta"
+        >
+          isolated
+        </span>
+      )}
+      <GitStatusPill summary={session.gitSummary} cwd={session.config.cwd} compact />
       {items.map((item) => (
         <span
           key={item.tip}
@@ -80,6 +92,15 @@ export function MetricsBar() {
           <span className="font-mono">{item.label}</span>
         </span>
       ))}
+      {reviewCount > 0 && (
+        <span
+          title="Open review comments"
+          className="inline-flex items-center gap-1 text-phosphor-magenta/80"
+        >
+          <MessageSquare className="h-3 w-3" />
+          <span className="font-mono">{reviewCount}</span>
+        </span>
+      )}
       {eventCount > 0 && (
         <span
           title="Normalized events in log"
@@ -98,7 +119,7 @@ export function MetricsBar() {
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
     running: "bg-phosphor-green/20 text-phosphor-green border-phosphor-green/40",
-    starting: "bg-phosphor-amber/20 text-phosphor-amber border-phosphor-amber/40",
+    starting: "bg-phosphor-amber/20 text-phosphor-amber border-phosphor-amber/40 animate-pulse",
     ready: "bg-phosphor-cyan/15 text-phosphor-cyan border-phosphor-cyan/30",
     completed: "bg-phosphor-cyan/15 text-phosphor-cyan border-phosphor-cyan/30",
     error: "bg-red-500/15 text-red-400 border-red-500/40",

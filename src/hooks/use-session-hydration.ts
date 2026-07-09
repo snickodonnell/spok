@@ -10,6 +10,7 @@ import {
 } from "@/lib/session-persist-client";
 import { replayEvents } from "@/lib/session-replay";
 import { trustWorkspace } from "@/lib/local-api-client";
+import { fetchSettings } from "@/lib/settings-client";
 import type { Session } from "@/lib/types";
 
 const LAST_ACTIVE_KEY = "spok.lastActiveSessionId";
@@ -24,6 +25,9 @@ export function useSessionHydration() {
   const setHydrated = useSpokStore((s) => s.setHydrated);
   const setHydrating = useSpokStore((s) => s.setHydrating);
   const setViewMode = useSpokStore((s) => s.setViewMode);
+  const setAppPermissionMode = useSpokStore((s) => s.setAppPermissionMode);
+  const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
+  const setScanlines = useSpokStore((s) => s.setScanlines);
 
   useEffect(() => {
     if (started.current) return;
@@ -34,6 +38,20 @@ export function useSessionHydration() {
     (async () => {
       setHydrating(true);
       try {
+        // Load layered settings early so permission mode is visible
+        let maxRestore = 20;
+        try {
+          const settings = await fetchSettings();
+          if (!cancelled) {
+            setAppPermissionMode(settings.resolved.permissionMode);
+            setCrtEnabled(settings.resolved.ui.crtEnabled);
+            setScanlines(settings.resolved.ui.scanlines);
+            maxRestore = settings.resolved.maxRestoredSessions ?? 20;
+          }
+        } catch {
+          /* settings optional at boot */
+        }
+
         const metas = await listDurableSessions();
         if (cancelled) return;
 
@@ -51,7 +69,7 @@ export function useSessionHydration() {
         }
 
         // Restore most recent N sessions (keep UI snappy)
-        const toLoad = metas.slice(0, 20);
+        const toLoad = metas.slice(0, Math.max(1, Math.min(100, maxRestore)));
         let restored = 0;
         let activeId: string | null = null;
 
@@ -196,7 +214,15 @@ export function useSessionHydration() {
     return () => {
       cancelled = true;
     };
-  }, [hydrateSession, setHydrated, setHydrating, setViewMode]);
+  }, [
+    hydrateSession,
+    setHydrated,
+    setHydrating,
+    setViewMode,
+    setAppPermissionMode,
+    setCrtEnabled,
+    setScanlines,
+  ]);
 
   // Remember last active session for next launch
   useEffect(() => {

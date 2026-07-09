@@ -63,6 +63,10 @@ npm test
 
 Live workspaces append normalized events to disk under **`~/.spok/sessions/<id>/`** (override with `SPOK_SESSIONS_DIR`). On launch, Spok restores recent sessions from those logs so you can continue after a refresh. Exports are **v2** (snapshot + event log); v1 snapshot JSON still imports.
 
+### Permissions & settings
+
+Open **Settings** (sidebar, topbar gear, or `Ctrl+K`) to choose permission mode (`manual` default), auto-approved command profiles, and privacy options. Custom binaries require an **approval overlay** (allow once / always / deny). Settings layers: managed (env) → user (`~/.spok/settings.json`) → project (`.spok/settings.json`).
+
 ---
 
 ## Using Spok as your Grok Build interface

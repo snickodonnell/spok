@@ -9,9 +9,12 @@ import {
   renameSync,
 } from "fs";
 import path from "path";
-import os from "os";
 import type { Session, SessionMetaRecord, StreamEvent } from "./types";
 import { redactSecrets } from "./security/secrets";
+import {
+  ensureSessionsRoot,
+  getSessionsRoot as sessionsRootPath,
+} from "@/lib/spok-paths";
 
 export const SESSION_LOG_FORMAT_VERSION = 1 as const;
 export type { SessionMetaRecord };
@@ -29,23 +32,12 @@ export type NormalizedLogEnvelope = {
   event: StreamEvent;
 };
 
-function sessionsRoot(): string {
-  if (process.env.SPOK_SESSIONS_DIR?.trim()) {
-    return path.resolve(process.env.SPOK_SESSIONS_DIR.trim());
-  }
-  return path.join(os.homedir(), ".spok", "sessions");
-}
-
 export function getSessionsRoot(): string {
-  return sessionsRoot();
+  return sessionsRootPath();
 }
 
 function ensureRoot(): string {
-  const root = sessionsRoot();
-  if (!existsSync(root)) {
-    mkdirSync(root, { recursive: true });
-  }
-  return root;
+  return ensureSessionsRoot();
 }
 
 function sessionDir(id: string): string {

@@ -7,11 +7,22 @@ import { existsSync } from "fs";
 import {
   authorizePrivilegedRequest,
   denyFromAuthorize,
-  isCommandAllowed,
   policyDenialResponse,
 } from "@/lib/security/local-api";
 import { requireTrustedCwd } from "@/lib/security/workspace-trust";
 import { redactSecrets } from "@/lib/security/secrets";
+import { getResolvedSettings } from "@/lib/settings/settings-fs";
+import {
+  buildSpawnPreview,
+  evaluatePolicy,
+} from "@/lib/security/permission-policy";
+import {
+  consumeOnceToken,
+  createApprovalRequest,
+  getActiveGrants,
+} from "@/lib/security/approvals";
+import { appendAuditEvent } from "@/lib/security/audit";
+import { resolveCommandProfile } from "@/lib/security/command-profiles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +36,8 @@ type StartBody = {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** One-shot approval token from allow_once */
+  approvalToken?: string;
 };
 
 function ndjson(obj: unknown): string {
@@ -79,18 +92,19 @@ export async function POST(req: Request) {
     .filter((a): a is string => a != null && String(a).length >= 0)
     .map((a) => String(a));
 
-  if (!isCommandAllowed(command)) {
-    return policyDenialResponse(403, {
-      error: `Command not allowed: ${command}. Only the Grok CLI is permitted by default (set SPOK_ALLOW_CUSTOM_COMMANDS=1 to override).`,
-      code: "command_not_allowed",
-      policy: "command_profile",
-      action: "session_start",
-      details: { command },
-    });
-  }
-
   const trust = requireTrustedCwd(body.cwd || process.cwd());
   if (!trust.ok) {
+    appendAuditEvent({
+      type: "policy_denial",
+      timestamp: Date.now(),
+      sessionId,
+      action: "spawn",
+      cwd: trust.path,
+      command,
+      args,
+      policy: "workspace_trust",
+      decision: "blocked",
+    });
     return policyDenialResponse(403, {
       error: trust.reason,
       code: "untrusted_cwd",
@@ -108,7 +122,118 @@ export async function POST(req: Request) {
     );
   }
 
-  // Client-supplied env is ignored in Phase 0 (safer default). Process inherits server env only.
+  const settings = getResolvedSettings(cwd);
+  const once = consumeOnceToken(body.approvalToken, {
+    action: "spawn",
+    command,
+    args,
+    cwd,
+  });
+  const profile = resolveCommandProfile(command);
+  const decision = evaluatePolicy({
+    settings,
+    action: "spawn",
+    sessionId,
+    cwd,
+    command,
+    args,
+    grants: getActiveGrants(),
+    approvedFingerprint: once?.fingerprint,
+  });
+
+  if (decision.decision === "deny") {
+    appendAuditEvent({
+      type: "policy_denial",
+      timestamp: Date.now(),
+      sessionId,
+      action: "spawn",
+      cwd,
+      command,
+      args,
+      profile: decision.profile,
+      policy: decision.policy,
+      decision: "blocked",
+      risk: decision.risk,
+      details: { reason: decision.reason },
+    });
+    return policyDenialResponse(403, {
+      error: decision.reason,
+      code: "command_not_allowed",
+      policy: "command_profile",
+      action: "session_start",
+      details: {
+        command,
+        args,
+        cwd,
+        profile: decision.profile,
+        policy: decision.policy,
+        risk: decision.risk,
+      },
+    });
+  }
+
+  if (decision.decision === "ask") {
+    const preview = buildSpawnPreview(command, args, cwd);
+    const request = createApprovalRequest({
+      action: "spawn",
+      sessionId,
+      cwd,
+      command,
+      args,
+      profile: profile.id,
+      risk: decision.risk,
+      reason: decision.reason,
+      policy: decision.policy,
+      preview,
+    });
+    appendAuditEvent({
+      type: "approval_request",
+      timestamp: Date.now(),
+      sessionId,
+      action: "spawn",
+      cwd,
+      command,
+      args,
+      profile: profile.id,
+      policy: decision.policy,
+      risk: decision.risk,
+      details: { requestId: request.id },
+    });
+    // Keep `approval` at top level for the client overlay; also mirror details.
+    return Response.json(
+      {
+        error: decision.reason,
+        code: "approval_required",
+        policy: decision.policy,
+        action: "session_start",
+        approval: request,
+        details: {
+          profile: profile.id,
+          risk: decision.risk,
+          command,
+          args,
+          cwd,
+        },
+      },
+      { status: 403 }
+    );
+  }
+
+  appendAuditEvent({
+    type: "runtime_action",
+    timestamp: Date.now(),
+    sessionId,
+    action: "spawn",
+    cwd,
+    command,
+    args,
+    profile: decision.profile,
+    policy: decision.policy,
+    decision: "allowed",
+    risk: decision.risk,
+  });
+
+  // Client-supplied env is ignored (safer default). Process inherits server env only.
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
     FORCE_COLOR: "0",

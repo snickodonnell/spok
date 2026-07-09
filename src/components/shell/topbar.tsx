@@ -7,11 +7,18 @@ import {
   Play,
   Upload,
   Download,
+  Settings,
+  Shield,
+  Puzzle,
+  Layers,
+  Bell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useSpokStore } from "@/lib/store";
 import { buildExportPayload } from "@/lib/export-session";
 import { toast } from "sonner";
+import { unreadCount } from "@/lib/automation/notifications";
 
 export function Topbar() {
   const sidebarOpen = useSpokStore((s) => s.sidebarOpen);
@@ -19,6 +26,17 @@ export function Topbar() {
   const setCommandPaletteOpen = useSpokStore((s) => s.setCommandPaletteOpen);
   const setLaunchOpen = useSpokStore((s) => s.setLaunchOpen);
   const setImportOpen = useSpokStore((s) => s.setImportOpen);
+  const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
+  const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
+  const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
+  const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
+  const notifications = useSpokStore((s) => s.notifications);
+  const automationJobs = useSpokStore((s) => s.automationJobs);
+  const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const unread = unreadCount(notifications);
+  const activeJobs = automationJobs.filter((j) =>
+    ["queued", "running", "waiting_approval"].includes(j.status)
+  ).length;
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
   const setScanlines = useSpokStore((s) => s.setScanlines);
@@ -66,6 +84,26 @@ export function Topbar() {
         <span className="font-mono text-[11px] uppercase tracking-wider text-phosphor-cyan/70">
           {viewMode}
         </span>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="ml-2 inline-flex items-center gap-1 rounded border border-phosphor-green/20 px-1.5 py-0.5 transition hover:border-phosphor-cyan/40 hover:bg-phosphor-cyan/5"
+          title="Permission mode — open settings"
+        >
+          <Shield className="h-3 w-3 text-phosphor-cyan/80" />
+          <Badge
+            variant={
+              appPermissionMode === "bypass"
+                ? "error"
+                : appPermissionMode === "manual" || appPermissionMode === "plan"
+                  ? "cyan"
+                  : "amber"
+            }
+            className="h-4 px-1 text-[8px]"
+          >
+            {appPermissionMode}
+          </Badge>
+        </button>
       </div>
 
       <div className="ml-auto flex items-center gap-1">
@@ -80,6 +118,52 @@ export function Topbar() {
         <Button variant="ghost" size="sm" onClick={exportSession}>
           <Download className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Export</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-8 w-8"
+          onClick={() => setMonitorOpen(true)}
+          title="Monitor — background jobs, schedules, lanes"
+        >
+          <Layers className="h-4 w-4" />
+          {activeJobs > 0 && (
+            <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-phosphor-amber px-0.5 text-[8px] font-bold text-black">
+              {activeJobs}
+            </span>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-8 w-8"
+          onClick={() => setNotificationsOpen(true)}
+          title="Notifications"
+        >
+          <Bell className="h-4 w-4" />
+          {unread > 0 && (
+            <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-phosphor-cyan px-0.5 text-[8px] font-bold text-black">
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setExtensionsOpen(true)}
+          title="Extension Center — skills, MCP, hooks, agents"
+        >
+          <Puzzle className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setSettingsOpen(true)}
+          title="Settings & permissions"
+        >
+          <Settings className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"

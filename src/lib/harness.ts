@@ -4,6 +4,12 @@ import { useSpokStore } from "./store";
 import { GrokStreamIngestor } from "./grok-stream";
 import { localFetch } from "./local-api-client";
 import { redactSecrets } from "./security/secrets";
+import { requestUserApproval } from "./settings-client";
+import type { ApprovalRequest } from "./settings/types";
+import {
+  applyHookResultsToSession,
+  runSessionHooks,
+} from "./extensions-client";
 
 export type HarnessHandle = {
   sessionId: string;
@@ -13,6 +19,7 @@ export type HarnessHandle = {
 /**
  * Stream a Grok CLI invocation into a Spok session.
  * Deserializes Grok streaming-json / ACP session updates into friendly traces.
+ * Handles policy denials and interactive approval for custom/high-risk commands.
  */
 export async function runHarness(opts: {
   sessionId: string;
@@ -27,7 +34,7 @@ export async function runHarness(opts: {
   const store = useSpokStore.getState();
   const ingest = new GrokStreamIngestor(cwd);
 
-  store.updateSession(sessionId, { status: "running", error: undefined });
+  store.updateSession(sessionId, { status: "starting", error: undefined });
   store.applyStreamEvent(sessionId, {
     type: "system",
     timestamp: Date.now(),
@@ -36,32 +43,171 @@ export async function runHarness(opts: {
       ? `${label}\n$ ${command} ${args.map(shellQuote).join(" ")}`
       : `$ ${command} ${args.map(shellQuote).join(" ")}`,
     status: "running",
+    severity: "info",
+    provider: "harness",
   });
 
-  const res = await localFetch("/api/session/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, cwd, command, args }),
+  let approvalToken: string | undefined;
+  let res = await startProcess({
+    sessionId,
+    cwd,
+    command,
+    args,
     signal: opts.signal,
+    approvalToken,
   });
+
+  // Interactive approval loop (at most one user decision + retry)
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({ error: res.statusText }))) as {
+      error?: string;
+      code?: string;
+      approval?: ApprovalRequest;
+      policy?: string;
+    };
+
+    const approval =
+      err.approval ??
+      (err as { details?: { approval?: ApprovalRequest } }).details?.approval;
+    if (err.code === "approval_required" && approval) {
+      // Not "running" — avoids git-watch thrash while the modal is open
+      store.updateSession(sessionId, { status: "ready", error: undefined });
+      store.applyStreamEvent(sessionId, {
+        type: "system",
+        timestamp: Date.now(),
+        title: "Approval required",
+        content: `${approval.reason}\n\n${approval.preview}`,
+        status: "pending",
+        severity: "policy",
+        provider: "spok",
+        meta: {
+          audit: true,
+          auditType: "approval_request",
+          approvalId: approval.id,
+          risk: approval.risk,
+          profile: approval.profile,
+        },
+      });
+
+      let userDecision: {
+        decision: "allow_once" | "allow_always" | "deny";
+        onceToken?: string;
+      };
+      try {
+        userDecision = await requestUserApproval(approval);
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Approval flow failed";
+        store.updateSession(sessionId, { status: "ready", error: undefined });
+        store.applyStreamEvent(sessionId, {
+          type: "error",
+          timestamp: Date.now(),
+          title: "Approval interrupted",
+          content: message,
+          status: "error",
+          severity: "policy",
+          provider: "spok",
+        });
+        throw new Error(message);
+      }
+
+      if (userDecision.decision === "deny") {
+        store.updateSession(sessionId, { status: "ready", error: undefined });
+        store.applyStreamEvent(sessionId, {
+          type: "system",
+          timestamp: Date.now(),
+          title: "Approval denied",
+          content: "You denied this command. Nothing was executed.",
+          status: "skipped",
+          severity: "policy",
+          provider: "spok",
+          meta: {
+            audit: true,
+            auditType: "approval_decision",
+            decision: "deny",
+          },
+        });
+        return { code: null };
+      }
+
+      store.applyStreamEvent(sessionId, {
+        type: "system",
+        timestamp: Date.now(),
+        title: "Approval granted",
+        content: `Decision: ${userDecision.decision.replace(/_/g, " ")}`,
+        status: "success",
+        severity: "info",
+        provider: "spok",
+        meta: {
+          audit: true,
+          auditType: "approval_decision",
+          decision: userDecision.decision,
+        },
+      });
+
+      if (!userDecision.onceToken) {
+        const message =
+          "Approval succeeded but no launch token was issued. Try again.";
+        store.updateSession(sessionId, { status: "error", error: message });
+        throw new Error(message);
+      }
+
+      store.updateSession(sessionId, { status: "starting", error: undefined });
+      approvalToken = userDecision.onceToken;
+      res = await startProcess({
+        sessionId,
+        cwd,
+        command,
+        args,
+        signal: opts.signal,
+        approvalToken,
+      });
+    } else {
+      const message = err.error || "Failed to start process";
+      store.updateSession(sessionId, { status: "error", error: message });
+      store.applyStreamEvent(sessionId, {
+        type: "error",
+        timestamp: Date.now(),
+        title:
+          err.code === "untrusted_cwd"
+            ? "Workspace not trusted"
+            : err.code === "command_not_allowed"
+              ? "Policy denial"
+              : "Launch failed",
+        content: message,
+        status: "error",
+        severity: "policy",
+        meta: err.code ? { code: err.code, policy: err.policy } : undefined,
+      });
+      throw new Error(message);
+    }
+  }
 
   if (!res.ok) {
     const err = (await res.json().catch(() => ({ error: res.statusText }))) as {
       error?: string;
       code?: string;
+      approval?: ApprovalRequest;
     };
-    const message = err.error || "Failed to start process";
+    // Never re-prompt in a loop if policy still asks after a grant
+    const message =
+      err.error ||
+      (err.code === "approval_required"
+        ? "Still requires approval after grant — check Settings → Grants"
+        : "Failed to start process after approval");
     store.updateSession(sessionId, { status: "error", error: message });
     store.applyStreamEvent(sessionId, {
       type: "error",
       timestamp: Date.now(),
-      title: err.code === "untrusted_cwd" ? "Workspace not trusted" : "Launch failed",
+      title: "Launch failed",
       content: message,
       status: "error",
       meta: err.code ? { code: err.code } : undefined,
     });
     throw new Error(message);
   }
+
+  store.updateSession(sessionId, { status: "running", error: undefined });
 
   if (!res.body) throw new Error("No response stream");
 
@@ -86,6 +232,7 @@ export async function runHarness(opts: {
           content: "Run cancelled by user",
           status: "skipped",
         });
+        await fireLifecycleHooks(sessionId, cwd, "stop");
         break;
       }
 
@@ -98,7 +245,6 @@ export async function runHarness(opts: {
       for (const line of lines) {
         if (!line.trim()) continue;
 
-        // Exit envelope still needs special handling for session status
         try {
           const maybe = JSON.parse(line) as { type?: string; code?: number };
           if (maybe.type === "exit") {
@@ -120,14 +266,15 @@ export async function runHarness(opts: {
         for (const ev of result.events) {
           store.applyStreamEvent(sessionId, {
             ...ev,
-            content: ev.content != null ? redactSecrets(ev.content).text : ev.content,
-            summary: ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
+            content:
+              ev.content != null ? redactSecrets(ev.content).text : ev.content,
+            summary:
+              ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
           });
         }
       }
     }
 
-    // Flush any remaining partial line
     if (buffer.trim()) {
       const result = ingest.ingestLine(buffer, Date.now());
       if (result.logLine) {
@@ -136,8 +283,10 @@ export async function runHarness(opts: {
       for (const ev of result.events) {
         store.applyStreamEvent(sessionId, {
           ...ev,
-          content: ev.content != null ? redactSecrets(ev.content).text : ev.content,
-          summary: ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
+          content:
+            ev.content != null ? redactSecrets(ev.content).text : ev.content,
+          summary:
+            ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
         });
       }
     }
@@ -158,7 +307,6 @@ export async function runHarness(opts: {
     throw e;
   }
 
-  // Final git snapshot so untracked/new files (e.g. plan.md) appear in Diff
   try {
     await refreshGitDiff(sessionId, cwd);
   } catch {
@@ -170,7 +318,13 @@ export async function runHarness(opts: {
     store.updateSession(sessionId, { status: "ready" });
   }
 
-  // Flush durable event log + snapshot so reopen can restore
+  // Always fire stop when a run finishes; also session_end on clean exit
+  // (hooks should not list both events unless they want both)
+  await fireLifecycleHooks(sessionId, cwd, "stop");
+  if (exitCode === 0) {
+    await fireLifecycleHooks(sessionId, cwd, "session_end");
+  }
+
   try {
     store.persistSessionNow(sessionId);
   } catch {
@@ -180,48 +334,52 @@ export async function runHarness(opts: {
   return { code: exitCode };
 }
 
+/** Run trusted hooks and materialize their trace events into the session. */
+async function fireLifecycleHooks(
+  sessionId: string,
+  cwd: string,
+  event: "stop" | "session_end" | "session_start" | "prompt_submit"
+): Promise<void> {
+  try {
+    const { results } = await runSessionHooks({
+      event,
+      sessionId,
+      cwd,
+    });
+    const store = useSpokStore.getState();
+    applyHookResultsToSession(sessionId, results, (sid, ev) => {
+      store.applyStreamEvent(sid, ev);
+    });
+  } catch {
+    /* hooks must never break the harness loop */
+  }
+}
+
+async function startProcess(opts: {
+  sessionId: string;
+  cwd: string;
+  command: string;
+  args: string[];
+  signal?: AbortSignal;
+  approvalToken?: string;
+}): Promise<Response> {
+  return localFetch("/api/session/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: opts.sessionId,
+      cwd: opts.cwd,
+      command: opts.command,
+      args: opts.args,
+      approvalToken: opts.approvalToken,
+    }),
+    signal: opts.signal,
+  });
+}
+
 export async function refreshGitDiff(sessionId: string, cwd: string) {
-  const res = await localFetch(
-    `/api/session/git-diff?cwd=${encodeURIComponent(cwd)}`
-  );
-  if (!res.ok) return;
-  const data = (await res.json()) as {
-    diff?: string;
-    files?: Array<{
-      path: string;
-      status: string;
-      oldContent?: string;
-      newContent?: string;
-      skipped?: boolean;
-    }>;
-  };
-
-  const store = useSpokStore.getState();
-  const { parseUnifiedDiff, createFileDiff } = await import("./diff-utils");
-
-  if (data.diff) {
-    for (const f of parseUnifiedDiff(data.diff)) {
-      store.upsertFileDiff(sessionId, f);
-    }
-  }
-  if (data.files?.length) {
-    for (const f of data.files) {
-      store.upsertFileDiff(
-        sessionId,
-        createFileDiff({
-          path: f.path,
-          oldContent: f.oldContent ?? "",
-          newContent: f.newContent ?? "",
-          status:
-            f.status === "added" || f.status === "untracked"
-              ? "added"
-              : f.status === "deleted"
-                ? "deleted"
-                : "modified",
-        })
-      );
-    }
-  }
+  const { syncDiffsFromGit } = await import("./git/client");
+  await syncDiffsFromGit(sessionId, cwd);
 }
 
 function shellQuote(s: string): string {

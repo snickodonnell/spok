@@ -2,6 +2,7 @@ import type { Session, SessionConfig, StreamEvent } from "./types";
 import { buildFileTree, createFileDiff } from "./diff-utils";
 import { streamEventToNodeType, extractPaths } from "./parser";
 import { nanoid } from "nanoid";
+import { mergeStreamingText, preferFullerText } from "./trace-text";
 
 /**
  * Pure (non-Zustand) session materializer for replay/import/tests.
@@ -231,8 +232,9 @@ export function applyEventToSession(
     }
   }
 
-  const nodeId = event.id || nanoid(10);
-  const existingNode = nodes[nodeId];
+  let nodeId = event.id || nanoid(10);
+  let existingNode = nodes[nodeId];
+  let eventContent = event.content;
   let resolvedParent = event.parentId ?? existingNode?.parentId ?? null;
 
   if (event.type === "tool_result" && !resolvedParent) {
@@ -274,9 +276,10 @@ export function applyEventToSession(
       type: "tool_call",
       title: event.title || existingNode.title,
       content: event.content || existingNode.content,
-      summary: event.content
-        ? event.content.slice(0, 120)
-        : existingNode.summary,
+      summary: event.summary
+        || (event.content
+          ? event.content.split(/\r?\n/).find((l) => l.trim())?.trim().slice(0, 160)
+          : existingNode.summary),
       timestamp: existingNode.timestamp,
       durationMs: event.durationMs,
       status: event.status ?? "success",
@@ -287,28 +290,77 @@ export function applyEventToSession(
       meta: { ...existingNode.meta, ...event.meta },
     });
   } else {
+    const isProse =
+      event.type === "thinking" ||
+      event.type === "reasoning" ||
+      event.type === "message" ||
+      event.type === "plan" ||
+      event.type === "plan_update";
+    // Fold short thinking fragments into the latest thought node
+    if (
+      (event.type === "thinking" || event.type === "reasoning") &&
+      !existingNode
+    ) {
+      const latestThought = Object.values(nodes)
+        .filter((n) => n.type === "thinking" || n.type === "reasoning")
+        .sort((a, b) => b.timestamp - a.timestamp)[0];
+      if (latestThought) {
+        const folded = mergeStreamingText(
+          latestThought.content || "",
+          eventContent || ""
+        );
+        nodeId = latestThought.id;
+        existingNode = latestThought;
+        eventContent = preferFullerText(folded, eventContent);
+      }
+    }
+    const nextContent = isProse
+      ? preferFullerText(
+          mergeStreamingText(existingNode?.content || "", eventContent || ""),
+          preferFullerText(eventContent, existingNode?.content)
+        )
+      : eventContent !== undefined && eventContent !== ""
+        ? eventContent
+        : existingNode?.content || "";
+    const nextSummary = isProse
+      ? preferFullerText(
+          event.summary ||
+            (nextContent
+              ? nextContent.replace(/\s+/g, " ").trim().slice(0, 160)
+              : undefined),
+          existingNode?.summary
+        )
+      : event.summary ||
+        (nextContent
+          ? nextContent.split(/\r?\n/).find((l) => l.trim())?.trim().slice(0, 160)
+          : undefined) ||
+        existingNode?.summary;
+
     upsertNode(nodes, rootTraceIds, {
       id: nodeId,
       parentId: resolvedParent,
       type: streamEventToNodeType(event.type),
-      title: event.title || event.type,
-      content: event.content || "",
-      summary:
-        event.summary ||
-        (event.content ? event.content.slice(0, 120) : undefined),
+      title: event.title || existingNode?.title || event.type,
+      content: nextContent,
+      summary: nextSummary,
       timestamp: existingNode?.timestamp ?? event.timestamp,
-      durationMs: event.durationMs,
+      durationMs: event.durationMs ?? existingNode?.durationMs,
       status:
         event.status ??
+        existingNode?.status ??
         (event.type === "error" || event.type === "parser_error"
           ? "error"
           : "success"),
       children: existingNode?.children ?? [],
       links,
       depth,
-      toolName: event.toolName,
-      subagentId: event.subagentId,
-      meta: event.meta,
+      toolName: event.toolName || existingNode?.toolName,
+      subagentId: event.subagentId || existingNode?.subagentId,
+      meta: {
+        ...existingNode?.meta,
+        ...event.meta,
+        ...(event.path ? { path: event.path } : {}),
+      },
     });
   }
 

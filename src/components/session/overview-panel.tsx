@@ -35,6 +35,10 @@ export function OverviewPanel() {
     return acc;
   }, {});
 
+  const g = session.gitSummary;
+  const reviewOpen =
+    session.reviewComments?.filter((c) => !c.resolved).length ?? 0;
+
   const cards = [
     {
       icon: Activity,
@@ -71,6 +75,28 @@ export function OverviewPanel() {
       label: "Subagents",
       value: String(m.subagentCount),
       accent: "text-phosphor-cyan",
+    },
+    {
+      icon: GitCommit,
+      label: "Branch",
+      value: g?.branch ?? "—",
+      accent: "text-phosphor-cyan",
+    },
+    {
+      icon: FileCode2,
+      label: "Git dirty",
+      value: g
+        ? g.clean
+          ? "clean"
+          : `${g.stagedCount}S ${g.unstagedCount}M ${g.untrackedCount}?`
+        : "—",
+      accent: g && !g.clean ? "text-phosphor-amber" : "text-phosphor-green",
+    },
+    {
+      icon: Activity,
+      label: "Review",
+      value: String(reviewOpen),
+      accent: "text-phosphor-magenta",
     },
   ];
 

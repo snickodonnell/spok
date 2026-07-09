@@ -5,9 +5,15 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight, ChevronDown, Link2 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import type { TraceNode } from "@/lib/types";
-import { cn, formatDuration, formatRelativeTime, truncate } from "@/lib/utils";
+import { cn, formatDuration, formatRelativeTime } from "@/lib/utils";
 import { TraceNodeIcon } from "./trace-node-icon";
 import { Badge } from "@/components/ui/badge";
+import {
+  isProseTraceType,
+  traceKindLabel,
+  tracePrimaryText,
+  traceSecondaryText,
+} from "@/lib/trace-display";
 
 function flattenVisible(
   roots: string[],
@@ -25,12 +31,15 @@ function flattenVisible(
 
   function matches(n: TraceNode): boolean {
     if (filter.types.length && !filter.types.includes(n.type)) return false;
-    if (filter.status.length && n.status && !filter.status.includes(n.status)) return false;
+    if (filter.status.length && n.status && !filter.status.includes(n.status))
+      return false;
     if (filter.showOnlyLinked && n.links.length === 0) return false;
     if (!q) return true;
+    const primary = tracePrimaryText(n).toLowerCase();
     return (
       n.title.toLowerCase().includes(q) ||
       n.content.toLowerCase().includes(q) ||
+      primary.includes(q) ||
       (n.toolName?.toLowerCase().includes(q) ?? false)
     );
   }
@@ -59,17 +68,17 @@ function flattenVisible(
 }
 
 function statusBadge(status?: TraceNode["status"]) {
-  if (!status) return null;
+  if (!status || status === "success") return null;
   const variant =
     status === "error"
       ? "error"
       : status === "running"
         ? "amber"
-        : status === "success"
-          ? "success"
+        : status === "skipped"
+          ? "muted"
           : "muted";
   return (
-    <Badge variant={variant} className="ml-1">
+    <Badge variant={variant} className="ml-1 shrink-0 text-[9px]">
       {status}
     </Badge>
   );
@@ -88,17 +97,32 @@ export function TraceTree() {
 
   const flat = useMemo(() => {
     if (!session) return [];
-    return flattenVisible(session.rootTraceIds, session.nodes, expandedNodeIds, filter);
+    return flattenVisible(
+      session.rootTraceIds,
+      session.nodes,
+      expandedNodeIds,
+      filter
+    );
   }, [session, expandedNodeIds, filter]);
 
   const virtualizer = useVirtualizer({
     count: flat.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 44,
-    overscan: 12,
+    estimateSize: (i) => {
+      const n = flat[i];
+      if (!n) return 40;
+      if (isProseTraceType(n.type)) {
+        const lines = Math.min(
+          8,
+          Math.max(2, Math.ceil(tracePrimaryText(n).length / 72))
+        );
+        return 28 + lines * 16;
+      }
+      return 40;
+    },
+    overscan: 10,
   });
 
-  // Auto-scroll to selected / latest when running
   useEffect(() => {
     if (!session?.selectedTraceId || !session.config.autoScroll) return;
     const idx = flat.findIndex((n) => n.id === session.selectedTraceId);
@@ -156,7 +180,11 @@ export function TraceTree() {
   return (
     <div ref={parentRef} className="h-full overflow-auto">
       <div
-        style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}
+        style={{
+          height: virtualizer.getTotalSize(),
+          position: "relative",
+          width: "100%",
+        }}
       >
         {virtualizer.getVirtualItems().map((vRow) => {
           const node = flat[vRow.index];
@@ -164,6 +192,10 @@ export function TraceTree() {
           const isExpanded = expandedNodeIds.has(node.id);
           const isSelected = session.selectedTraceId === node.id;
           const hasLink = node.links.some((l) => l.kind === "file");
+          const prose = isProseTraceType(node.type);
+          const primary = tracePrimaryText(node);
+          const secondary = prose ? null : traceSecondaryText(node);
+          const kind = traceKindLabel(node);
 
           return (
             <div
@@ -183,12 +215,13 @@ export function TraceTree() {
                 onClick={() => selectTrace(node.id)}
                 onKeyDown={(e) => onKeyNav(e, node, vRow.index)}
                 className={cn(
-                  "group flex w-full items-start gap-1 border-l-2 px-2 py-1.5 text-left transition-colors",
+                  "group flex w-full items-start gap-1.5 border-l-2 px-2 py-2 text-left transition-colors",
                   isSelected
                     ? "border-phosphor-green bg-phosphor-green/10 shadow-[inset_0_0_20px_rgba(51,255,102,0.06)]"
-                    : "border-transparent hover:bg-phosphor-green/5 hover:border-phosphor-green/20"
+                    : "border-transparent hover:border-phosphor-green/20 hover:bg-phosphor-green/5",
+                  prose && "py-2.5"
                 )}
-                style={{ paddingLeft: 8 + node.depth * 16 }}
+                style={{ paddingLeft: 8 + node.depth * 14 }}
               >
                 <span
                   className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center"
@@ -209,21 +242,27 @@ export function TraceTree() {
                     <span className="h-3.5 w-3.5" />
                   )}
                 </span>
-                <TraceNodeIcon type={node.type} className="mt-0.5 shrink-0" />
+                <TraceNodeIcon
+                  type={node.type}
+                  className="mt-0.5 shrink-0 opacity-80"
+                />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
+                  {/* Kind + status chrome — small, not the story */}
+                  <div className="mb-0.5 flex items-center gap-1.5">
                     <span
                       className={cn(
-                        "truncate text-xs font-medium",
-                        isSelected ? "text-phosphor-green crt-glow" : "text-phosphor-green/85"
+                        "font-mono text-[9px] uppercase tracking-[0.14em]",
+                        prose
+                          ? "text-phosphor-cyan/70"
+                          : "text-phosphor-green/40"
                       )}
                     >
-                      {node.title}
+                      {kind}
                     </span>
                     {statusBadge(node.status)}
                     {hasLink && (
                       <Link2
-                        className="h-3 w-3 shrink-0 text-phosphor-cyan cursor-pointer"
+                        className="h-3 w-3 shrink-0 cursor-pointer text-phosphor-cyan"
                         onClick={(e) => {
                           e.stopPropagation();
                           navigateTraceLink(node.id);
@@ -231,18 +270,41 @@ export function TraceTree() {
                       />
                     )}
                     {node.durationMs != null && (
-                      <span className="ml-auto shrink-0 text-[10px] text-phosphor-green/35">
+                      <span className="ml-auto shrink-0 font-mono text-[10px] text-phosphor-green/30">
                         {formatDuration(node.durationMs)}
                       </span>
                     )}
                   </div>
-                  {node.summary && (
-                    <div className="truncate text-[11px] text-phosphor-green/40">
-                      {truncate(node.summary, 100)}
+
+                  {/* Primary: actual thinking / message text */}
+                  <div
+                    className={cn(
+                      "whitespace-pre-wrap break-words text-[12px] leading-relaxed",
+                      prose
+                        ? isSelected
+                          ? "text-phosphor-green/95"
+                          : "text-phosphor-green/80"
+                        : isSelected
+                          ? "font-medium text-phosphor-green crt-glow"
+                          : "text-phosphor-green/85",
+                      prose && !isSelected && "line-clamp-6",
+                      prose && isSelected && "line-clamp-12"
+                    )}
+                  >
+                    {primary || (
+                      <span className="italic text-phosphor-green/35">
+                        (empty)
+                      </span>
+                    )}
+                  </div>
+
+                  {secondary && (
+                    <div className="mt-0.5 truncate font-mono text-[10px] text-phosphor-green/35">
+                      {secondary}
                     </div>
                   )}
                 </div>
-                <span className="mt-0.5 shrink-0 text-[10px] text-phosphor-green/30 opacity-0 group-hover:opacity-100">
+                <span className="mt-0.5 shrink-0 text-[10px] text-phosphor-green/25 opacity-0 transition-opacity group-hover:opacity-100">
                   {formatRelativeTime(node.timestamp)}
                 </span>
               </button>

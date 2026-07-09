@@ -9,6 +9,12 @@ import { Topbar } from "./topbar";
 import { CommandPalette } from "./command-palette";
 import { LaunchDialog } from "./launch-dialog";
 import { ImportDialog } from "./import-dialog";
+import { SettingsDialog } from "./settings-dialog";
+import { ExtensionsDialog } from "./extensions-dialog";
+import { MonitorPanel } from "@/components/automation/monitor-panel";
+import { NotificationsDrawer } from "@/components/automation/notifications-drawer";
+import { ApprovalOverlay } from "./approval-overlay";
+import { startScheduleTicker, ensureQueuePump } from "@/lib/background-runner";
 import { MetricsBar } from "@/components/session/metrics-bar";
 import { Timeline } from "@/components/session/timeline";
 import { TracePanel } from "@/components/trace/trace-panel";
@@ -35,6 +41,18 @@ export function AppShell() {
   const activeSession = activeSessionId ? sessions[activeSessionId] : null;
 
   useSessionHydration();
+
+  // Phase 5: schedule ticker + background queue pump
+  useEffect(() => {
+    const stop = startScheduleTicker();
+    ensureQueuePump();
+    return stop;
+  }, []);
+
+  const automationJobs = useSpokStore((s) => s.automationJobs);
+  useEffect(() => {
+    ensureQueuePump();
+  }, [automationJobs]);
 
   // Only poll git while a harness run is in progress (not on idle/ready workspace).
   // End-of-run refresh is handled once in runHarness; manual refresh is on Diff panel.
@@ -133,6 +151,11 @@ export function AppShell() {
         <CommandPalette />
         <LaunchDialog />
         <ImportDialog />
+        <SettingsDialog />
+        <ExtensionsDialog />
+        <MonitorPanel />
+        <NotificationsDrawer />
+        <ApprovalOverlay />
         <Toaster
           theme="dark"
           position="bottom-right"
