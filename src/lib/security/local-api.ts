@@ -1,5 +1,4 @@
 import { randomBytes, timingSafeEqual } from "crypto";
-import { NextResponse } from "next/server";
 import { CAPABILITY_HEADER } from "./local-api-shared";
 import { resolveCommandProfile } from "./command-profiles";
 
@@ -252,14 +251,26 @@ export function authorizePrivilegedRequest(
   return { ok: true };
 }
 
+/**
+ * Structured policy denial as a standard Web Response.
+ * Framework-agnostic so Next route wrappers and the standalone runtime share one denial shape.
+ */
 export function policyDenialResponse(
   status: number,
   body: LocalPolicyDenial
-): NextResponse {
-  return NextResponse.json(body, { status });
+): Response {
+  return Response.json(body, {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
-export function denyFromAuthorize(result: Extract<AuthorizeResult, { ok: false }>): NextResponse {
+export function denyFromAuthorize(
+  result: Extract<AuthorizeResult, { ok: false }>
+): Response {
   return policyDenialResponse(result.status, result.body);
 }
 

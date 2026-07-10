@@ -9,20 +9,13 @@ import type {
   SessionMetrics,
   StreamEvent,
   TraceFilter,
-  TraceNode,
   ViewMode,
   ProductMode,
   WorkspaceRightTab,
   LeftTraceMode,
 } from "./types";
-import { buildFileTree, createFileDiff } from "./diff-utils";
-import { streamEventToNodeType, extractPaths } from "./parser";
+import { buildFileTree } from "./diff-utils";
 import { stampStreamEvent } from "./stream-event-schema";
-import {
-  isNonThoughtContent,
-  mergeStreamingText,
-  preferFullerText,
-} from "./trace-text";
 import {
   deleteDurableSession,
   enqueueDurableEvents,
@@ -30,7 +23,10 @@ import {
   registerDurableSession,
   saveDurableSnapshot,
 } from "./session-persist-client";
-import { extractProviderTokens, mergeTokensIntoMetrics } from "./usage";
+import {
+  reduceStreamEvents,
+  recomputeSessionMetrics,
+} from "./session-reduce";
 
 const defaultConfig: SessionConfig = {
   cwd: "",
@@ -89,73 +85,11 @@ function createSession(partial?: Partial<Session>): Session {
 }
 
 function recomputeMetrics(session: Session): SessionMetrics {
-  const nodes = Object.values(session.nodes);
-  const files = Object.values(session.files);
-  const startedAt = session.metrics.startedAt ?? session.createdAt;
-  const endedAt =
-    session.status === "completed" ||
-    session.status === "error" ||
-    session.status === "stopped" ||
-    session.status === "ready"
-      ? session.metrics.endedAt
-      : null;
-  // Preserve provider-reported token totals across metric recompute
-  const tokensEstimate = session.metrics.tokensEstimate;
-  const tokensLimit = session.metrics.tokensLimit;
-  return {
-    startedAt,
-    endedAt,
-    elapsedMs: (endedAt ?? Date.now()) - startedAt,
-    toolCallCount: nodes.filter((n) => n.type === "tool_call").length,
-    thinkingSteps: nodes.filter((n) => n.type === "thinking" || n.type === "reasoning").length,
-    filesChanged: files.length,
-    linesAdded: files.reduce((s, f) => s + f.additions, 0),
-    linesDeleted: files.reduce((s, f) => s + f.deletions, 0),
-    subagentCount: nodes.filter((n) => n.type === "subagent").length,
-    errorCount: nodes.filter((n) => n.type === "error" || n.status === "error").length,
-    tokensEstimate,
-    tokensLimit,
-  };
-}
-
-function attachChild(nodes: Record<string, TraceNode>, parentId: string | null, childId: string) {
-  if (!parentId || !nodes[parentId]) return;
-  if (!nodes[parentId].children.includes(childId)) {
-    nodes[parentId].children = [...nodes[parentId].children, childId];
-  }
+  return recomputeSessionMetrics(session);
 }
 
 function normalizeRepoPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.?\//, "");
-}
-
-/** Upsert a trace node; preserves children when updating an existing id */
-function upsertNode(
-  nodes: Record<string, TraceNode>,
-  rootTraceIds: string[],
-  node: TraceNode
-) {
-  const existing = nodes[node.id];
-  if (existing) {
-    nodes[node.id] = {
-      ...existing,
-      ...node,
-      children: existing.children,
-      // Keep parent unless explicitly re-parented
-      parentId: node.parentId ?? existing.parentId,
-      depth: node.parentId
-        ? node.depth
-        : existing.depth,
-      links: node.links.length ? node.links : existing.links,
-    };
-    return;
-  }
-  nodes[node.id] = node;
-  if (!node.parentId) {
-    if (!rootTraceIds.includes(node.id)) rootTraceIds.push(node.id);
-  } else {
-    attachChild(nodes, node.parentId, node.id);
-  }
 }
 
 interface SpokState {
@@ -250,8 +184,11 @@ interface SpokState {
   setHydrating: (v: boolean) => void;
 
   applyStreamEvent: (sessionId: string, event: StreamEvent) => void;
+  /** Apply many events in a single Zustand commit (metrics once at end). */
   applyStreamEvents: (sessionId: string, events: StreamEvent[]) => void;
   appendRawLog: (sessionId: string, line: string) => void;
+  /** Append many raw log lines in one commit. */
+  appendRawLogs: (sessionId: string, lines: string[]) => void;
   /** Persist current snapshot to disk (debounced callers may use flush). */
   persistSessionNow: (sessionId: string) => void;
 
@@ -523,382 +460,39 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   },
 
   applyStreamEvent: (sessionId, event) => {
-    const stamped = stampStreamEvent(event, {
-      sessionId,
-      provider: event.provider ?? "spok",
-    });
+    get().applyStreamEvents(sessionId, [event]);
+  },
+
+  applyStreamEvents: (sessionId, events) => {
+    if (!events.length) return;
+
+    const stampedList = events.map((event) =>
+      stampStreamEvent(event, {
+        sessionId,
+        provider: event.provider ?? "spok",
+      })
+    );
 
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session) return s;
-      // Use stamped event for the rest of the reducer
-      event = stamped;
 
-      const appendLog = (updated: Session): Session => {
-        const prevLog = session.eventLog ?? [];
-        // Keep a bounded in-memory window; durable disk holds the full append-only log
-        const MAX_MEM = 8_000;
-        const nextLog =
-          prevLog.length >= MAX_MEM
-            ? [...prevLog.slice(prevLog.length - MAX_MEM + 1), stamped]
-            : [...prevLog, stamped];
-        return {
-          ...updated,
-          eventLog: nextLog,
-          eventCount: (session.eventCount ?? prevLog.length) + 1,
-        };
-      };
-
-      const nodes = { ...session.nodes };
-      const files = { ...session.files };
-      const rootTraceIds = [...session.rootTraceIds];
-      let selectedFileId = session.selectedFileId;
-      const expanded = new Set(s.expandedNodeIds);
-
-      if (event.type === "session_start") {
-        const updated = appendLog({
-          ...session,
-          status: "running",
-          metrics: { ...session.metrics, startedAt: event.timestamp },
-          updatedAt: Date.now(),
-        });
-        return {
-          sessions: { ...s.sessions, [sessionId]: updated },
-        };
-      }
-
-      if (event.type === "session_end") {
-        const updated = appendLog({
-          ...session,
-          status: event.status === "error" ? "error" : "completed",
-          metrics: {
-            ...recomputeMetrics(session),
-            endedAt: event.timestamp,
-          },
-          updatedAt: Date.now(),
-        });
-        updated.metrics = recomputeMetrics(updated);
-        return { sessions: { ...s.sessions, [sessionId]: updated } };
-      }
-
-      // File / diff events
-      if (event.type === "file_change" || event.type === "diff") {
-        if (event.path) {
-          const path = normalizeRepoPath(event.path);
-          const existing = Object.values(files).find(
-            (f) => normalizeRepoPath(f.path) === path || f.path.endsWith(path)
-          );
-          const fd = createFileDiff({
-            path: existing?.path ?? path,
-            oldPath: event.oldPath,
-            oldContent: event.oldContent ?? existing?.oldContent ?? "",
-            newContent: event.newContent ?? existing?.newContent ?? "",
-            status: event.diffStatus,
-            relatedTraceIds: existing?.relatedTraceIds ?? [],
-            timestamp: event.timestamp,
-          });
-          if (existing) {
-            fd.id = existing.id;
-            fd.relatedTraceIds = [...existing.relatedTraceIds];
-          }
-          if (event.id && !fd.relatedTraceIds.includes(event.id)) {
-            fd.relatedTraceIds.push(event.id);
-          }
-          files[fd.id] = fd;
-          selectedFileId = fd.id;
-
-          const nodeId = event.id || nanoid(10);
-          const prev = nodes[nodeId];
-          const parentId =
-            event.parentId ??
-            prev?.parentId ??
-            null;
-          const depth = parentId && nodes[parentId] ? nodes[parentId].depth + 1 : 0;
-          upsertNode(nodes, rootTraceIds, {
-            id: nodeId,
-            parentId,
-            type: "file_change",
-            title: event.title || `File: ${path}`,
-            content:
-              event.content || `${event.diffStatus ?? "modified"} ${path}`,
-            summary: path,
-            timestamp: event.timestamp,
-            status: "success",
-            children: prev?.children ?? [],
-            links: [
-              {
-                kind: "file",
-                targetId: fd.id,
-                path,
-                label: path,
-              },
-            ],
-            depth,
-            meta: event.meta,
-          });
-          expanded.add(nodeId);
-          if (parentId) expanded.add(parentId);
-
-          const fileTree = buildFileTree(Object.values(files));
-          const updated = appendLog({
-            ...session,
-            nodes,
-            files,
-            fileTree,
-            rootTraceIds,
-            selectedFileId,
-            selectedTraceId: nodeId,
-            status:
-              session.status === "idle" || session.status === "ready"
-                ? "running"
-                : session.status,
-            updatedAt: Date.now(),
-            metrics: session.metrics,
-          });
-          updated.metrics = recomputeMetrics(updated);
-          return {
-            sessions: { ...s.sessions, [sessionId]: updated },
-            expandedNodeIds: expanded,
-            linkedHighlightFileId: fd.id,
-          };
-        }
-      }
-
-      // Generic trace node (upsert by id for chunk coalescing)
-      // Fold thinking/reasoning fragments into the latest open thought node so
-      // the UI never ends up with one node per streamed word/digit.
-      let nodeId = event.id || nanoid(10);
-      let existingNode = nodes[nodeId];
-      const isThoughtType =
-        event.type === "thinking" || event.type === "reasoning";
-      if (isThoughtType) {
-        const incoming = event.content || "";
-        // Never fold CLI/Git noise into a thought node
-        if (
-          incoming &&
-          isNonThoughtContent(incoming) &&
-          !incoming.includes("\n")
-        ) {
-          event = { ...event, content: "", summary: undefined };
-        } else if (incoming) {
-          // Only coalesce same-id or true cumulative/stream deltas.
-          // Distinct status thoughts must stay permanent separate nodes.
-          const latestThought = Object.values(nodes)
-            .filter((n) => n.type === "thinking" || n.type === "reasoning")
-            .sort((a, b) => b.timestamp - a.timestamp)[0];
-          if (latestThought) {
-            const prev = latestThought.content || "";
-            const sameId = !!event.id && event.id === latestThought.id;
-            const cumulative =
-              incoming.startsWith(prev) ||
-              (prev.startsWith(incoming) && incoming.length < prev.length);
-            if (sameId || cumulative) {
-              nodeId = latestThought.id;
-              existingNode = latestThought;
-              event = {
-                ...event,
-                id: nodeId,
-                content: preferFullerText(
-                  mergeStreamingText(prev, incoming),
-                  preferFullerText(incoming, prev)
-                ),
-              };
-            }
-          }
-        }
-      }
-
-      let resolvedParent = event.parentId ?? existingNode?.parentId ?? null;
-      if (event.type === "tool_result" && !resolvedParent) {
-        // Prefer explicit id match via meta.toolCallId
-        const toolCallId = event.meta?.toolCallId as string | undefined;
-        if (toolCallId) {
-          const match = Object.values(nodes).find(
-            (n) => n.meta?.toolCallId === toolCallId || n.id === toolCallId
-          );
-          if (match) resolvedParent = match.id;
-        }
-        if (!resolvedParent) {
-          const toolCalls = Object.values(nodes)
-            .filter((n) => n.type === "tool_call")
-            .sort((a, b) => b.timestamp - a.timestamp);
-          if (toolCalls[0]) resolvedParent = toolCalls[0].id;
-        }
-      }
-      if (
-        !resolvedParent &&
-        !existingNode &&
-        (event.type === "thinking" ||
-          event.type === "tool_call" ||
-          event.type === "plan" ||
-          event.type === "subagent_start")
-      ) {
-        const lastRoot = rootTraceIds[rootTraceIds.length - 1];
-        if (lastRoot && nodes[lastRoot]?.type === "goal") {
-          resolvedParent = lastRoot;
-        }
-      }
-
-      const depth =
-        resolvedParent && nodes[resolvedParent]
-          ? nodes[resolvedParent].depth + 1
-          : existingNode?.depth ?? 0;
-
-      const links = [...(event.links ?? existingNode?.links ?? [])];
-      const paths = extractPaths(event.content || "");
-      // also match bare filenames like plan.md
-      const bareFile = event.path
-        ? [event.path]
-        : (event.content || "").match(
-            /(?:^|[\s`"'])([a-zA-Z0-9_.-]+\.(?:md|ts|tsx|js|json|py|rs|go|css|html))\b/g
-          ) ?? [];
-      for (const p of [...paths, ...bareFile.map((x) => x.trim())]) {
-        const clean = p.replace(/^[\s`"']+/, "");
-        const f = Object.values(files).find(
-          (x) =>
-            normalizeRepoPath(x.path) === normalizeRepoPath(clean) ||
-            x.path.endsWith(clean)
-        );
-        if (f && !links.some((l) => l.targetId === f.id)) {
-          links.push({ kind: "file", targetId: f.id, path: f.path, label: f.path });
-          if (!f.relatedTraceIds.includes(nodeId)) {
-            files[f.id] = {
-              ...f,
-              relatedTraceIds: [...f.relatedTraceIds, nodeId],
-            };
-          }
-        }
-      }
-
-      // tool_call update with same id as tool_result: update status on same node
-      if (event.type === "tool_result" && existingNode?.type === "tool_call") {
-        upsertNode(nodes, rootTraceIds, {
-          ...existingNode,
-          type: "tool_call",
-          title: event.title || existingNode.title,
-          content: event.content || existingNode.content,
-          summary: event.content
-            ? event.content.slice(0, 120)
-            : existingNode.summary,
-          timestamp: existingNode.timestamp,
-          durationMs: event.durationMs,
-          status: event.status ?? "success",
-          children: existingNode.children,
-          links,
-          depth: existingNode.depth,
-          toolName: event.toolName || existingNode.toolName,
-          meta: { ...existingNode.meta, ...event.meta },
-        });
-      } else {
-        // Streaming thoughts/messages: keep the fuller text when the same id
-        // is updated (cumulative chunks must not shrink content to one word).
-        const isProse =
-          event.type === "thinking" ||
-          event.type === "reasoning" ||
-          event.type === "message" ||
-          event.type === "plan" ||
-          event.type === "plan_update";
-        const nextContent = isProse
-          ? preferFullerText(
-              mergeStreamingText(
-                existingNode?.content || "",
-                event.content || ""
-              ),
-              preferFullerText(event.content, existingNode?.content)
-            )
-          : event.content !== undefined && event.content !== ""
-            ? event.content
-            : existingNode?.content || "";
-        const nextSummary = isProse
-          ? preferFullerText(
-              event.summary ||
-                (nextContent
-                  ? nextContent.replace(/\s+/g, " ").trim().slice(0, 160)
-                  : undefined),
-              existingNode?.summary
-            )
-          : event.summary ||
-            (nextContent
-              ? nextContent.split(/\r?\n/).find((l) => l.trim())?.trim().slice(0, 160)
-              : undefined) ||
-            existingNode?.summary;
-
-        upsertNode(nodes, rootTraceIds, {
-          id: nodeId,
-          parentId: resolvedParent,
-          type: streamEventToNodeType(event.type),
-          title: event.title || existingNode?.title || event.type,
-          content: nextContent,
-          summary: nextSummary,
-          timestamp: existingNode?.timestamp ?? event.timestamp,
-          durationMs: event.durationMs ?? existingNode?.durationMs,
-          status:
-            event.status ??
-            existingNode?.status ??
-            (event.type === "error" || event.type === "parser_error"
-              ? "error"
-              : "success"),
-          children: existingNode?.children ?? [],
-          links,
-          depth,
-          toolName: event.toolName || existingNode?.toolName,
-          subagentId: event.subagentId || existingNode?.subagentId,
-          meta: {
-            ...existingNode?.meta,
-            ...event.meta,
-            ...(event.path ? { path: event.path } : {}),
-          },
-        });
-      }
-
-      if (event.type === "tool_result" && resolvedParent && nodes[resolvedParent]) {
-        nodes[resolvedParent] = {
-          ...nodes[resolvedParent],
-          status: event.status === "error" ? "error" : "success",
-          durationMs: event.durationMs,
-        };
-      }
-
-      expanded.add(nodeId);
-      if (resolvedParent) expanded.add(resolvedParent);
-
-      const fileTree = buildFileTree(Object.values(files));
-      const updated = appendLog({
-        ...session,
-        nodes,
-        files,
-        fileTree,
-        rootTraceIds,
-        selectedTraceId: nodeId,
-        selectedFileId,
-        status:
-          session.status === "idle" ||
-          session.status === "starting" ||
-          session.status === "ready"
-            ? "running"
-            : session.status,
-        updatedAt: Date.now(),
-        metrics: session.metrics,
-      });
-      if (!updated.metrics.startedAt) {
-        updated.metrics = { ...updated.metrics, startedAt: event.timestamp };
-      }
-      updated.metrics = recomputeMetrics(updated);
-      const providerTokens = extractProviderTokens(event.meta);
-      if (providerTokens != null) {
-        updated.metrics = mergeTokensIntoMetrics(
-          updated.metrics,
-          providerTokens
-        );
-      }
+      const result = reduceStreamEvents(
+        session,
+        s.expandedNodeIds,
+        stampedList
+      );
 
       return {
-        sessions: { ...s.sessions, [sessionId]: updated },
-        expandedNodeIds: expanded,
+        sessions: { ...s.sessions, [sessionId]: result.session },
+        expandedNodeIds: result.expandedNodeIds,
+        ...(result.linkedHighlightFileId !== undefined
+          ? { linkedHighlightFileId: result.linkedHighlightFileId }
+          : {}),
       };
     });
 
-    // Append-only durable log (batched). Skip sample/paste playback noise unless durable.
+    // Append-only durable log (already batched on the client). Skip sample noise.
     const session = get().sessions[sessionId];
     if (
       session &&
@@ -907,17 +501,12 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         session.source === "resume" ||
         session.source === "import")
     ) {
-      enqueueDurableEvents(sessionId, [stamped]);
+      enqueueDurableEvents(sessionId, stampedList);
     }
   },
 
-  applyStreamEvents: (sessionId, events) => {
-    for (const e of events) {
-      get().applyStreamEvent(sessionId, e);
-    }
-  },
-
-  appendRawLog: (sessionId, line) =>
+  appendRawLogs: (sessionId, lines) => {
+    if (!lines.length) return;
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session) return s;
@@ -926,12 +515,17 @@ export const useSpokStore = create<SpokState>((set, get) => ({
           ...s.sessions,
           [sessionId]: {
             ...session,
-            rawLog: [...session.rawLog, line],
+            rawLog: [...session.rawLog, ...lines],
             updatedAt: Date.now(),
           },
         },
       };
-    }),
+    });
+  },
+
+  appendRawLog: (sessionId, line) => {
+    get().appendRawLogs(sessionId, [line]);
+  },
 
   selectTrace: (id) =>
     set((s) => {

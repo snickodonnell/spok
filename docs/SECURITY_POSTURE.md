@@ -1,102 +1,117 @@
 # Spok Security Posture
 
-Date: 2026-07-09 · Phase 6 desktop product hardening
+Date: 2026-07-10
 
-Spok is a **privileged local desktop harness**, not a multi-tenant web app. The Next.js API routes and Tauri shell can spawn processes, browse the filesystem, run git, and hold secrets. This document describes the security model, what is enforced, and how to test it.
+Spok is a privileged local harness for Grok Build. It can browse workspaces, run Git, start agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary.
 
-## Trust model
+The current implementation still uses Next.js route handlers for the local API. The runtime extraction plan moves shared privileged logic into `src/server` while keeping the same token, origin, workspace trust, policy, and audit expectations.
+
+## Trust Model
 
 | Boundary | Rule |
-|---|---|
-| Network | Privileged APIs only accept **local Host/Origin** (localhost / 127.0.0.1). Optional **`SPOK_LAN_ACCESS=1`** also allows RFC1918 private LAN addresses for phone/tablet on the same Wi‑Fi (`npm run dev:lan`). Public internet hosts remain denied. |
-| Capability | Every privileged route requires `x-spok-capability-token` from `GET /api/health`. |
-| Workspace | Spawn and git write ops require **trusted cwd** (open-repo flow trusts a root). |
-| Commands | Default allowlist is Grok + git profiles; custom binaries need approval. |
-| Secrets | Diff/export redaction; vault at `~/.spok/secrets/` encrypted at rest. |
-| Desktop | Tauri has **no** shell spawn/execute; process spawn stays on the Next bridge. |
-| Grok login | **External.** Users authenticate with the native Grok CLI; Spok does not store Grok API keys or run OAuth. |
+| --- | --- |
+| Network | Privileged APIs accept loopback hosts by default. `SPOK_LAN_ACCESS=1` allows private LAN hosts for phone/tablet testing on the same trusted network. Public internet hosts remain denied. |
+| Capability | Privileged routes require `x-spok-capability-token` from `GET /api/health`. |
+| Origin | Browser-originated calls must come from allowed local or private LAN origins. |
+| Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. |
+| Commands | Default command profiles are restricted. Custom or high-risk profiles require approval unless policy explicitly allows them. |
+| Secrets | Secrets are stored locally, redacted from exports/logs where possible, and treated as sensitive even after redaction. |
+| Desktop | Tauri is an interim shell. It must not gain arbitrary process spawn permissions. The long-term product is native UI plus the shared local runtime. |
+| Grok login | External. Users authenticate through the native Grok CLI; Spok does not store Grok API keys or run Grok OAuth. |
 
-## Privileged routes
+## Privileged Routes
 
-All of the following call `authorizePrivilegedRequest`:
+The privileged API surface must call the shared authorization helpers:
 
-- `/api/session/start`, `/api/session/git`, `/api/session/git-diff`
-- `/api/fs/browse`, `/api/workspace/trust`
-- `/api/settings`, `/api/approvals`, `/api/sessions/*`
-- `/api/extensions/*`, `/api/automation/*`
-- `/api/diagnostics`, `/api/secrets`
+- `/api/session/start`
+- `/api/session/git`
+- `/api/session/git-diff`
+- `/api/fs/browse`
+- `/api/workspace/trust`
+- `/api/settings`
+- `/api/approvals`
+- `/api/sessions/*`
+- `/api/extensions/*`
+- `/api/automation/*`
+- `/api/diagnostics`
+- `/api/secrets`
 
-`GET /api/health` issues the capability token only when Host/Origin look local (loopback, or private LAN when `SPOK_LAN_ACCESS=1`).
+`GET /api/health` issues a capability token only when Host and Origin checks pass.
 
-### Optional LAN access
+## Optional LAN Access
 
 | Mode | How | Who can reach privileged APIs |
-|---|---|---|
-| Default | `npm run dev` | This machine only (`localhost`) |
-| LAN | `npm run dev:lan` / `start:lan` | Devices on the same private network that know the URL |
-| Pin one host | `SPOK_ALLOWED_HOSTS=192.168.1.10` | That Host value only (plus loopback) |
+| --- | --- | --- |
+| Default | `npm run dev` | This machine only through loopback hosts. |
+| LAN | `npm run dev:lan` or `npm run start:lan` | Devices on the same private network that know the URL and can obtain a valid token. |
+| Pin one host | `SPOK_ALLOWED_HOSTS=192.168.1.10` | That Host value plus loopback. |
 
-LAN mode still requires the capability token (issued by health to allowed hosts). It is **not** internet-safe — do not port-forward or expose Spok beyond your home Wi‑Fi.
+LAN mode is for trusted local networks only. Do not port-forward or expose Spok to the public internet.
 
-## Permission modes
+## Permission Modes
 
 | Mode | Intent |
-|---|---|
-| `manual` (default) | Safest daily driver; high-risk profiles need approval. |
-| `plan` | Read-only: no agent spawn; git/browse only. |
-| `acceptEdits` | Agent may run in trusted workspace; custom still gated. |
-| `auto` | Auto-approve listed profiles; deny rules still win. |
-| `bypass` | Dangerous; disposable envs only. |
+| --- | --- |
+| `manual` | Default daily-driver mode. High-risk actions require approval. |
+| `plan` | Read-oriented mode. Agent spawn and write operations are blocked. |
+| `acceptEdits` | Agent may run in a trusted workspace, with custom profiles still gated. |
+| `auto` | Auto-approves listed profiles while deny rules still win. |
+| `bypass` | Dangerous mode for disposable environments only. |
 
-Deny rules always win. Approval decisions are audited to `~/.spok/audit.ndjson`.
+Deny rules always win. Approval decisions and security-relevant state changes should be auditable.
 
-## Desktop (Tauri)
+## Desktop Boundary
 
-- **CSP** is explicit in `src-tauri/tauri.conf.json` (no `csp: null`).
-- Capabilities: `core:default`, `shell:allow-open`, `notification:default`, event listen/emit.
-- Custom commands: `pick_folder`, `show_notification`, `get_app_info`, `open_path`, `reveal_path`.
-- No webview permission to spawn arbitrary processes.
+Current Tauri permissions should stay narrow:
 
-## Secrets vault
+- Explicit CSP in `src-tauri/tauri.conf.json`.
+- No `shell:allow-spawn` or `shell:allow-execute`.
+- Allowed OS glue only: folder picker, notification, open path, reveal path, app info, and deep-link event emission.
+- Process spawn, Git, filesystem browse, workspace trust, and policy remain in the local runtime/API layer.
 
-- Path: `~/.spok/secrets/*.enc` + `.key` (AES-256-GCM).
-- API: `/api/secrets` (list ids, get by id, put, delete) — capability required.
-- Values never appear in diagnostics exports (counts only).
-- Future: OS keychain via Tauri command with the same client API.
+The native desktop roadmap does not relax this boundary. A native UI may supervise the runtime, but privileged execution still goes through the same policy and audit model.
 
-## Secret redaction
+## Secrets
 
-Heuristic scanners in `src/lib/security/secrets.ts` cover:
+- Local vault path: `~/.spok/secrets`.
+- API: `/api/secrets`, capability required.
+- Diagnostics exports should include counts and metadata, not raw secret values.
+- Redaction is heuristic and must be treated as a guardrail, not a DLP guarantee.
+- Future OS keychain integration should preserve the same client API and audit behavior.
 
-- Common credential file names (`.env`, keys, tokens)
-- High-entropy token patterns in logs/exports
-- Binary / oversized untracked file skips in git-diff
+Redaction should cover common credential file names, token-like values, high-entropy strings, oversized files, binary files, and diagnostics exports.
 
-This is **not** a full DLP product. Treat exports as sensitive.
+## Extension Risk
 
-## Deep links & updater
+MCP servers, hooks, skills, project rules, plugins, GitHub/GitLab connectors, IDE companions, and remote runners are privileged extension points. Before they are enabled broadly, each needs:
 
-- App protocol plan: `spok://` deep links (argv emission + frontend event). Full OS registration is release-checklist work.
-- Updater is **documented** in `docs/RELEASE_CHECKLIST.md`; not auto-enabled until signing keys exist.
+- A permission declaration.
+- A trust prompt.
+- Visible scope and revocation.
+- Invocation logs.
+- Secret redaction.
+- Tests for denied and allowed paths.
 
-## How to test
+## How To Test
 
 ```bash
 npm test
-# security tests cover policy, secrets redaction, vault round-trip
 ```
 
-Manual checks:
+Focused checks:
 
-1. Call `/api/fs/browse` without token → 401/403.
-2. Open repo → trust root; spawn with untrusted cwd → denial.
-3. Set permission mode to `plan` → spawn blocked.
-4. Export diagnostics → no raw capability token or secret values.
-5. Desktop: folder picker opens OS dialog; notifications appear when enabled.
+1. Call a privileged route without a token and confirm denial.
+2. Call with an invalid Origin and confirm denial.
+3. Open a trusted root, then attempt spawn or Git write outside it and confirm denial.
+4. Set permission mode to `plan` and confirm agent spawn is blocked.
+5. Export diagnostics and confirm no raw capability token or stored secret value appears.
+6. Confirm Tauri config does not grant arbitrary process spawn.
 
-## Residual risks
+## Residual Risks
 
-- Dev server on a shared machine is still a local privilege surface; do not expose port 3000 remotely.
-- Trusted roots are process-local until re-open after restart.
-- Heuristic redaction can miss novel secret formats.
-- Windows file modes (`chmod 0o600`) are best-effort.
+- A dev server on a shared machine remains a local privilege surface.
+- LAN mode is only as safe as the local network and token handling.
+- Trusted workspace persistence is still being formalized in the runtime extraction plan.
+- Redaction can miss novel secret formats.
+- Windows file permissions are best-effort.
+- Future MCP, hooks, plugins, and remote runners increase attack surface unless each permission boundary is explicit and tested.

@@ -11,6 +11,12 @@ import {
   runSessionHooks,
 } from "./extensions-client";
 import { detectAuthFailureHint } from "./runtime/auth-hints";
+import {
+  enqueueRawLogLines,
+  enqueueStreamEvents,
+  flushStreamBatch,
+} from "./stream-batch";
+import type { StreamEvent } from "./types";
 
 export type HarnessHandle = {
   sessionId: string;
@@ -262,6 +268,10 @@ export async function runHarness(opts: {
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
+      // Coalesce all events from this network chunk into one frame flush.
+      const chunkEvents: StreamEvent[] = [];
+      const chunkLogs: string[] = [];
+
       for (const line of lines) {
         if (!line.trim()) continue;
 
@@ -299,13 +309,13 @@ export async function runHarness(opts: {
 
         const result = ingest.ingestLine(line, Date.now());
         if (result.logLine) {
-          store.appendRawLog(sessionId, redactSecrets(result.logLine).text);
+          chunkLogs.push(redactSecrets(result.logLine).text);
         }
         for (const ev of result.events) {
           const content =
             ev.content != null ? redactSecrets(ev.content).text : ev.content;
           if (typeof content === "string") maybeAuthHint(content);
-          store.applyStreamEvent(sessionId, {
+          chunkEvents.push({
             ...ev,
             content,
             summary:
@@ -313,15 +323,20 @@ export async function runHarness(opts: {
           });
         }
       }
+
+      if (chunkLogs.length) enqueueRawLogLines(sessionId, chunkLogs);
+      if (chunkEvents.length) enqueueStreamEvents(sessionId, chunkEvents);
     }
 
     if (buffer.trim()) {
       const result = ingest.ingestLine(buffer, Date.now());
+      const tailLogs: string[] = [];
+      const tailEvents: StreamEvent[] = [];
       if (result.logLine) {
-        store.appendRawLog(sessionId, redactSecrets(result.logLine).text);
+        tailLogs.push(redactSecrets(result.logLine).text);
       }
       for (const ev of result.events) {
-        store.applyStreamEvent(sessionId, {
+        tailEvents.push({
           ...ev,
           content:
             ev.content != null ? redactSecrets(ev.content).text : ev.content,
@@ -329,8 +344,13 @@ export async function runHarness(opts: {
             ev.summary != null ? redactSecrets(ev.summary).text : ev.summary,
         });
       }
+      if (tailLogs.length) enqueueRawLogLines(sessionId, tailLogs);
+      if (tailEvents.length) enqueueStreamEvents(sessionId, tailEvents);
     }
+    // Ensure UI sees final stream state before status/hooks settle.
+    flushStreamBatch();
   } catch (e) {
+    flushStreamBatch();
     if (opts.signal?.aborted) {
       store.updateSession(sessionId, { status: "stopped" });
       return { code: null };

@@ -4,11 +4,11 @@
 |---|---|
 | **Title** | High-efficiency, low-overhead Spok desktop architecture |
 | **Author** | _(TBD)_ |
-| **Date** | 2026-07-09 |
-| **Status** | **Approved (user decisions incorporated)** |
+| **Date** | 2026-07-10 |
+| **Status** | **Approved — Track A Stage 1 started (PR1a done)** |
 | **Repo** | `C:\dev\spok` |
 | **Related** | `docs/HARNESS_AUDIT_AND_ROADMAP.md`, `docs/UPDATER_AND_DESKTOP.md`, `docs/SECURITY_POSTURE.md` |
-| **Revision** | R5 — wording clarification: **native UI, not web-based app** (not offline-only); network/agent/web-service interaction continues; dual-horizon unchanged |
+| **Revision** | R6 - aligned with current competitive roadmap and docs cleanup |
 
 ---
 
@@ -31,7 +31,7 @@ This document therefore uses a **dual-horizon** architecture:
 1. **Horizon A — Intermediate (ship value now):** Extract a standalone **Node privileged runtime**; keep a **contributor / dogfood** path (Vite SPA or existing Next) that is **not** the permanent product. Optionally a temporary thin shell may supervise the runtime only if needed for packaging experiments — it is **not** the end-state UI.
 2. **Horizon B — End state (product goal):** A **native Windows desktop UI** (provisional stack: **WinUI 3 / C#**) that talks to the same privileged TypeScript runtime over **loopback HTTP** (or equivalent local IPC), with **no WebView** and **no browser as UI**.
 
-The goal is a desktop app that **starts and responds quickly**, preserves harness **functionality and data visualization** (trace tree, diffs, metrics, live session viz), and **does not regress** the capability-token / origin / workspace-trust / approval model in `docs/SECURITY_POSTURE.md`.
+The goal is a desktop app that **starts and responds quickly**, preserves harness **functionality and data visualization** (thinking/events, diffs, metrics, live session viz), and **does not regress** the capability-token / origin / workspace-trust / approval model in `docs/SECURITY_POSTURE.md`.
 
 **UI vs network (wording fix, R5):** “Not web-based” means the **product surface** is a **native Windows shell** — not a permanent browser tab, SPA, WebView2 host, or Tauri-as-product UI. It does **not** mean offline-only or “no HTTP anywhere.” Spok and its agents **still interact with the network as expected today**: Grok CLI talking to xAI, git remotes, GitHub/PRs, channels/webhooks, MCP over the network, package/update checks, and loopback HTTP between native UI and the Node runtime.
 
@@ -559,10 +559,13 @@ Two tracks. **Track A** (runtime + dogfood) can proceed immediately. **Track B**
 
 #### PR1a — Web Response security helpers
 
+- **Status (2026-07-09): Done.**
 - **Title:** `refactor(security): replace NextResponse denials with Web Response`
-- **Files:** `src/lib/security/local-api.ts`, tests
+- **Files:** `src/lib/security/local-api.ts`, `tests/security/local-api-response.test.ts`
 - **Dependencies:** none
 - **Description:** Foundation for non-Next server and native clients.
+  - `policyDenialResponse` / `denyFromAuthorize` return standard Web `Response` (no `next/server` import).
+  - `cache-control: no-store` on denials; Next route handlers accept `Response` unchanged.
 
 #### PR1b — Session start/stop + stream parity tests
 
@@ -601,7 +604,8 @@ Two tracks. **Track A** (runtime + dogfood) can proceed immediately. **Track B**
 
 #### PR3 — Pure `reduceSession` + batching (TS dogfood)
 
-- **Files:** `session-reduce.ts`, `store.ts`, `session-replay.ts`, `harness.ts`, selectors
+- **Status (2026-07-09): Partially done.** Live store path uses pure `src/lib/session-reduce.ts` + rAF `stream-batch.ts`; metrics recompute once per batch. `session-replay.ts` still has a parallel reducer (converge later). Selectors/profiling still open.
+- **Files:** `session-reduce.ts`, `stream-batch.ts`, `store.ts`, `harness.ts`, `host-session-sync.ts`, tests
 - **Dependencies:** none hard
 - **Description:** SPA dogfood perf; fixtures become native golden tests later.
 
@@ -668,10 +672,10 @@ Two tracks. **Track A** (runtime + dogfood) can proceed immediately. **Track B**
 - **Dependencies:** PRN1, PR10  
 - **Description:** Native navigation chrome; folder picker; trust POST.
 
-#### PRN3 — Live stream + virtualized trace tree
+#### PRN3 — Live stream + virtualized thinking/events view
 
 - **Dependencies:** PRN2, PR1b  
-- **Description:** NDJSON client; virtualizing list; stop/kill.
+- **Description:** NDJSON client; virtualized thinking/events panes; stop/kill.
 
 #### PRN4 — High-quality native diff + git status
 

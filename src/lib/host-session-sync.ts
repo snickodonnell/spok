@@ -167,16 +167,12 @@ export async function pullAndMergeSession(
       );
       opts.pulledCount[sessionId] = 0;
       session = useSpokStore.getState().sessions[sessionId];
-      // Apply all events for new shell
-      for (const ev of events) {
-        store.applyStreamEvent(sessionId, ev);
-      }
+      // Apply all events in one store commit (avoids N React re-renders)
+      if (events.length) store.applyStreamEvents(sessionId, events);
       opts.pulledCount[sessionId] = events.length;
     }
   } else if (slice.length) {
-    for (const ev of slice) {
-      store.applyStreamEvent(sessionId, ev);
-    }
+    store.applyStreamEvents(sessionId, slice);
     opts.pulledCount[sessionId] = events.length;
   } else {
     opts.pulledCount[sessionId] = Math.max(already, events.length);

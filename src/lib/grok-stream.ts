@@ -1084,16 +1084,24 @@ export function formatLogFromEvent(ev: StreamEvent): string {
 
 /**
  * Apply events to store with upsert semantics for same id (chunk coalescing).
+ * Prefer a batched apply when the store exposes applyStreamEvents.
  */
 export function applyEventsWithUpsert(
-  applyStreamEvent: (sessionId: string, event: StreamEvent) => void,
+  applyStreamEvent: (
+    sessionId: string,
+    event: StreamEvent
+  ) => void,
   sessionId: string,
   events: StreamEvent[],
-  existingNodes: Record<string, { id: string }>
+  existingNodes: Record<string, { id: string }>,
+  applyStreamEvents?: (sessionId: string, events: StreamEvent[]) => void
 ) {
-  for (const ev of events) {
-    // Always apply — store should replace node with same id when present
-    applyStreamEvent(sessionId, ev);
+  if (applyStreamEvents) {
+    applyStreamEvents(sessionId, events);
+  } else {
+    for (const ev of events) {
+      applyStreamEvent(sessionId, ev);
+    }
   }
   void existingNodes;
 }
