@@ -20,6 +20,38 @@ export async function listDurableSessions(): Promise<SessionMetaRecord[]> {
   return data.sessions ?? [];
 }
 
+export type LiveProcessInfo = {
+  sessionId: string;
+  pid: number;
+  command: string;
+  cwd: string;
+  startedAt: number;
+  timedOut?: boolean;
+  killed?: boolean;
+};
+
+/** Host processes currently registered (running Grok jobs). */
+export async function fetchLiveProcesses(): Promise<{
+  processes: LiveProcessInfo[];
+  liveSessionIds: string[];
+  time: number;
+}> {
+  const res = await localFetch("/api/runtime/live");
+  if (!res.ok) {
+    throw new Error(`Live processes failed (${res.status})`);
+  }
+  const data = (await res.json()) as {
+    processes?: LiveProcessInfo[];
+    liveSessionIds?: string[];
+    time?: number;
+  };
+  return {
+    processes: data.processes ?? [],
+    liveSessionIds: data.liveSessionIds ?? [],
+    time: data.time ?? Date.now(),
+  };
+}
+
 /** Create on-disk durable session directory. */
 export async function registerDurableSession(session: Session): Promise<void> {
   const res = await localFetch("/api/sessions", {

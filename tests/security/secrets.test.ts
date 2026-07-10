@@ -19,8 +19,10 @@ import {
 } from "../../src/lib/security/workspace-trust";
 import {
   isCommandAllowed,
+  isLanAccessEnabled,
   isLocalHostAllowed,
   isOriginAllowed,
+  isPrivateLanHostname,
 } from "../../src/lib/security/local-api";
 
 describe("secret redaction", () => {
@@ -129,6 +131,55 @@ describe("local host/origin policy", () => {
     assert.equal(isLocalHostAllowed("evil.example:3000"), false);
     assert.equal(isOriginAllowed("http://localhost:3000", "localhost:3000"), true);
     assert.equal(isOriginAllowed("https://evil.example", "localhost:3000"), false);
+  });
+
+  it("classifies private LAN hostnames", () => {
+    assert.equal(isPrivateLanHostname("192.168.1.42"), true);
+    assert.equal(isPrivateLanHostname("10.0.0.5"), true);
+    assert.equal(isPrivateLanHostname("172.16.0.1"), true);
+    assert.equal(isPrivateLanHostname("172.31.255.1"), true);
+    assert.equal(isPrivateLanHostname("172.15.0.1"), false);
+    assert.equal(isPrivateLanHostname("8.8.8.8"), false);
+    assert.equal(isPrivateLanHostname("example.com"), false);
+    assert.equal(isPrivateLanHostname("mypc.local"), true);
+  });
+
+  it("rejects LAN Host until SPOK_LAN_ACCESS is enabled", () => {
+    const prev = process.env.SPOK_LAN_ACCESS;
+    delete process.env.SPOK_LAN_ACCESS;
+    assert.equal(isLanAccessEnabled(), false);
+    assert.equal(isLocalHostAllowed("192.168.1.10:3000"), false);
+    assert.equal(
+      isOriginAllowed("http://192.168.1.10:3000", "192.168.1.10:3000"),
+      false
+    );
+
+    process.env.SPOK_LAN_ACCESS = "1";
+    assert.equal(isLanAccessEnabled(), true);
+    assert.equal(isLocalHostAllowed("192.168.1.10:3000"), true);
+    assert.equal(
+      isOriginAllowed("http://192.168.1.10:3000", "192.168.1.10:3000"),
+      true
+    );
+    // Still deny public hosts even with LAN mode
+    assert.equal(isLocalHostAllowed("8.8.8.8:3000"), false);
+    assert.equal(isLocalHostAllowed("evil.example:3000"), false);
+
+    if (prev === undefined) delete process.env.SPOK_LAN_ACCESS;
+    else process.env.SPOK_LAN_ACCESS = prev;
+  });
+
+  it("honors SPOK_ALLOWED_HOSTS without full LAN mode", () => {
+    const prevLan = process.env.SPOK_LAN_ACCESS;
+    const prevHosts = process.env.SPOK_ALLOWED_HOSTS;
+    delete process.env.SPOK_LAN_ACCESS;
+    process.env.SPOK_ALLOWED_HOSTS = "192.168.0.50";
+    assert.equal(isLocalHostAllowed("192.168.0.50:3000"), true);
+    assert.equal(isLocalHostAllowed("192.168.0.51:3000"), false);
+    if (prevLan === undefined) delete process.env.SPOK_LAN_ACCESS;
+    else process.env.SPOK_LAN_ACCESS = prevLan;
+    if (prevHosts === undefined) delete process.env.SPOK_ALLOWED_HOSTS;
+    else process.env.SPOK_ALLOWED_HOSTS = prevHosts;
   });
 
   it("restricts commands to grok by default", () => {

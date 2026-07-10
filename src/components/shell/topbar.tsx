@@ -9,8 +9,6 @@ import {
   Download,
   Settings,
   Shield,
-  Puzzle,
-  Layers,
   Bell,
   Keyboard,
   Palette,
@@ -22,6 +20,13 @@ import { useSpokStore } from "@/lib/store";
 import { buildExportPayload } from "@/lib/export-session";
 import { toast } from "sonner";
 import { unreadCount } from "@/lib/automation/notifications";
+import {
+  PRODUCT_MODE_META,
+  type ProductMode,
+} from "@/lib/product-modes";
+import { cn } from "@/lib/utils";
+
+const PRODUCT_MODES: ProductMode[] = ["run", "review", "automate", "extend"];
 
 export function Topbar() {
   const sidebarOpen = useSpokStore((s) => s.sidebarOpen);
@@ -30,12 +35,13 @@ export function Topbar() {
   const setLaunchOpen = useSpokStore((s) => s.setLaunchOpen);
   const setImportOpen = useSpokStore((s) => s.setImportOpen);
   const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
-  const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
   const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
   const notifications = useSpokStore((s) => s.notifications);
   const automationJobs = useSpokStore((s) => s.automationJobs);
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const productMode = useSpokStore((s) => s.productMode);
+  const setProductMode = useSpokStore((s) => s.setProductMode);
   const unread = unreadCount(notifications);
   const activeJobs = automationJobs.filter((j) =>
     ["queued", "running", "waiting_approval"].includes(j.status)
@@ -47,7 +53,6 @@ export function Topbar() {
   const setUiTheme = useSpokStore((s) => s.setUiTheme);
   const setKeyboardHelpOpen = useSpokStore((s) => s.setKeyboardHelpOpen);
   const exportActiveSession = useSpokStore((s) => s.exportActiveSession);
-  const viewMode = useSpokStore((s) => s.viewMode);
 
   const cycleTheme = () => {
     const order: UiTheme[] = ["professional", "crt", "high-contrast"];
@@ -94,20 +99,48 @@ export function Topbar() {
         <PanelLeft className="h-4 w-4" />
       </Button>
 
-      <div className="hidden items-center gap-1 sm:flex">
-        <span className="font-mono text-xs tracking-[0.25em] text-phosphor-green/80 crt-glow">
+      <div className="hidden items-center gap-2 sm:flex">
+        <span className="font-mono text-xs tracking-[0.2em] text-phosphor-green/75">
           SPOK
         </span>
-        <span className="text-phosphor-green/25" aria-hidden>
-          {"//"}
-        </span>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-phosphor-cyan/70">
-          {viewMode}
-        </span>
+        <nav
+          className="ml-1 flex items-center rounded-md border border-phosphor-green/15 bg-black/25 p-0.5"
+          aria-label="Product mode"
+          data-testid="product-mode-nav"
+        >
+          {PRODUCT_MODES.map((mode) => {
+            const meta = PRODUCT_MODE_META[mode];
+            const active = productMode === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                title={meta.description}
+                onClick={() => {
+                  setProductMode(mode);
+                  if (mode === "automate") setMonitorOpen(true);
+                }}
+                className={cn(
+                  "rounded px-2 py-1 text-[10px] font-medium transition",
+                  active
+                    ? "bg-phosphor-green/15 text-phosphor-green"
+                    : "text-phosphor-green/45 hover:text-phosphor-green/80"
+                )}
+              >
+                {meta.short}
+                {mode === "automate" && activeJobs > 0 && (
+                  <span className="ml-1 font-mono text-phosphor-amber">
+                    {activeJobs}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
-          className="ml-2 inline-flex items-center gap-1 rounded border border-phosphor-green/20 px-1.5 py-0.5 transition hover:border-phosphor-cyan/40 hover:bg-phosphor-cyan/5"
+          className="inline-flex items-center gap-1 rounded border border-phosphor-green/20 px-1.5 py-0.5 transition hover:border-phosphor-cyan/40 hover:bg-phosphor-cyan/5"
           title="Permission mode — open settings"
         >
           <Shield className="h-3 w-3 text-phosphor-cyan/80" />
@@ -131,27 +164,23 @@ export function Topbar() {
           <Play className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Open repo</span>
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
-          <Upload className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Import</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={exportSession}>
-          <Download className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Export</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setImportOpen(true)}
+          title="Import session"
+        >
+          <Upload className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="relative h-8 w-8"
-          onClick={() => setMonitorOpen(true)}
-          title="Monitor — background jobs, schedules, lanes"
+          className="h-8 w-8"
+          onClick={exportSession}
+          title="Export session"
         >
-          <Layers className="h-4 w-4" />
-          {activeJobs > 0 && (
-            <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-phosphor-amber px-0.5 text-[8px] font-bold text-black">
-              {activeJobs}
-            </span>
-          )}
+          <Download className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"
@@ -166,15 +195,6 @@ export function Topbar() {
               {unread > 9 ? "9+" : unread}
             </span>
           )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={() => setExtensionsOpen(true)}
-          title="Extension Center — skills, MCP, hooks, agents"
-        >
-          <Puzzle className="h-4 w-4" />
         </Button>
         <Button
           variant="ghost"

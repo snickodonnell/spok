@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +38,6 @@ import {
   BookOpen,
   Server,
   Webhook,
-  Package,
   Bot,
   RefreshCw,
   ShieldCheck,
@@ -55,7 +54,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type TabId = "skills" | "mcp" | "hooks" | "plugins" | "agents";
+/** Product-facing sections: Gallery, Installed, Trust Review, Agents */
+type TabId = "gallery" | "installed" | "trust" | "agents";
 
 function TrustBadge({ trust }: { trust: ExtensionTrustState }) {
   const map = {
@@ -139,7 +139,7 @@ export function ExtensionsDialog() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<ExtensionsResponse | null>(null);
-  const [tab, setTab] = useState<TabId>("skills");
+  const [tab, setTab] = useState<TabId>("gallery");
   const [filter, setFilter] = useState("");
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [skillBody, setSkillBody] = useState<Record<string, string>>({});
@@ -390,15 +390,14 @@ export function ExtensionsDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="flex max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
-        <div className="border-b border-phosphor-green/15 px-5 py-4">
+        <div className="border-b border-phosphor-green/15 px-5 py-3">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 font-mono text-phosphor-green">
+            <DialogTitle className="flex items-center gap-2 text-phosphor-green">
               <Puzzle className="h-4 w-4 text-phosphor-cyan" />
-              Extension Center
+              Extensions
             </DialogTitle>
-            <DialogDescription className="text-xs text-phosphor-green/50">
-              Discover skills, review MCP tools, trust hooks, and configure agents.
-              Skills guide the agent only when relevant — nothing is dumped into every prompt.
+            <DialogDescription className="text-xs text-phosphor-green/45">
+              Gallery · installed tools · trust review · agents
             </DialogDescription>
           </DialogHeader>
 
@@ -469,35 +468,30 @@ export function ExtensionsDialog() {
           onValueChange={(v) => setTab(v as TabId)}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <TabsList className="mx-4 mt-3 h-9 w-auto justify-start self-start">
-            <TabsTrigger value="skills" className="gap-1 text-[10px]">
+          <TabsList className="mx-4 mt-2 h-9 w-auto justify-start self-start">
+            <TabsTrigger value="gallery" className="gap-1 text-[10px]">
               <BookOpen className="h-3 w-3" />
-              Skills
+              Gallery
               {data && (
-                <span className="text-phosphor-green/40">{data.skills.length}</span>
+                <span className="text-phosphor-green/40">
+                  {data.skills.length + data.plugins.length}
+                </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="mcp" className="gap-1 text-[10px]">
+            <TabsTrigger value="installed" className="gap-1 text-[10px]">
               <Server className="h-3 w-3" />
-              MCP
+              Installed
               {data && (
                 <span className="text-phosphor-green/40">
                   {data.mcpServers.length}
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="hooks" className="gap-1 text-[10px]">
-              <Webhook className="h-3 w-3" />
-              Hooks
-              {data && (
-                <span className="text-phosphor-green/40">{data.hooks.length}</span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="plugins" className="gap-1 text-[10px]">
-              <Package className="h-3 w-3" />
-              Plugins
-              {data && (
-                <span className="text-phosphor-green/40">{data.plugins.length}</span>
+            <TabsTrigger value="trust" className="gap-1 text-[10px]">
+              <ShieldCheck className="h-3 w-3" />
+              Trust review
+              {pendingTrustCount > 0 && (
+                <span className="text-phosphor-amber">{pendingTrustCount}</span>
               )}
             </TabsTrigger>
             <TabsTrigger value="agents" className="gap-1 text-[10px]">
@@ -519,19 +513,17 @@ export function ExtensionsDialog() {
               </div>
             ) : (
               <>
-                <TabsContent value="skills" className="mt-3 space-y-2">
-                  <p className="text-[11px] leading-relaxed text-phosphor-green/45">
-                    Repo skills live under{" "}
-                    <code className="text-phosphor-cyan/80">.agents/skills</code>.
-                    Attach a skill for the next turn from the composer — Spok never
-                    injects every skill into every prompt.
-                  </p>
+                <TabsContent value="gallery" className="mt-3 space-y-3">
+                  <h3 className="text-[11px] font-medium text-phosphor-green/55">
+                    Skills
+                  </h3>
                   {skills.length === 0 ? (
-                    <EmptyState
-                      icon={BookOpen}
-                      title="No skills discovered"
-                      body="Add a package under .agents/skills/<name>/SKILL.md or ~/.spok/skills."
-                    />
+                    <div className="empty-state">
+                      <p className="empty-state-title">No skills</p>
+                      <p className="empty-state-hint">
+                        Add .agents/skills/&lt;name&gt;/SKILL.md or ~/.spok/skills
+                      </p>
+                    </div>
                   ) : (
                     skills.map((skill) => {
                       const attached = selectedSkillIds.includes(skill.id);
@@ -609,17 +601,89 @@ export function ExtensionsDialog() {
                       );
                     })
                   )}
+
+                  <h3 className="pt-2 text-[11px] font-medium text-phosphor-green/55">
+                    Plugins
+                  </h3>
+                  {plugins.length === 0 ? (
+                    <div className="empty-state py-8">
+                      <p className="empty-state-title">No plugins</p>
+                      <p className="empty-state-hint">
+                        Drop spok.plugin.json under ~/.spok/plugins or .spok/plugins
+                      </p>
+                    </div>
+                  ) : (
+                    plugins.map((plugin) => (
+                      <div
+                        key={plugin.id}
+                        className="rounded-lg border border-phosphor-green/15 bg-black/30 p-3"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-sm font-medium text-phosphor-green">
+                                {plugin.name}
+                              </span>
+                              <Badge variant="muted" className="text-[9px]">
+                                v{plugin.version}
+                              </Badge>
+                              <SourceBadge source={plugin.source} />
+                              <TrustBadge trust={plugin.trust} />
+                            </div>
+                            {plugin.description && (
+                              <p className="mt-1 text-[11px] text-phosphor-green/55">
+                                {plugin.description}
+                              </p>
+                            )}
+                            <div className="mt-1.5 flex flex-wrap gap-2 text-[10px] text-phosphor-green/40">
+                              <span>{plugin.skillCount} skills</span>
+                              <span>{plugin.mcpCount} mcp</span>
+                              <span>{plugin.hookCount} hooks</span>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-1.5">
+                            <Switch
+                              checked={plugin.enabled}
+                              onCheckedChange={(v) =>
+                                setEnabled("plugins", plugin.id, v)
+                              }
+                            />
+                            {(plugin.trust === "untrusted" ||
+                              plugin.trust === "pending_review") && (
+                              <div className="flex gap-1">
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-[10px]"
+                                  onClick={() =>
+                                    setTrust("plugins", plugin.id, "trusted")
+                                  }
+                                >
+                                  <Check className="h-3 w-3" />
+                                  Trust
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-[10px]"
+                                  onClick={() =>
+                                    setTrust("plugins", plugin.id, "denied")
+                                  }
+                                >
+                                  <X className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </TabsContent>
 
-                <TabsContent value="mcp" className="mt-3 space-y-3">
-                  <p className="text-[11px] leading-relaxed text-phosphor-green/45">
-                    MCP tools are listed read-only with approval state. Invocation
-                    still requires an explicit future bridge — nothing runs from this panel.
-                  </p>
-
+                <TabsContent value="installed" className="mt-3 space-y-3">
                   <div className="rounded-lg border border-phosphor-green/15 bg-black/20 p-3">
-                    <div className="mb-2 text-[10px] uppercase tracking-widest text-phosphor-green/40">
-                      Add stdio server (user)
+                    <div className="mb-2 text-[10px] font-medium text-phosphor-green/45">
+                      Add MCP server
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Input
@@ -750,7 +814,7 @@ export function ExtensionsDialog() {
                   )}
                 </TabsContent>
 
-                <TabsContent value="hooks" className="mt-3 space-y-3">
+                <TabsContent value="trust" className="mt-3 space-y-3">
                   <p className="text-[11px] leading-relaxed text-phosphor-green/45">
                     Hooks run on session lifecycle events. Project and plugin hooks
                     need trust review before they execute. Trace hooks only add
@@ -881,102 +945,9 @@ export function ExtensionsDialog() {
                   )}
                 </TabsContent>
 
-                <TabsContent value="plugins" className="mt-3 space-y-2">
-                  <p className="text-[11px] leading-relaxed text-phosphor-green/45">
-                    Plugin packages use{" "}
-                    <code className="text-phosphor-cyan/80">spok.plugin.json</code>{" "}
-                    (draft schema <code>spok.plugin/v1</code>) under{" "}
-                    <code className="text-phosphor-cyan/80">~/.spok/plugins</code>{" "}
-                    or <code className="text-phosphor-cyan/80">.spok/plugins</code>.
-                  </p>
-                  {plugins.length === 0 ? (
-                    <EmptyState
-                      icon={Package}
-                      title="No plugins installed"
-                      body="Drop a folder with spok.plugin.json into the plugins root to package skills, MCP, hooks, and agents together."
-                    />
-                  ) : (
-                    plugins.map((plugin) => (
-                      <div
-                        key={plugin.id}
-                        className="rounded-lg border border-phosphor-green/15 bg-black/30 p-3"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="font-mono text-sm text-phosphor-green">
-                                {plugin.name}
-                              </span>
-                              <Badge variant="muted" className="text-[9px]">
-                                v{plugin.version}
-                              </Badge>
-                              <SourceBadge source={plugin.source} />
-                              <TrustBadge trust={plugin.trust} />
-                            </div>
-                            {plugin.description && (
-                              <p className="mt-1 text-[11px] text-phosphor-green/55">
-                                {plugin.description}
-                              </p>
-                            )}
-                            <div className="mt-1.5 flex flex-wrap gap-2 text-[10px] text-phosphor-green/40">
-                              <span>{plugin.skillCount} skills</span>
-                              <span>{plugin.mcpCount} mcp</span>
-                              <span>{plugin.hookCount} hooks</span>
-                              <span>{plugin.agentCount} agents</span>
-                              <span>{plugin.commandCount} commands</span>
-                            </div>
-                            <p className="mt-1 truncate font-mono text-[9px] text-phosphor-green/30">
-                              {plugin.path}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 flex-col items-end gap-1.5">
-                            <Switch
-                              checked={plugin.enabled}
-                              onCheckedChange={(v) =>
-                                setEnabled("plugins", plugin.id, v)
-                              }
-                            />
-                            {(plugin.trust === "untrusted" ||
-                              plugin.trust === "pending_review") && (
-                              <div className="flex gap-1">
-                                <Button
-                                  size="sm"
-                                  className="h-7 text-[10px]"
-                                  onClick={() =>
-                                    setTrust("plugins", plugin.id, "trusted")
-                                  }
-                                >
-                                  <Check className="h-3 w-3" />
-                                  Trust
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-7 text-[10px]"
-                                  onClick={() =>
-                                    setTrust("plugins", plugin.id, "denied")
-                                  }
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </TabsContent>
-
                 <TabsContent value="agents" className="mt-3 space-y-3">
-                  <p className="text-[11px] leading-relaxed text-phosphor-green/45">
-                    Custom agents are config presets (tools, permission mode,
-                    isolation). Select one for the next turn — they do not run until
-                    you submit a prompt.
-                  </p>
-
                   <div className="rounded-lg border border-phosphor-green/15 bg-black/20 p-3">
-                    <div className="mb-2 text-[10px] uppercase tracking-widest text-phosphor-green/40">
+                    <div className="mb-2 text-[10px] font-medium text-phosphor-green/45">
                       Create agent preset
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1090,16 +1061,19 @@ function EmptyState({
   icon: Icon,
   title,
   body,
+  action,
 }: {
   icon: typeof BookOpen;
   title: string;
   body: string;
+  action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-phosphor-green/20 px-6 py-12 text-center">
-      <Icon className="h-8 w-8 text-phosphor-green/25" />
-      <div className="font-mono text-sm text-phosphor-green/70">{title}</div>
-      <p className="max-w-sm text-[11px] text-phosphor-green/40">{body}</p>
+    <div className="empty-state">
+      <Icon className="h-7 w-7 text-phosphor-green/25" />
+      <div className="empty-state-title">{title}</div>
+      <p className="empty-state-hint">{body}</p>
+      {action}
     </div>
   );
 }

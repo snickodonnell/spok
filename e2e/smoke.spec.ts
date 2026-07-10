@@ -69,18 +69,47 @@ test.describe("Spok shell smoke", () => {
     });
   });
 
-  test("play demo sample reaches workspace chrome", async ({ page }) => {
+  test("play sample reaches workspace chrome", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("text=SPOK").first()).toBeVisible({
       timeout: 30_000,
     });
-    const demo = page.getByRole("button", { name: /play demo sample/i });
+    const demo = page.getByTestId("welcome-play-sample");
     if (await demo.isVisible().catch(() => false)) {
       await demo.click();
-      // Metrics or timeline or composer should appear
+      await expect(page.getByTestId("workspace")).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(page.getByTestId("run-status-card")).toBeVisible();
+      await expect(page.getByTestId("prompt-composer")).toBeVisible();
+      // Task-oriented right tabs
+      await expect(page.getByRole("tab", { name: /changes/i })).toBeVisible();
+    }
+  });
+
+  test("welcome shows CLI readiness strip", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("welcome-screen")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("welcome-readiness")).toBeVisible();
+    await expect(page.getByTestId("welcome-open-repo")).toBeVisible();
+  });
+
+  test("product mode nav is present after sample", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("text=SPOK").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    const demo = page.getByTestId("welcome-play-sample");
+    if (await demo.isVisible().catch(() => false)) {
+      await demo.click();
+      await expect(page.getByTestId("product-mode-nav")).toBeVisible({
+        timeout: 15_000,
+      });
       await expect(
-        page.locator("text=/workspace|thinking|diff|prompt/i").first()
-      ).toBeVisible({ timeout: 15_000 });
+        page.getByTestId("product-mode-nav").getByRole("button", { name: "Run" })
+      ).toBeVisible();
     }
   });
 });

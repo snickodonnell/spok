@@ -11,6 +11,9 @@ import type {
   TraceFilter,
   TraceNode,
   ViewMode,
+  ProductMode,
+  WorkspaceRightTab,
+  LeftTraceMode,
 } from "./types";
 import { buildFileTree, createFileDiff } from "./diff-utils";
 import { streamEventToNodeType, extractPaths } from "./parser";
@@ -159,6 +162,14 @@ interface SpokState {
   sessions: Record<string, Session>;
   activeSessionId: string | null;
   viewMode: ViewMode;
+  /** Primary product mode: Run / Review / Automate / Extend */
+  productMode: ProductMode;
+  /** Right pane task tab inside workspace (Changes / Review / Events / Health) */
+  workspaceRightTab: WorkspaceRightTab;
+  /** Left pane: Thinking prose vs full event graph */
+  leftTraceMode: LeftTraceMode;
+  /** Causal drawer open for selected file ("Why did this change?") */
+  causalDrawerOpen: boolean;
   sidebarOpen: boolean;
   commandPaletteOpen: boolean;
   importOpen: boolean;
@@ -190,6 +201,10 @@ interface SpokState {
 
   // actions
   setViewMode: (mode: ViewMode) => void;
+  setProductMode: (mode: ProductMode) => void;
+  setWorkspaceRightTab: (tab: WorkspaceRightTab) => void;
+  setLeftTraceMode: (mode: LeftTraceMode) => void;
+  setCausalDrawerOpen: (open: boolean) => void;
   setSidebarOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
   setImportOpen: (open: boolean) => void;
@@ -311,6 +326,10 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   sessions: {},
   activeSessionId: null,
   viewMode: "workspace",
+  productMode: "run",
+  workspaceRightTab: "changes",
+  leftTraceMode: "thinking",
+  causalDrawerOpen: false,
   sidebarOpen: true,
   commandPaletteOpen: false,
   importOpen: false,
@@ -354,6 +373,49 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   },
 
   setViewMode: (mode) => set({ viewMode: mode }),
+  setProductMode: (mode) =>
+    set((s) => {
+      // Run/Review stay in workspace; Automate/Extend open progressive panels
+      if (mode === "run") {
+        return {
+          productMode: mode,
+          viewMode: "workspace",
+          workspaceRightTab: "changes",
+          monitorOpen: false,
+          extensionsOpen: false,
+        };
+      }
+      if (mode === "review") {
+        return {
+          productMode: mode,
+          viewMode: "workspace",
+          workspaceRightTab: "review",
+          monitorOpen: false,
+          extensionsOpen: false,
+        };
+      }
+      if (mode === "automate") {
+        return {
+          productMode: mode,
+          monitorOpen: true,
+          extensionsOpen: false,
+        };
+      }
+      // extend
+      return {
+        productMode: mode,
+        extensionsOpen: true,
+        monitorOpen: s.monitorOpen,
+      };
+    }),
+  setWorkspaceRightTab: (tab) =>
+    set({
+      workspaceRightTab: tab,
+      productMode: tab === "review" ? "review" : "run",
+      viewMode: "workspace",
+    }),
+  setLeftTraceMode: (mode) => set({ leftTraceMode: mode }),
+  setCausalDrawerOpen: (open) => set({ causalDrawerOpen: open }),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setImportOpen: (open) => set({ importOpen: open }),
@@ -906,6 +968,10 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       }
       return {
         linkedHighlightFileId: id,
+        // Open causal drawer when a file with linked steps is selected
+        causalDrawerOpen: !!id && (session.files[id]?.relatedTraceIds.length ?? 0) > 0
+          ? true
+          : s.causalDrawerOpen,
         sessions: {
           ...s.sessions,
           [session.id]: { ...session, selectedFileId: id, selectedTraceId },

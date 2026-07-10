@@ -34,26 +34,12 @@ export function UsageMeter({
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
   );
 
+  // Session object is replaced on each store update for that session, so it is
+  // a sufficient dependency for usage recompute without listing every field.
   const snapshot = useMemo(() => {
     if (!session) return null;
     return buildSessionUsage(session, { contextLimit });
-    // Recompute when session identity or measured fields change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    session,
-    contextLimit,
-    session?.id,
-    session?.metrics.tokensEstimate,
-    session?.metrics.tokensLimit,
-    session?.metrics.toolCallCount,
-    session?.metrics.thinkingSteps,
-    session?.eventCount,
-    session?.promptHistory?.length,
-    session?.status,
-    Object.keys(session?.nodes ?? {}).length,
-    Object.keys(session?.files ?? {}).length,
-    session?.grokFlags?.maxTurns,
-  ]);
+  }, [session, contextLimit]);
 
   if (!show || !session || !snapshot) return null;
 
@@ -130,7 +116,6 @@ function MeterChip({ meter }: { meter: UsageMeterModel }) {
             backgroundColor: styles.bar,
           }}
         />
-        {/* soft second-tone stripe for visual “alternate” near high usage */}
         {meter.ratio >= 0.5 && (
           <span
             className="pointer-events-none absolute inset-0 opacity-30"

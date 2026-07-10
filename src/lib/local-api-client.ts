@@ -5,18 +5,48 @@ import { CAPABILITY_HEADER } from "./security/local-api-shared";
 let cachedToken: string | null = null;
 let inflight: Promise<string> | null = null;
 
+/** Sync read of last token (for pagehide / keepalive stop). */
+export function getCachedCapabilityToken(): string | null {
+  return cachedToken;
+}
+
 /**
  * Fetch the per-process capability token from the local health endpoint.
  * Token is only issued when Origin/Host validation passes on the server.
  */
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  ms: number
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export async function getCapabilityToken(force = false): Promise<string> {
   if (!force && cachedToken) return cachedToken;
   if (!force && inflight) return inflight;
 
   inflight = (async () => {
-    const res = await fetch("/api/health", { cache: "no-store" });
+    const res = await fetchWithTimeout(
+      "/api/health",
+      { cache: "no-store" },
+      8_000
+    );
     if (!res.ok) {
-      throw new Error(`Failed to obtain local capability token (${res.status})`);
+      const errBody = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+      };
+      throw new Error(
+        errBody.error ||
+          `Failed to obtain local capability token (${res.status}). If on phone Wi‑Fi, start with npm run dev:lan (SPOK_LAN_ACCESS).`
+      );
     }
     const data = (await res.json()) as { localToken?: string; error?: string };
     if (!data.localToken) {

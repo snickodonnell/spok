@@ -33,13 +33,14 @@ import {
   resolveCurrentWorkspace,
 } from "@/lib/workspace-session";
 
+/** Secondary layout views — primary product modes live in the topbar. */
 const VIEWS: { mode: ViewMode; icon: typeof Brain; label: string }[] = [
   { mode: "workspace", icon: PanelsTopLeft, label: "Workspace" },
-  { mode: "unified", icon: LayoutGrid, label: "Unified" },
-  { mode: "trace", icon: Brain, label: "Trace" },
-  { mode: "diff", icon: FileCode2, label: "Diff" },
-  { mode: "log", icon: ScrollText, label: "Log" },
-  { mode: "overview", icon: BarChart3, label: "Overview" },
+  { mode: "unified", icon: LayoutGrid, label: "Split" },
+  { mode: "trace", icon: Brain, label: "Thinking" },
+  { mode: "diff", icon: FileCode2, label: "Changes" },
+  { mode: "log", icon: ScrollText, label: "Events" },
+  { mode: "overview", icon: BarChart3, label: "Health" },
 ];
 
 export function Sidebar() {
@@ -99,11 +100,11 @@ export function Sidebar() {
             S
           </div>
           <div>
-            <div className="font-mono text-sm font-semibold tracking-wider text-phosphor-green crt-glow">
+            <div className="text-sm font-semibold tracking-wide text-phosphor-green">
               SPOK
             </div>
-            <div className="text-[9px] uppercase tracking-[0.2em] text-phosphor-green/40">
-              Live Harness
+            <div className="text-[9px] uppercase tracking-[0.18em] text-phosphor-green/40">
+              Grok Build workbench
             </div>
           </div>
         </div>

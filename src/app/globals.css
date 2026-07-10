@@ -1,33 +1,37 @@
 @import "tailwindcss";
 
-/* ─── Base token defaults (professional theme) ─── */
+/* ─── Base token defaults (professional theme — neutral engineering UI) ─── */
 :root,
 html[data-theme="professional"] {
-  --crt-bg: #0b0f14;
-  --crt-panel: #111820;
-  --crt-panel-elevated: #161e28;
-  --phosphor-green: #6ee7a8;
-  --phosphor-green-dim: #3d9a6a;
-  --phosphor-amber: #e8b84a;
-  --phosphor-cyan: #5ec8e8;
-  --phosphor-magenta: #d46bb0;
-  --phosphor-red: #f07178;
+  --crt-bg: #0c0e12;
+  --crt-panel: #12151c;
+  --crt-panel-elevated: #181c25;
+  /* Sage accent for chrome; body text is neutral slate (not phosphor green) */
+  --phosphor-green: #6b9e80;
+  --phosphor-green-dim: #3d6b52;
+  --phosphor-amber: #c9a227;
+  --phosphor-cyan: #4a9ec4;
+  --phosphor-magenta: #b86b9a;
+  --phosphor-red: #e06c75;
+  --accent-success: #3dba7a;
+  --accent-state: #3dba7a;
   --glow-green: none;
   --glow-cyan: none;
   --glow-amber: none;
   --background: var(--crt-bg);
-  --foreground: #d6e0ea;
-  --text-primary: #d6e0ea;
-  --text-muted: rgba(214, 224, 234, 0.55);
-  --text-faint: rgba(214, 224, 234, 0.35);
-  --border-subtle: rgba(110, 231, 168, 0.14);
-  --border-strong: rgba(110, 231, 168, 0.32);
-  --focus-ring: rgba(94, 200, 232, 0.7);
-  --surface-hover: rgba(110, 231, 168, 0.08);
+  --foreground: #e8ecf1;
+  --text-primary: #e8ecf1;
+  --text-muted: rgba(232, 236, 241, 0.58);
+  --text-faint: rgba(232, 236, 241, 0.38);
+  --border-subtle: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.28);
+  --focus-ring: rgba(74, 158, 196, 0.75);
+  --surface-hover: rgba(148, 163, 184, 0.08);
   --font-ui: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-code: var(--font-geist-mono), ui-monospace, monospace;
   --radius-panel: 8px;
-  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 32px rgba(0, 0, 0, 0.45);
+  --dialog-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
 }
 
 /* ─── CRT phosphor (brand retro) ─── */
@@ -59,6 +63,9 @@ html[data-theme="crt"] {
   --shadow-panel:
     inset 0 0 40px rgba(51, 255, 102, 0.03),
     0 0 20px rgba(0, 0, 0, 0.5);
+  --dialog-shadow: 0 0 40px rgba(51, 255, 102, 0.15);
+  --accent-success: var(--phosphor-green);
+  --accent-state: var(--phosphor-green);
 }
 
 /* ─── High contrast (a11y) ─── */
@@ -88,6 +95,9 @@ html[data-theme="high-contrast"] {
   --font-code: var(--font-geist-mono), ui-monospace, monospace;
   --radius-panel: 2px;
   --shadow-panel: none;
+  --dialog-shadow: none;
+  --accent-success: var(--phosphor-green);
+  --accent-state: var(--phosphor-green);
 }
 
 @theme inline {
@@ -371,4 +381,98 @@ html.reduce-motion .crt-flicker {
 html[data-theme="high-contrast"] ::selection {
   background: #00e5ff;
   color: #000;
+}
+
+/* Professional: reserve bright green for state, not chrome */
+html[data-theme="professional"] .text-state-success {
+  color: var(--accent-success);
+}
+html[data-theme="professional"] .live-dot {
+  background: var(--accent-success) !important;
+}
+
+/* Quieter panel titles on professional (drop all-caps mono chrome) */
+html[data-theme="professional"] .panel-title {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--text-primary);
+}
+
+/* Responsive harness surfaces */
+@media (max-width: 900px) {
+  .workspace-hide-narrow {
+    display: none !important;
+  }
+  [data-testid="causal-rail"] {
+    width: 12rem !important;
+  }
+}
+
+@media (max-width: 1100px) {
+  [data-testid="product-mode-nav"] button {
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
+  }
+}
+
+/* Dialog density: professional soft elevation without phosphor glow */
+html[data-theme="professional"] [role="dialog"] {
+  box-shadow: var(--dialog-shadow);
+  border-color: var(--border-subtle);
+}
+
+/* Preference row pattern for dense dialogs */
+.pref-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0.625rem 0.75rem;
+}
+.pref-row-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.pref-row-hint {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+
+/* Mobile shell helpers */
+[data-testid="mobile-shell"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Empty-state CTA block */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px dashed var(--border-subtle);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 1.5rem 1rem;
+  text-align: center;
+}
+.empty-state-title {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.empty-state-hint {
+  max-width: 18rem;
+  font-size: 0.6875rem;
+  color: var(--text-faint);
 }

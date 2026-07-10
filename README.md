@@ -2,7 +2,8 @@
 
 **Spok** is a production-quality desktop-ready app that wraps [Grok Build](https://x.ai) sessions with **live** thinking-trace and repository-diff visualization.
 
-> Product roadmap and security audit: [`docs/HARNESS_AUDIT_AND_ROADMAP.md`](docs/HARNESS_AUDIT_AND_ROADMAP.md)
+> Product roadmap and security audit: [`docs/HARNESS_AUDIT_AND_ROADMAP.md`](docs/HARNESS_AUDIT_AND_ROADMAP.md)  
+> **Development handoff (Horizon 1 + mobile LAN + session isolation):** [`docs/DEVELOPMENT_HANDOFF.md`](docs/DEVELOPMENT_HANDOFF.md)
 
 Watch reasoning steps, tool calls, plan updates, sub-agents, and code changes stream in as they happen — not after the fact. Daily-driver **professional** theme by default, with optional CRT phosphor and high-contrast modes.
 
@@ -47,7 +48,50 @@ npm run dev
 
 Open **[http://localhost:3000](http://localhost:3000)**.
 
-Production build:
+#### LAN / phone on same Wi‑Fi
+
+Spok is loopback-only by default (security). To open it on a phone or another device on your home network:
+
+```bash
+# Fast path for phones (production server + LAN Host/Origin)
+npm run dev:lan
+```
+
+First run may **build once** (~1 min on the PC), then serves prebuilt assets — much faster on Wi‑Fi than `next dev`. The terminal prints URLs like `http://192.168.x.x:3000`. Open that on the phone (same Wi‑Fi). Force phone UI: `http://192.168.x.x:3000?mobile=1`.
+
+| Script | Use |
+|---|---|
+| `npm run dev:lan` | **Recommended** — production on `0.0.0.0`, phone-friendly |
+| `npm run dev:lan:hot` | Next dev + HMR (slow over Wi‑Fi; PC only) |
+| `npm run lan:urls` | Print LAN addresses |
+
+After code changes for a phone demo, rebuild:
+
+```powershell
+$env:SPOK_LAN_FORCE_BUILD=1; npm run dev:lan
+```
+
+| Variable | Purpose |
+|---|---|
+| `SPOK_LAN_ACCESS=1` | Allow RFC1918 private Host/Origin (set automatically by `*:lan` scripts) |
+| `SPOK_ALLOWED_HOSTS` | Comma-separated extra hostnames/IPs (e.g. a single PC IP without full LAN mode) |
+| `PORT` | HTTP port (default `3000`) |
+
+**Security:** On LAN mode, anyone on your Wi‑Fi who can reach the URL may obtain the local capability token and use privileged APIs (spawn, git, filesystem). Use only on a **trusted home network**, and turn LAN mode off when finished. Windows Firewall may ask to allow Node.js — choose **Private** networks only.
+
+#### Phone UI (auto)
+
+Phones and narrow viewports get a **mobile shell** (bottom tabs: Prompt · Thinking · Files · More). Desktop layout is unchanged on large screens.
+
+| Force layout | How |
+|---|---|
+| Phone | `http://…:3000?mobile=1` |
+| Desktop | `http://…:3000?desktop=1` |
+| Auto (default) | `?layout=auto` or clear preference under **More → Layout** |
+
+Same host server and sessions as the PC — prompts from the phone run Grok on the machine running Spok.
+
+Production build (this machine only):
 
 ```bash
 npm run build
@@ -108,6 +152,8 @@ Environment overrides:
 |---|---|
 | `SPOK_GROK_CMD` | Default CLI binary name/path |
 | `SPOK_RUN_TIMEOUT_MS` | Max run duration in ms (default 2h; `0` = unlimited) |
+| `SPOK_LAN_ACCESS` | `1` = allow private LAN Host/Origin (phone on Wi‑Fi) |
+| `SPOK_ALLOWED_HOSTS` | Extra allowed Host names/IPs (comma-separated) |
 
 > If the CLI is not installed, the status line shows **cli missing** — use **samples** or **import** instead.
 

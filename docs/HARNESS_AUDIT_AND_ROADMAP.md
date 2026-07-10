@@ -489,9 +489,30 @@ Known gaps / follow-ups:
 3. ~~Add `createLocalApiToken()` middleware for privileged routes.~~ **Done (Phase 0) — `authorizePrivilegedRequest`.**
 4. ~~Add `WorkspaceTrust` model and reject untrusted `cwd`.~~ **Done (Phase 0) — in-memory registry.**
 5. ~~Add secret redaction utility and route it through logs, events, diffs, and export.~~ **Done (Phase 0).**
-6. Replace static slash-command assumptions with generated/verified Grok command metadata.
+6. ~~Replace static slash-command assumptions with generated/verified Grok command metadata.~~ **Done (Horizon 1) — fixture + verify; live help parse available.**
 7. ~~Add durable `sessions/<id>/events.ndjson` and replay loader.~~ **Done (Phase 1).**
 8. ~~Harden Tauri capabilities and remove the invalid icon entry.~~ **Done (Phase 2).**
+
+## Product Coherence (UI/UX Harness Plan Horizon 1)
+
+**Status (2026-07-09): Complete (v1).** See `docs/UI_UX_HARNESS_PLAN.md`.  
+**Full handoff (mobile LAN, sync, session isolation):** [`docs/DEVELOPMENT_HANDOFF.md`](./DEVELOPMENT_HANDOFF.md).
+
+Landed in tree:
+
+- Product modes Run / Review / Automate / Extend (`src/lib/product-modes.ts`, topbar, store).
+- Workspace right tabs: Changes / Review / Events / Health; left Thinking | Events.
+- Run status card (`src/components/session/run-status-card.tsx`).
+- Causal workbench: `src/lib/causal-links.ts`, `CausalRail` / mini-rail on Changes, event graph reverse file links.
+- Composer cockpit: structured permission/model/run controls, no "yolo" copy, editable queue stack.
+- Welcome readiness strip (CLI + permission before session).
+- Professional theme neutral tokens + responsive helpers (`globals.css`).
+- Slash catalog fixture + verify (`src/lib/slash-catalog.ts`, `npm run verify:slash-catalog`).
+- Dialog density: Settings left-nav; Monitor empty states; Extensions Gallery/Installed/Trust/Agents.
+- Commit readiness checklist (`src/lib/review-readiness.ts`) on Changes + Review.
+- Verification: unit suites (causal, product modes, review readiness, slash catalog); Playwright smoke extended.
+
+Open follow-ups (Horizon 2+): visual screenshot baselines, live `grok --help` auto-refresh of fixture, hunk-level causal anchors, deeper Settings risk badges.
 
 ## Generated Implementation Skills
 

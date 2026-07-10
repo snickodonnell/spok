@@ -9,6 +9,8 @@ export type SlashKind =
   | "cli" // runs a non-interactive CLI subcommand
   | "ui"; // Spok-only UI action
 
+export type SlashRisk = "low" | "medium" | "high";
+
 export interface SlashCommand {
   /** Primary trigger without leading slash, e.g. "model" */
   name: string;
@@ -21,6 +23,8 @@ export interface SlashCommand {
   group: "session" | "agent" | "config" | "tools" | "spok";
   /** Example usage */
   example?: string;
+  /** Risk label for command picker (high = needs caution). */
+  risk?: SlashRisk;
 }
 
 export const GROK_SLASH_COMMANDS: SlashCommand[] = [
@@ -137,9 +141,10 @@ export const GROK_SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "always-approve",
     aliases: ["yolo", "auto-approve"],
-    description: "Toggle auto-approve all tool executions",
+    description: "Always approve tool executions (high risk — trusted workspaces only)",
     kind: "flag",
     group: "config",
+    risk: "high",
   },
   {
     name: "permission-mode",
@@ -147,6 +152,7 @@ export const GROK_SLASH_COMMANDS: SlashCommand[] = [
     argsHint: "<default|acceptEdits|auto|dontAsk|bypassPermissions|plan>",
     kind: "flag",
     group: "config",
+    risk: "medium",
   },
   {
     name: "no-plan",
@@ -333,9 +339,33 @@ export function defaultGrokFlags(): GrokRunFlags {
 
 /** Human-readable permission mode for status chips / selectors. */
 export function permissionModeLabel(flags: GrokRunFlags): string {
-  if (flags.alwaysApprove) return "always-approve";
+  if (flags.alwaysApprove) return "Always approve";
   if (flags.permissionMode) return flags.permissionMode;
   return "manual";
+}
+
+/** Grouped slash commands for the structured command picker. */
+export function slashCommandsByGroup(): Record<
+  SlashCommand["group"],
+  SlashCommand[]
+> {
+  const groups: Record<SlashCommand["group"], SlashCommand[]> = {
+    session: [],
+    agent: [],
+    config: [],
+    tools: [],
+    spok: [],
+  };
+  for (const c of GROK_SLASH_COMMANDS) {
+    groups[c.group].push(c);
+  }
+  return groups;
+}
+
+export function slashRiskLabel(risk?: SlashRisk): string | null {
+  if (!risk || risk === "low") return null;
+  if (risk === "medium") return "caution";
+  return "high risk";
 }
 
 export type ResolvedRun =

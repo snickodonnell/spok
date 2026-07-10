@@ -7,6 +7,7 @@ import {
   extractSubagentLanes,
   isSubagentPollutingNode,
 } from "@/lib/automation/subagent-lanes";
+import { cn } from "@/lib/utils";
 
 /**
  * Permanent thinking / progress feed.
@@ -15,7 +16,16 @@ import {
  * screen as its own paragraph. Technical CLI noise is excluded. A final
  * formatted summary appears at the end when present.
  */
-export function ThinkingStream() {
+type ThinkingStreamProps = {
+  /** Compact pane for embedding under the mobile prompt tab */
+  compact?: boolean;
+  className?: string;
+};
+
+export function ThinkingStream({
+  compact = false,
+  className,
+}: ThinkingStreamProps = {}) {
   const sessionId = useSpokStore((s) => s.activeSessionId);
   const hasSession = !!sessionId;
   const nodes = useSpokStore((s) =>
@@ -33,6 +43,7 @@ export function ThinkingStream() {
     return id ? s.sessions[id]?.status : undefined;
   });
   const hideSubagent = useSpokStore((s) => s.hideSubagentFromThinking);
+  const isLive = status === "running" || status === "starting";
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -67,7 +78,12 @@ export function ThinkingStream() {
 
   if (!hasSession) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-sm text-phosphor-green/35">
+      <div
+        className={cn(
+          "flex items-center justify-center p-6 text-sm text-phosphor-green/35",
+          compact ? "h-full min-h-[8rem]" : "h-full"
+        )}
+      >
         No active session
       </div>
     );
@@ -77,37 +93,66 @@ export function ThinkingStream() {
     const running =
       status === "running" || status === "starting" || status === "ready";
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+      <div
+        className={cn(
+          "flex flex-col items-center justify-center gap-2 p-8 text-center",
+          compact ? "min-h-[8rem] py-4" : "h-full"
+        )}
+      >
+        {isLive && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-phosphor-amber">
+            <span className="live-dot h-1.5 w-1.5 rounded-full bg-phosphor-amber" />
+            Live on host
+          </span>
+        )}
         <p className="text-sm text-phosphor-green/45">
           {running ? "Waiting for thoughts…" : "No thoughts in this session yet"}
         </p>
-        <p className="max-w-xs text-[11px] leading-relaxed text-phosphor-green/28">
-          Progress updates stay here permanently as the agent works. Tool calls and
-          raw stream lines stay in Log.
-        </p>
+        {!compact && (
+          <p className="max-w-xs text-[11px] leading-relaxed text-phosphor-green/28">
+            Progress updates stay here as the agent works. Pulls from the host
+            every few seconds while a run is active.
+          </p>
+        )}
       </div>
     );
   }
 
+  const shownProgress = compact ? progressBlocks.slice(-12) : progressBlocks;
+
   return (
     <div
-      className="h-full overflow-y-auto px-4 py-4"
+      className={cn(
+        "overflow-y-auto px-4 py-4",
+        compact ? "max-h-56 min-h-[10rem]" : "h-full",
+        className
+      )}
       role="log"
       aria-label="Agent thinking"
       aria-live="polite"
+      aria-busy={isLive}
+      data-live={isLive ? "true" : "false"}
     >
+      {isLive && (
+        <div className="sticky top-0 z-10 mb-3 flex items-center gap-2 bg-crt-bg/90 py-1 text-[11px] text-phosphor-amber backdrop-blur-sm">
+          <span className="live-dot h-1.5 w-1.5 rounded-full bg-phosphor-amber" />
+          Thinking live…
+        </div>
+      )}
       <div
-        className="mx-auto max-w-2xl space-y-4 text-[13.5px] leading-[1.7] text-phosphor-green/90"
+        className={cn(
+          "mx-auto max-w-2xl space-y-4 text-phosphor-green/90",
+          compact
+            ? "space-y-2.5 text-[13px] leading-relaxed"
+            : "text-[13.5px] leading-[1.7]"
+        )}
         style={{
           fontFamily:
             'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
         }}
       >
-        {progressBlocks.map((b) => (
-          <p
-            key={b.id}
-            className="whitespace-pre-wrap break-words"
-          >
+        {shownProgress.map((b) => (
+          <p key={b.id} className="whitespace-pre-wrap break-words">
             {b.text}
           </p>
         ))}

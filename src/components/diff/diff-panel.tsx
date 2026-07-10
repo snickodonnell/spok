@@ -4,6 +4,7 @@ import { useSpokStore } from "@/lib/store";
 import { FileTree } from "./file-tree";
 import { DiffStatChip, MonacoDiff, type DiffLayout } from "./monaco-diff";
 import { HunkNav } from "./hunk-nav";
+import { CausalRail, CausalMiniRail } from "./causal-rail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,7 @@ import {
   Plus,
   Minus,
   Trash2,
+  Link2,
 } from "lucide-react";
 import { unifiedDiffText } from "@/lib/diff-utils";
 import { useEffect, useState } from "react";
@@ -21,6 +23,7 @@ import { toast } from "sonner";
 import { refreshGitDiff } from "@/lib/harness";
 import { runGitAndRefresh } from "@/lib/git/client";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CommitChecklist } from "@/components/git/commit-checklist";
 
 const LAYOUT_KEY = "spok.diffLayout";
 
@@ -29,6 +32,9 @@ export function DiffPanel() {
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const causalOpen = useSpokStore((s) => s.causalDrawerOpen);
+  const setCausalOpen = useSpokStore((s) => s.setCausalDrawerOpen);
+  const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
   const file = session?.selectedFileId
     ? session.files[session.selectedFileId]
     : null;
@@ -142,12 +148,14 @@ export function DiffPanel() {
 
   const fileCount = session ? Object.keys(session.files).length : 0;
 
+  const relatedCount = file?.relatedTraceIds.length ?? 0;
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" data-testid="changes-panel">
       <div className="flex items-center justify-between gap-2 border-b border-phosphor-green/15 px-3 py-2">
         <div className="flex items-center gap-2">
-          <h2 className="font-mono text-xs uppercase tracking-[0.2em] text-phosphor-green crt-glow">
-            Repo Diff
+          <h2 className="text-xs font-medium tracking-wide text-phosphor-green/90">
+            Changes
           </h2>
           <span className="font-mono text-[10px] text-phosphor-green/40">
             {fileCount} file{fileCount === 1 ? "" : "s"}
@@ -210,6 +218,21 @@ export function DiffPanel() {
               deletions={file.deletions}
             />
             <HunkNav file={file} />
+            <Button
+              variant={causalOpen ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 gap-1 text-[10px]"
+              title="Why did this change?"
+              onClick={() => setCausalOpen(!causalOpen)}
+            >
+              <Link2 className="h-3 w-3" />
+              Why
+              {relatedCount > 0 && (
+                <span className="font-mono text-phosphor-cyan">
+                  {relatedCount}
+                </span>
+              )}
+            </Button>
             {canMutate && (
               <>
                 {(file.unstaged || file.untracked) && (
@@ -264,7 +287,21 @@ export function DiffPanel() {
         )}
       </div>
 
-      {/* Simple flex split — no nested resizable groups (avoids layout blowouts) */}
+      <CausalMiniRail />
+
+      <div className="flex items-center gap-2 border-b border-phosphor-green/10 px-2 py-1">
+        <CommitChecklist compact className="min-w-0 flex-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 shrink-0 text-[10px]"
+          onClick={() => setWorkspaceRightTab("review")}
+        >
+          Open Review
+        </Button>
+      </div>
+
+      {/* File tree + diff + optional causal rail */}
       <div className="flex min-h-0 flex-1">
         <div className="w-56 shrink-0 overflow-auto border-r border-phosphor-green/15">
           <FileTree />
@@ -277,6 +314,7 @@ export function DiffPanel() {
             onLayoutChange={onLayoutChange}
           />
         </div>
+        <CausalRail />
       </div>
 
       <ConfirmDialog

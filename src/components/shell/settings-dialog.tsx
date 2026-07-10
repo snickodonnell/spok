@@ -74,6 +74,9 @@ export function SettingsDialog() {
   const [draft, setDraft] = useState<SpokSettings | null>(null);
   const [layer, setLayer] = useState<"user" | "project">("user");
   const [grants, setGrants] = useState<ApprovalGrant[]>([]);
+  const [section, setSection] = useState<
+    "permissions" | "commands" | "appearance" | "grants" | "privacy"
+  >("permissions");
 
   const cwd = session?.config.cwd;
 
@@ -190,16 +193,15 @@ export function SettingsDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-hidden p-0">
-        <div className="border-b border-phosphor-green/15 px-5 py-4">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden p-0">
+        <div className="border-b border-phosphor-green/15 px-5 py-3">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Shield className="h-4 w-4 text-phosphor-cyan" />
-              Settings & permissions
+              Settings
             </DialogTitle>
-            <DialogDescription>
-              Layered policy: managed (env) → user (~/.spok) → project (.spok/) →
-              session. Deny rules always win.
+            <DialogDescription className="text-xs">
+              User and project preferences. Deny rules always win.
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -210,38 +212,57 @@ export function SettingsDialog() {
             Loading settings…
           </div>
         ) : (
-          <Tabs defaultValue="permissions" className="flex min-h-0 flex-col">
-            <div className="border-b border-phosphor-green/10 px-4 pt-2">
-              <TabsList className="w-full flex-wrap h-auto gap-0.5">
-                <TabsTrigger value="permissions" className="flex-1 min-w-[4.5rem]">
-                  Permissions
-                </TabsTrigger>
-                <TabsTrigger value="commands" className="flex-1 min-w-[4.5rem]">
-                  Commands
-                </TabsTrigger>
-                <TabsTrigger value="appearance" className="flex-1 min-w-[4.5rem]">
-                  Appearance
-                </TabsTrigger>
-                <TabsTrigger value="grants" className="flex-1 min-w-[4.5rem]">
-                  Grants
-                </TabsTrigger>
-                <TabsTrigger value="privacy" className="flex-1 min-w-[4.5rem]">
-                  Privacy
-                </TabsTrigger>
-              </TabsList>
-            </div>
+          <Tabs
+            value={section}
+            onValueChange={(v) =>
+              setSection(
+                v as
+                  | "permissions"
+                  | "commands"
+                  | "appearance"
+                  | "grants"
+                  | "privacy"
+              )
+            }
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <div className="flex min-h-0 flex-1">
+              <nav
+                className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-phosphor-green/10 bg-black/20 p-2"
+                aria-label="Settings sections"
+              >
+                <TabsList className="flex h-auto w-full flex-col gap-0.5 bg-transparent p-0">
+                  {(
+                    [
+                      ["permissions", "Permissions"],
+                      ["commands", "Commands"],
+                      ["appearance", "Appearance"],
+                      ["grants", "Grants"],
+                      ["privacy", "Privacy"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <TabsTrigger
+                      key={value}
+                      value={value}
+                      className="h-8 w-full justify-start px-2 text-[11px] data-[state=active]:bg-phosphor-green/10"
+                    >
+                      {label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </nav>
 
-            <ScrollArea className="h-[min(52vh,420px)] px-5 py-3">
-              <TabsContent value="permissions" className="mt-0 space-y-4">
+            <ScrollArea className="h-[min(56vh,460px)] flex-1 px-4 py-3">
+              <TabsContent value="permissions" className="mt-0 space-y-3">
                 <LayerPicker layer={layer} setLayer={setLayer} hasProject={!!cwd} />
 
                 <section>
-                  <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-phosphor-green/45">
+                  <h3 className="mb-2 text-[11px] font-medium text-phosphor-green/55">
                     Permission mode
                     {data?.provenance.permissionMode && (
-                      <span className="ml-2 normal-case text-phosphor-cyan/50">
-                        via {data.provenance.permissionMode}
-                      </span>
+                      <Badge variant="muted" className="ml-2 normal-case">
+                        {data.provenance.permissionMode}
+                      </Badge>
                     )}
                   </h3>
                   <div className="grid gap-2">
@@ -281,9 +302,6 @@ export function SettingsDialog() {
                               </Badge>
                             )}
                           </div>
-                          <p className="mt-1 text-[11px] leading-relaxed text-phosphor-green/50">
-                            {meta.description}
-                          </p>
                         </button>
                       );
                     })}
@@ -291,17 +309,16 @@ export function SettingsDialog() {
                 </section>
 
                 <ToggleRow
-                  label="Allow custom commands without profile"
-                  description="When off, unknown binaries always require approval (recommended)."
+                  label="Allow custom commands"
+                  description="Unknown binaries need approval when off."
                   checked={draft.allowCustomCommands}
                   onChange={(v) => patch({ allowCustomCommands: v })}
                 />
               </TabsContent>
 
-              <TabsContent value="commands" className="mt-0 space-y-4">
-                <p className="text-[11px] text-phosphor-green/50">
-                  Command profiles classify binaries. In <strong>auto</strong> mode,
-                  only checked profiles run without a prompt.
+              <TabsContent value="commands" className="mt-0 space-y-3">
+                <p className="text-[11px] text-phosphor-green/45">
+                  Auto mode only auto-runs checked profiles.
                 </p>
                 <div className="space-y-2">
                   {(data?.profiles ?? []).map((p) => {
@@ -393,13 +410,13 @@ export function SettingsDialog() {
               </TabsContent>
 
               <TabsContent value="grants" className="mt-0 space-y-3">
-                <p className="text-[11px] text-phosphor-green/50">
-                  Persistent <strong>allow always</strong> decisions. Revoke anytime.
-                </p>
                 {grants.length === 0 ? (
-                  <p className="rounded border border-phosphor-green/10 bg-black/20 px-3 py-6 text-center text-xs text-phosphor-green/35">
-                    No stored approval grants
-                  </p>
+                  <div className="empty-state">
+                    <p className="empty-state-title">No approval grants</p>
+                    <p className="empty-state-hint">
+                      Allow-always decisions appear here for revoke.
+                    </p>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {grants.map((g) => (
@@ -649,6 +666,7 @@ export function SettingsDialog() {
                 />
               </TabsContent>
             </ScrollArea>
+            </div>
 
             <DialogFooter className="gap-2 border-t border-phosphor-green/15 px-4 py-3">
               <Button
@@ -744,20 +762,20 @@ function ToggleRow({
   icon?: typeof Eye;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-phosphor-green/15 bg-black/30 px-3 py-2.5 hover:border-phosphor-green/30">
+    <label className="pref-row cursor-pointer hover:border-phosphor-green/30">
+      <span className="min-w-0 flex-1">
+        <span className="pref-row-label flex items-center gap-1.5">
+          {Icon && <Icon className="h-3.5 w-3.5 opacity-60" />}
+          {label}
+        </span>
+        <span className="pref-row-hint">{description}</span>
+      </span>
       <input
         type="checkbox"
-        className="mt-1 accent-emerald-500"
+        className="mt-0.5 shrink-0 accent-emerald-500"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
       />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-xs text-phosphor-green">
-          {Icon && <Icon className="h-3 w-3 opacity-60" />}
-          {label}
-        </div>
-        <p className="mt-0.5 text-[11px] text-phosphor-green/45">{description}</p>
-      </div>
     </label>
   );
 }

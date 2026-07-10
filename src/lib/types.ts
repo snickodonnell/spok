@@ -361,6 +361,11 @@ export type SessionMetaRecord = {
 
 export type ViewMode = "workspace" | "unified" | "trace" | "diff" | "log" | "overview";
 
+/** Primary product modes — see `src/lib/product-modes.ts`. */
+export type ProductMode = import("./product-modes").ProductMode;
+export type WorkspaceRightTab = import("./product-modes").WorkspaceRightTab;
+export type LeftTraceMode = import("./product-modes").LeftTraceMode;
+
 export type TraceFilter = {
   search: string;
   types: TraceNodeType[];

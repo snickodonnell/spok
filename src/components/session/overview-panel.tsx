@@ -105,7 +105,7 @@ export function OverviewPanel() {
   return (
     <div className="h-full overflow-auto p-4">
       <div className="mb-4">
-        <h2 className="font-mono text-sm uppercase tracking-[0.2em] text-phosphor-green crt-glow">
+        <h2 className="panel-title text-base text-phosphor-green">
           Session Overview
         </h2>
         <p className="mt-1 text-xs text-phosphor-green/50">{session.name}</p>

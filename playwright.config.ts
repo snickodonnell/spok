@@ -12,7 +12,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: process.env.CI ? 1 : undefined,
+  // Exit cleanly after tests; do not wait forever for HTML report server
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
+  // Bound total suite so npm run test:e2e does not hang on webServer teardown
+  globalTimeout: process.env.CI ? 10 * 60_000 : 6 * 60_000,
+  timeout: 45_000,
   use: {
     baseURL: process.env.SPOK_E2E_BASE_URL || "http://127.0.0.1:3000",
     trace: "on-first-retry",
@@ -32,5 +36,7 @@ export default defineConfig({
         url: "http://127.0.0.1:3000",
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
+        // Force-kill the Next server after tests so the npm script exits
+        gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
       },
 });

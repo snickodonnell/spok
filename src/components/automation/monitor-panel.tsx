@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -266,15 +266,14 @@ export function MonitorPanel() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="flex max-h-[92vh] max-w-4xl flex-col overflow-hidden p-0">
-        <div className="border-b border-phosphor-green/15 px-5 py-4">
+        <div className="border-b border-phosphor-green/15 px-5 py-3">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 font-mono text-phosphor-green">
+            <DialogTitle className="flex items-center gap-2 text-phosphor-green">
               <Layers className="h-4 w-4 text-phosphor-cyan" />
               Monitor
             </DialogTitle>
-            <DialogDescription className="text-xs text-phosphor-green/50">
-              Background jobs, schedules, and parallel lanes — without leaving your
-              foreground session. Automated runs require a trusted workspace.
+            <DialogDescription className="text-xs text-phosphor-green/45">
+              Queue, schedules, channels, and lanes · trusted workspaces only
             </DialogDescription>
           </DialogHeader>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -327,10 +326,10 @@ export function MonitorPanel() {
           onValueChange={(v) => setTab(v as TabId)}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <TabsList className="mx-4 mt-3 h-9 w-auto justify-start self-start">
+          <TabsList className="mx-4 mt-2 h-9 w-auto justify-start self-start">
             <TabsTrigger value="queue" className="gap-1 text-[10px]">
               <Play className="h-3 w-3" />
-              Queue
+              Foreground queue
               {activeJobs.length > 0 && (
                 <span className="text-phosphor-amber">{activeJobs.length}</span>
               )}
@@ -528,7 +527,7 @@ export function MonitorPanel() {
 
               {(bundle?.schedules ?? []).length === 0 ? (
                 <Empty
-                  title="No schedules"
+                  title="No schedules yet"
                   body="Create a recurring repo check above."
                 />
               ) : (
@@ -1072,11 +1071,20 @@ function LaneStatus({ status }: { status: string }) {
   return <AlertTriangle className="h-3.5 w-3.5 text-phosphor-green/40" />;
 }
 
-function Empty({ title, body }: { title: string; body: string }) {
+function Empty({
+  title,
+  body,
+  action,
+}: {
+  title: string;
+  body: string;
+  action?: ReactNode;
+}) {
   return (
-    <div className="rounded-lg border border-dashed border-phosphor-green/20 px-6 py-10 text-center">
-      <div className="font-mono text-sm text-phosphor-green/60">{title}</div>
-      <p className="mt-1 text-[11px] text-phosphor-green/35">{body}</p>
+    <div className="empty-state">
+      <div className="empty-state-title">{title}</div>
+      <p className="empty-state-hint">{body}</p>
+      {action}
     </div>
   );
 }

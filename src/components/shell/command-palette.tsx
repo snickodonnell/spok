@@ -43,6 +43,8 @@ export function CommandPalette() {
   const open = useSpokStore((s) => s.commandPaletteOpen);
   const setOpen = useSpokStore((s) => s.setCommandPaletteOpen);
   const setViewMode = useSpokStore((s) => s.setViewMode);
+  const setProductMode = useSpokStore((s) => s.setProductMode);
+  const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
   const setLaunchOpen = useSpokStore((s) => s.setLaunchOpen);
   const setImportOpen = useSpokStore((s) => s.setImportOpen);
   const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
@@ -252,24 +254,61 @@ export function CommandPalette() {
           </Command.Group>
 
           <Command.Group
-            heading="Views"
+            heading="Modes"
             className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-phosphor-green/40"
           >
-            <Item icon={LayoutGrid} label="Workspace (prompt + live trace)" onSelect={() => { setViewMode("workspace"); setOpen(false); }} />
-            <Item icon={LayoutGrid} label="Unified view" onSelect={() => { setViewMode("unified"); setOpen(false); }} />
-            <Item icon={Brain} label="Trace view" onSelect={() => { setViewMode("trace"); setOpen(false); }} />
-            <Item icon={FileCode2} label="Diff view" onSelect={() => { setViewMode("diff"); setOpen(false); }} />
             <Item
-              icon={GitBranch}
-              label="Workspace · Git panel"
+              icon={Play}
+              label="Mode · Run"
               onSelect={() => {
-                setViewMode("workspace");
+                setProductMode("run");
                 setOpen(false);
-                toast.message("Open the Git tab in the workspace right pane");
               }}
             />
-            <Item icon={ScrollText} label="Log view" onSelect={() => { setViewMode("log"); setOpen(false); }} />
-            <Item icon={BarChart3} label="Overview" onSelect={() => { setViewMode("overview"); setOpen(false); }} />
+            <Item
+              icon={GitBranch}
+              label="Mode · Review"
+              onSelect={() => {
+                setProductMode("review");
+                setOpen(false);
+              }}
+            />
+            <Item
+              icon={Layers}
+              label="Mode · Automate (Monitor)"
+              onSelect={() => {
+                setProductMode("automate");
+                setOpen(false);
+              }}
+            />
+            <Item
+              icon={Puzzle}
+              label="Mode · Extend (Extensions)"
+              onSelect={() => {
+                setProductMode("extend");
+                setOpen(false);
+              }}
+            />
+            <Item
+              icon={FileCode2}
+              label="Workspace · Changes"
+              onSelect={() => {
+                setWorkspaceRightTab("changes");
+                setOpen(false);
+              }}
+            />
+            <Item
+              icon={GitBranch}
+              label="Workspace · Review tab"
+              onSelect={() => {
+                setWorkspaceRightTab("review");
+                setOpen(false);
+              }}
+            />
+            <Item icon={LayoutGrid} label="Unified split view" onSelect={() => { setViewMode("unified"); setOpen(false); }} />
+            <Item icon={Brain} label="Thinking-only view" onSelect={() => { setViewMode("trace"); setOpen(false); }} />
+            <Item icon={ScrollText} label="Events log view" onSelect={() => { setViewMode("log"); setOpen(false); }} />
+            <Item icon={BarChart3} label="Health overview" onSelect={() => { setViewMode("overview"); setOpen(false); }} />
           </Command.Group>
 
           <Command.Group

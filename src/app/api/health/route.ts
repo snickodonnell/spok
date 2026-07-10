@@ -1,5 +1,6 @@
 import {
   getLocalCapabilityToken,
+  isLanAccessEnabled,
   isLocalHostAllowed,
   isOriginAllowed,
   policyDenialResponse,
@@ -10,7 +11,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Local bootstrap endpoint. Issues the per-process capability token only when
- * Host/Origin look like the local Spok app. Remote callers get a denial without a token.
+ * Host/Origin look like the Spok app (loopback, or private LAN if SPOK_LAN_ACCESS=1).
+ * Public / unexpected hosts get a denial without a token.
  */
 export async function GET(req: Request) {
   const host = req.headers.get("host");
@@ -18,7 +20,8 @@ export async function GET(req: Request) {
 
   if (!isLocalHostAllowed(host) || !isOriginAllowed(origin, host)) {
     return policyDenialResponse(403, {
-      error: "Health token is only available to the local Spok app",
+      error:
+        "Health token is only available to the local Spok app (or LAN when SPOK_LAN_ACCESS=1)",
       code: "invalid_origin",
       policy: "origin_host",
       action: "health_token",
@@ -32,5 +35,6 @@ export async function GET(req: Request) {
     version: "0.1.0",
     time: Date.now(),
     localToken: getLocalCapabilityToken(),
+    lanAccess: isLanAccessEnabled(),
   });
 }

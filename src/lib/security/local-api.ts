@@ -44,6 +44,16 @@ const DEFAULT_LOCAL_HOSTS = new Set([
   "::1",
 ]);
 
+/**
+ * When true, Host/Origin may be RFC1918 private LAN addresses (and link-local).
+ * Required for phone/tablet access on the same Wi‑Fi. Off by default — Spok
+ * remains loopback-only until you opt in (`SPOK_LAN_ACCESS=1` or `npm run dev:lan`).
+ */
+export function isLanAccessEnabled(): boolean {
+  const v = process.env.SPOK_LAN_ACCESS?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
 function parseHostHeader(hostHeader: string | null): { host: string; port?: string } | null {
   if (!hostHeader) return null;
   const raw = hostHeader.trim().toLowerCase();
@@ -59,8 +69,12 @@ function parseHostHeader(hostHeader: string | null): { host: string; port?: stri
     return { host, port };
   }
 
-  const [host, port] = raw.split(":");
-  return { host, port };
+  // Hostnames / IPv4: last colon separates port (avoid splitting IPv6 without brackets)
+  const lastColon = raw.lastIndexOf(":");
+  if (lastColon > 0 && /^\d+$/.test(raw.slice(lastColon + 1))) {
+    return { host: raw.slice(0, lastColon), port: raw.slice(lastColon + 1) };
+  }
+  return { host: raw };
 }
 
 function allowedHosts(): Set<string> {
@@ -73,17 +87,65 @@ function allowedHosts(): Set<string> {
   return set;
 }
 
+/**
+ * RFC1918 + common local-only ranges for optional LAN hosting.
+ * Does **not** include public internet addresses.
+ */
+export function isPrivateLanHostname(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h) return false;
+
+  // IPv4
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const parts = m.slice(1).map((x) => Number(x));
+    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    // Link-local (APIPA) — useful on ad-hoc networks
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+
+  // IPv6 unique local (fc00::/7) and link-local (fe80::/10)
+  if (h.includes(":")) {
+    if (h.startsWith("fc") || h.startsWith("fd")) return true;
+    if (h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb"))
+      return true;
+  }
+
+  // .local mDNS (e.g. mypc.local) — only when LAN mode is on (checked by caller)
+  if (h.endsWith(".local")) return true;
+
+  return false;
+}
+
+function hostIsAllowed(hostname: string): boolean {
+  const normalized =
+    hostname === "::1" || hostname === "[::1]" ? "[::1]" : hostname;
+  if (allowedHosts().has(normalized) || allowedHosts().has(hostname)) {
+    return true;
+  }
+  if (isLanAccessEnabled() && isPrivateLanHostname(hostname)) {
+    return true;
+  }
+  return false;
+}
+
 export function isLocalHostAllowed(hostHeader: string | null): boolean {
   const parsed = parseHostHeader(hostHeader);
   if (!parsed) return false;
-  return allowedHosts().has(parsed.host);
+  return hostIsAllowed(parsed.host);
 }
 
 /**
  * Validate Origin for browser callers.
- * - Missing Origin is allowed only for same-machine tooling when Host is local
+ * - Missing Origin is allowed only when Host is allowed
  *   (e.g. some navigations / non-CORS GETs). Privileged routes still need the token.
- * - When Origin is present it must be http(s) to an allowed local host.
+ * - When Origin is present it must be http(s) to an allowed host (loopback and,
+ *   if SPOK_LAN_ACCESS is on, private LAN addresses).
  */
 export function isOriginAllowed(origin: string | null, hostHeader: string | null): boolean {
   if (!isLocalHostAllowed(hostHeader)) return false;
@@ -93,9 +155,7 @@ export function isOriginAllowed(origin: string | null, hostHeader: string | null
     const url = new URL(origin);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
     const originHost = url.hostname.toLowerCase();
-    const normalized =
-      originHost === "::1" || originHost === "[::1]" ? "[::1]" : originHost;
-    return allowedHosts().has(normalized) || allowedHosts().has(originHost);
+    return hostIsAllowed(originHost);
   } catch {
     return false;
   }

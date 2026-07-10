@@ -15,11 +15,23 @@ import type { Session } from "@/lib/types";
 
 const LAST_ACTIVE_KEY = "spok.lastActiveSessionId";
 
+export type SessionHydrationOptions = {
+  /**
+   * Cap how many sessions to restore (phone defaults lower for Wi‑Fi speed).
+   */
+  maxSessions?: number;
+  /**
+   * Prefer snapshot over full event replay when event count is high.
+   * Much faster on mobile / LAN.
+   */
+  preferSnapshot?: boolean;
+};
+
 /**
  * On app mount, restore durable sessions from ~/.spok/sessions (via local API).
  * Prefers replaying the append-only event log; falls back to snapshot.
  */
-export function useSessionHydration() {
+export function useSessionHydration(opts: SessionHydrationOptions = {}) {
   const started = useRef(false);
   const hydrateSession = useSpokStore((s) => s.hydrateSession);
   const setHydrated = useSpokStore((s) => s.setHydrated);
@@ -38,12 +50,19 @@ export function useSessionHydration() {
     started.current = true;
 
     let cancelled = false;
+    // Hard deadline so phone never spins forever if LAN is flaky
+    const bootDeadline = window.setTimeout(() => {
+      if (cancelled) return;
+      console.warn("[spok] hydration deadline — showing UI anyway");
+      setHydrated(true);
+      setHydrating(false);
+    }, 12_000);
 
     (async () => {
       setHydrating(true);
       try {
         // Load layered settings early so permission mode is visible
-        let maxRestore = 20;
+        let maxRestore = opts.maxSessions ?? 20;
         try {
           const settings = await fetchSettings();
           if (!cancelled) {
@@ -58,13 +77,24 @@ export function useSessionHydration() {
               ui.osNotifications ?? desktop?.osNotifications ?? true
             );
             setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
-            maxRestore = settings.resolved.maxRestoredSessions ?? 20;
+            if (opts.maxSessions == null) {
+              maxRestore = settings.resolved.maxRestoredSessions ?? 20;
+            }
           }
         } catch {
           /* settings optional at boot */
         }
 
-        const metas = await listDurableSessions();
+        // Phone / LAN: keep boot tiny
+        maxRestore = Math.min(maxRestore, opts.maxSessions ?? maxRestore);
+
+        let metas: Awaited<ReturnType<typeof listDurableSessions>> = [];
+        try {
+          metas = await listDurableSessions();
+        } catch (e) {
+          console.warn("[spok] list sessions failed (LAN?)", e);
+          return;
+        }
         if (cancelled) return;
 
         if (metas.length === 0) {
@@ -91,7 +121,28 @@ export function useSessionHydration() {
             if (cancelled) return;
 
             let session: Session;
-            if (bundle.events.length > 0) {
+            const eventCount = bundle.events.length;
+            const useSnapshot =
+              opts.preferSnapshot &&
+              bundle.snapshot &&
+              (eventCount === 0 || eventCount > 200);
+
+            if (useSnapshot && bundle.snapshot) {
+              session = {
+                ...bundle.snapshot,
+                id: meta.id,
+                source: "resume",
+                status:
+                  bundle.snapshot.status === "running" ||
+                  bundle.snapshot.status === "starting"
+                    ? "ready"
+                    : bundle.snapshot.status,
+                durable: true,
+                // Keep a short tail for thinking UI; full log stays on disk
+                eventLog: bundle.events.slice(-80),
+                eventCount: eventCount || bundle.snapshot.eventCount,
+              };
+            } else if (bundle.events.length > 0) {
               session = replayEvents(bundle.events, {
                 id: meta.id,
                 name: meta.name,
@@ -216,6 +267,7 @@ export function useSessionHydration() {
       } catch (e) {
         console.warn("[spok] session hydration failed", e);
       } finally {
+        window.clearTimeout(bootDeadline);
         if (!cancelled) {
           setHydrated(true);
           setHydrating(false);
@@ -225,6 +277,7 @@ export function useSessionHydration() {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(bootDeadline);
     };
   }, [
     hydrateSession,
@@ -238,6 +291,8 @@ export function useSessionHydration() {
     setReducedMotion,
     setOsNotifications,
     setNativeFolderPicker,
+    opts.maxSessions,
+    opts.preferSnapshot,
   ]);
 
   // Remember last active session for next launch

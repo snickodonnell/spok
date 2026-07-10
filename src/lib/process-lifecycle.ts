@@ -140,11 +140,15 @@ export function unregisterProcess(sessionId: string): void {
 }
 
 export function listProcesses(): ProcessRecord[] {
-  return [...registry.values()].map((entry) => {
-    const { child, ...rest } = entry;
-    void child;
-    return rest;
-  });
+  // Drop exited / killed entries so "live" UI never sticks after a run ends
+  pruneStaleProcesses();
+  return [...registry.values()]
+    .filter((entry) => !entry.killed && entry.child.exitCode == null)
+    .map((entry) => {
+      const { child, ...rest } = entry;
+      void child;
+      return rest;
+    });
 }
 
 export function stopSessionProcess(

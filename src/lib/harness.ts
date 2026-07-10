@@ -354,10 +354,23 @@ export async function runHarness(opts: {
   }
 
   const s = useSpokStore.getState().sessions[sessionId];
-  if (s && (s.status === "running" || s.status === "starting")) {
+  const endStatus = timedOut
+    ? "stopped"
+    : exitCode === 0
+      ? "completed"
+      : exitCode == null
+        ? "stopped"
+        : "error";
+
+  // Always clear live flags so mobile/desktop banners drop immediately
+  if (s) {
     store.updateSession(sessionId, {
-      status: timedOut ? "stopped" : "ready",
-      error: timedOut ? "Run timed out" : undefined,
+      status: endStatus,
+      error: timedOut
+        ? "Run timed out"
+        : exitCode && exitCode !== 0
+          ? s.error
+          : undefined,
     });
   }
 
@@ -372,6 +385,18 @@ export async function runHarness(opts: {
       severity: "warn",
       provider: "spok",
     });
+  } else {
+    store.applyStreamEvent(sessionId, {
+      type: "session_end",
+      timestamp: Date.now(),
+      title: endStatus === "completed" ? "Run complete" : "Run ended",
+      content:
+        endStatus === "completed"
+          ? "Session finished successfully."
+          : `Process exited (code ${exitCode ?? "—"})`,
+      status: endStatus === "completed" ? "success" : "error",
+      provider: "harness",
+    });
   }
 
   // Always fire stop when a run finishes; also session_end on clean exit
@@ -382,6 +407,7 @@ export async function runHarness(opts: {
   }
 
   try {
+    // Persist final status to disk so peers (phone/desktop) clear "live"
     store.persistSessionNow(sessionId);
   } catch {
     /* optional */

@@ -3,6 +3,10 @@
 import { useSpokStore } from "@/lib/store";
 import { trustWorkspace } from "@/lib/local-api-client";
 import { saveRecentDir } from "@/components/shell/directory-navigator";
+import {
+  isDifferentWorkspace,
+  stopPreviousSessionForWorkspaceChange,
+} from "@/lib/session-lifecycle-client";
 
 const LAST_CWD_KEY = "spok.lastCwd";
 const LAST_CMD_KEY = "spok.lastCommand";
@@ -12,21 +16,39 @@ export type OpenWorkspaceOpts = {
   command?: string;
   /** Optional display name; defaults to folder basename. */
   name?: string;
+  /**
+   * Always create a new session (default true).
+   * When the directory changes vs the active session, a new session is required.
+   */
+  forceNewSession?: boolean;
 };
 
 /**
  * Trust a directory and open a fresh live session pointed at it.
  * Used by Launch dialog, "New session", and command palette.
+ *
+ * On directory change: stops any live harness on the previous active session
+ * and always starts a **new** session for the new cwd (mobile-friendly).
  */
 export async function openWorkspaceSession(
   opts: OpenWorkspaceOpts
-): Promise<{ sessionId: string; root: string; name: string }> {
+): Promise<{ sessionId: string; root: string; name: string; isNewDirectory: boolean }> {
   const cwd = opts.cwd.trim();
   if (!cwd) throw new Error("Working directory is required");
+
+  const store = useSpokStore.getState();
+  const prevActive = store.activeSessionId
+    ? store.sessions[store.activeSessionId]
+    : null;
+  const prevCwd = prevActive?.config.cwd;
 
   const trusted = await trustWorkspace(cwd);
   const root = trusted.root;
   const command = (opts.command?.trim() || "grok").trim() || "grok";
+  const isNewDirectory = isDifferentWorkspace(prevCwd, root);
+
+  // Always stop any live host process first — never block on "active session"
+  await stopPreviousSessionForWorkspaceChange(root);
 
   saveRecentDir(root);
   try {
@@ -48,7 +70,7 @@ export async function openWorkspaceSession(
   });
   const name = opts.name?.trim() ? opts.name.trim() : `${base} · ${stamp}`;
 
-  const store = useSpokStore.getState();
+  // New directory always means a brand-new session (never reuse old session id)
   const sessionId = store.createSession({
     name,
     source: "live",
@@ -65,16 +87,19 @@ export async function openWorkspaceSession(
   store.applyStreamEvent(sessionId, {
     type: "system",
     timestamp: Date.now(),
-    title: "Workspace ready",
-    content: `Repo: ${root}\nCLI: ${command}\nTrusted: yes\nDurable: yes (events saved under ~/.spok/sessions)\n\nType a prompt below, or / for Grok commands.`,
+    title: isNewDirectory ? "New workspace session" : "Workspace ready",
+    content: isNewDirectory
+      ? `New session for directory change.\nRepo: ${root}\nCLI: ${command}\nPrevious: ${prevCwd || "(none)"}\n\nType a prompt below.`
+      : `Repo: ${root}\nCLI: ${command}\nTrusted: yes\nDurable: yes (events saved under ~/.spok/sessions)\n\nType a prompt below, or / for Grok commands.`,
     status: "success",
     provider: "spok",
   });
 
   store.persistSessionNow(sessionId);
   store.setViewMode("workspace");
+  store.setProductMode("run");
 
-  return { sessionId, root, name };
+  return { sessionId, root, name, isNewDirectory };
 }
 
 /**

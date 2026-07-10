@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { GitStatusPill } from "./git-status-pill";
+import { CommitChecklist, useCommitReadiness } from "./commit-checklist";
 import { cn } from "@/lib/utils";
 import {
   fetchGitStatus,
@@ -99,6 +100,7 @@ export function GitPanel() {
 
   const staged = files.filter((f) => f.staged);
   const worktreeChanges = files.filter((f) => f.unstaged || f.untracked);
+  const readiness = useCommitReadiness();
 
   const refreshMeta = useCallback(async () => {
     if (!session || !cwd) return;
@@ -654,8 +656,8 @@ export function GitPanel() {
     <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 border-b border-phosphor-green/15 px-3 py-2">
-        <h2 className="font-mono text-xs uppercase tracking-[0.2em] text-phosphor-green crt-glow">
-          Git
+        <h2 className="panel-title text-phosphor-green">
+          Review
         </h2>
         <GitStatusPill summary={summary} cwd={cwd} />
         {session.config.isolationGuard && (
@@ -770,9 +772,10 @@ export function GitPanel() {
             </Section>
           </div>
 
-          {/* Commit */}
-          <div className="border-t border-phosphor-green/15 p-2 space-y-2">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-phosphor-green/45">
+          {/* Commit + readiness */}
+          <div className="space-y-2 border-t border-phosphor-green/15 p-2">
+            <CommitChecklist />
+            <div className="flex items-center gap-2 text-[10px] font-medium text-phosphor-green/50">
               <GitCommitHorizontal className="h-3 w-3" />
               Commit
             </div>
@@ -808,7 +811,16 @@ export function GitPanel() {
               <Button
                 size="sm"
                 className="ml-auto h-7 text-[10px]"
-                disabled={planMode || !!busy}
+                disabled={
+                  planMode ||
+                  !!busy ||
+                  (!!readiness && !readiness.readyToCommit && !amend)
+                }
+                title={
+                  readiness && !readiness.readyToCommit
+                    ? readiness.summary
+                    : undefined
+                }
                 onClick={onCommit}
               >
                 <Check className="h-3 w-3" />

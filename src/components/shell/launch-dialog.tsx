@@ -76,13 +76,18 @@ export function LaunchDialog() {
     try {
       const base =
         cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
-      const { name } = await openWorkspaceSession({
+      const { name, isNewDirectory } = await openWorkspaceSession({
         cwd,
         command,
         name: base,
+        forceNewSession: true,
       });
       setOpen(false);
-      toast.success(`Workspace open · ${name}`);
+      toast.success(
+        isNewDirectory
+          ? `New session · ${name}`
+          : `Workspace open · ${name}`
+      );
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : "Failed to open workspace"

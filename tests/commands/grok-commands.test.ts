@@ -11,6 +11,10 @@ describe("grok command defaults", () => {
     const flags = defaultGrokFlags();
     assert.equal(flags.alwaysApprove, false);
     assert.equal(permissionModeLabel(flags), "manual");
+    assert.equal(
+      permissionModeLabel({ ...flags, alwaysApprove: true }),
+      "Always approve"
+    );
   });
 
   it("does not emit --always-approve unless enabled", () => {

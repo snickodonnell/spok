@@ -8,7 +8,7 @@ Spok is a **privileged local desktop harness**, not a multi-tenant web app. The 
 
 | Boundary | Rule |
 |---|---|
-| Network | Privileged APIs only accept **local Host/Origin** (localhost / 127.0.0.1). |
+| Network | Privileged APIs only accept **local Host/Origin** (localhost / 127.0.0.1). Optional **`SPOK_LAN_ACCESS=1`** also allows RFC1918 private LAN addresses for phone/tablet on the same Wi‑Fi (`npm run dev:lan`). Public internet hosts remain denied. |
 | Capability | Every privileged route requires `x-spok-capability-token` from `GET /api/health`. |
 | Workspace | Spawn and git write ops require **trusted cwd** (open-repo flow trusts a root). |
 | Commands | Default allowlist is Grok + git profiles; custom binaries need approval. |
@@ -26,7 +26,17 @@ All of the following call `authorizePrivilegedRequest`:
 - `/api/extensions/*`, `/api/automation/*`
 - `/api/diagnostics`, `/api/secrets`
 
-`GET /api/health` issues the capability token only when Host/Origin look local.
+`GET /api/health` issues the capability token only when Host/Origin look local (loopback, or private LAN when `SPOK_LAN_ACCESS=1`).
+
+### Optional LAN access
+
+| Mode | How | Who can reach privileged APIs |
+|---|---|---|
+| Default | `npm run dev` | This machine only (`localhost`) |
+| LAN | `npm run dev:lan` / `start:lan` | Devices on the same private network that know the URL |
+| Pin one host | `SPOK_ALLOWED_HOSTS=192.168.1.10` | That Host value only (plus loopback) |
+
+LAN mode still requires the capability token (issued by health to allowed hosts). It is **not** internet-safe — do not port-forward or expose Spok beyond your home Wi‑Fi.
 
 ## Permission modes
 

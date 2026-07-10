@@ -14,7 +14,7 @@ export const THEME_META: Record<
   professional: {
     label: "Professional",
     description:
-      "Quiet dark UI for daily use — clear contrast, restrained color, no phosphor glow.",
+      "Neutral engineering desktop — slate text, sage accents, color reserved for state.",
     defaultCrt: false,
     defaultScanlines: false,
   },

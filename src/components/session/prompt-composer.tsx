@@ -28,8 +28,8 @@ import { runHarness } from "@/lib/harness";
 import {
   defaultGrokFlags,
   filterSlashCommands,
-  permissionModeLabel,
   resolveRun,
+  slashRiskLabel,
   type GrokRunFlags,
   type SlashCommand,
 } from "@/lib/grok-commands";
@@ -66,7 +66,16 @@ function flagsFromSession(raw?: Record<string, unknown>): GrokRunFlags {
   } as GrokRunFlags;
 }
 
-export function PromptComposer() {
+type PromptComposerProps = {
+  /**
+   * `mobile` — large touch targets, minimal chrome (phone shell).
+   * Desktop default is unchanged.
+   */
+  variant?: "desktop" | "mobile";
+};
+
+export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
+  const mobile = variant === "mobile";
   const session = useSpokStore((s) =>
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
   );
@@ -441,152 +450,305 @@ export function PromptComposer() {
   const isLive = session.status === "running" || session.status === "starting";
 
   return (
-    <div className="relative border-t border-phosphor-green/20 bg-crt-panel">
-      {/* Slash menu */}
+    <div
+      className={cn(
+        "relative border-t border-phosphor-green/20 bg-crt-panel",
+        mobile && "border-phosphor-green/10 pb-[env(safe-area-inset-bottom)]"
+      )}
+      data-testid="prompt-composer"
+      data-variant={variant}
+    >
+      {/* Slash command picker */}
       {slashOpen && (
-        <div className="absolute bottom-full left-0 right-0 z-40 mx-2 mb-1 max-h-64 overflow-auto rounded-lg border border-phosphor-green/30 bg-black/95 shadow-[0_0_30px_rgba(51,255,102,0.12)]">
+        <div className="absolute bottom-full left-0 right-0 z-40 mx-2 mb-1 max-h-72 overflow-auto rounded-lg border border-phosphor-green/30 bg-black/95 shadow-lg">
           <div className="sticky top-0 border-b border-phosphor-green/15 px-3 py-1.5 text-[10px] uppercase tracking-widest text-phosphor-green/40">
             <Slash className="mr-1 inline h-3 w-3" />
-            Grok commands · filter as you type
+            {mobile ? "Commands" : "Commands · categories · risk labels"}
           </div>
-          {slashMatches.map((cmd, i) => (
-            <button
-              key={cmd.name}
-              type="button"
-              className={cn(
-                "flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition-colors",
-                i === slashIdx
-                  ? "bg-phosphor-green/15 text-phosphor-green"
-                  : "text-phosphor-green/70 hover:bg-phosphor-green/8"
-              )}
-              onMouseEnter={() => setSlashIdx(i)}
-              onClick={() => applySlash(cmd)}
-            >
-              <span className="shrink-0 font-mono text-phosphor-cyan">
-                /{cmd.name}
-              </span>
-              {cmd.argsHint && (
-                <span className="shrink-0 font-mono text-phosphor-green/35">
-                  {cmd.argsHint}
+          {slashMatches.map((cmd, i) => {
+            const risk = slashRiskLabel(cmd.risk);
+            return (
+              <button
+                key={cmd.name}
+                type="button"
+                className={cn(
+                  "flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition-colors",
+                  i === slashIdx
+                    ? "bg-phosphor-green/15 text-phosphor-green"
+                    : "text-phosphor-green/70 hover:bg-phosphor-green/8"
+                )}
+                onMouseEnter={() => setSlashIdx(i)}
+                onClick={() => applySlash(cmd)}
+              >
+                <span className="shrink-0 font-mono text-phosphor-cyan">
+                  /{cmd.name}
                 </span>
-              )}
-              <span className="min-w-0 flex-1 truncate text-phosphor-green/50">
-                {cmd.description}
-              </span>
-              <Badge variant="muted" className="shrink-0">
-                {cmd.group}
-              </Badge>
-            </button>
-          ))}
+                {cmd.argsHint && (
+                  <span className="shrink-0 font-mono text-phosphor-green/35">
+                    {cmd.argsHint}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 truncate text-phosphor-green/50">
+                  {cmd.description}
+                </span>
+                {cmd.example && (
+                  <span className="hidden max-w-[140px] truncate font-mono text-[9px] text-phosphor-green/30 sm:inline">
+                    {cmd.example}
+                  </span>
+                )}
+                <Badge variant="muted" className="shrink-0">
+                  {cmd.group}
+                </Badge>
+                {risk && (
+                  <Badge
+                    variant={cmd.risk === "high" ? "error" : "amber"}
+                    className="shrink-0 text-[8px]"
+                  >
+                    {risk}
+                  </Badge>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Sticky flags strip + permission mode */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-phosphor-green/10 px-3 py-1.5">
-        <Terminal className="h-3 w-3 text-phosphor-green/40" />
-        <span className="font-mono text-[10px] text-phosphor-green/40">
-          {session.config.cwd}
-        </span>
-        <span className="text-phosphor-green/20">·</span>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="inline-flex items-center gap-1 rounded border border-phosphor-cyan/25 px-1.5 py-0.5 font-mono text-[9px] text-phosphor-cyan/80 hover:border-phosphor-cyan/50 hover:bg-phosphor-cyan/5"
-          title="Spok app permission mode (Settings)"
-        >
-          app:{appPermissionMode}
-        </button>
-        <label className="inline-flex items-center gap-1" title="Grok CLI permission flags for this session">
-          <span className="text-[9px] uppercase tracking-wider text-phosphor-green/35">
-            cli
-          </span>
-          <select
-            className="h-5 max-w-[140px] rounded border border-phosphor-green/25 bg-black/60 px-1 font-mono text-[10px] text-phosphor-green outline-none focus:border-phosphor-amber/50"
-            value={flags.alwaysApprove ? "always-approve" : flags.permissionMode || "manual"}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "always-approve") {
-                setGrokFlags(session.id, {
-                  alwaysApprove: true,
-                  permissionMode: undefined,
-                });
-                toast.message("always-approve ON — tools run without prompts");
-              } else if (v === "manual") {
-                setGrokFlags(session.id, {
-                  alwaysApprove: false,
-                  permissionMode: undefined,
-                });
-              } else {
-                setGrokFlags(session.id, {
-                  alwaysApprove: false,
-                  permissionMode: v,
-                });
-              }
-            }}
+      {/* Structured run cockpit — full on desktop, minimal status on mobile */}
+      {!mobile ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-phosphor-green/10 px-3 py-1.5">
+          <div className="inline-flex min-w-0 max-w-[40%] items-center gap-1.5">
+            <Terminal className="h-3 w-3 shrink-0 text-phosphor-green/40" />
+            <span
+              className="truncate font-mono text-[10px] text-phosphor-green/45"
+              title={session.config.cwd}
+            >
+              {session.config.cwd || "no cwd"}
+            </span>
+          </div>
+
+          <label
+            className="inline-flex items-center gap-1"
+            title="App permission policy (Settings)"
           >
-            <option value="manual">manual (safe)</option>
-            <option value="default">default</option>
-            <option value="acceptEdits">acceptEdits</option>
-            <option value="plan">plan</option>
-            <option value="auto">auto</option>
-            <option value="dontAsk">dontAsk</option>
-            <option value="bypassPermissions">bypassPermissions</option>
-            <option value="always-approve">always-approve (yolo)</option>
-          </select>
-        </label>
-        <Badge
-          variant={flags.alwaysApprove ? "amber" : "muted"}
-          title={
-            flags.alwaysApprove
-              ? "Auto-approves all tool executions — use only in trusted disposable workspaces"
-              : "Grok CLI permission mode for this session"
-          }
-        >
-          {permissionModeLabel(flags)}
-        </Badge>
-        {flags.model && <Badge variant="cyan">model:{flags.model}</Badge>}
-        {flags.effort && <Badge variant="magenta">effort:{flags.effort}</Badge>}
-        {flags.debug && <Badge variant="error">debug</Badge>}
-        {flags.noPlan && <Badge variant="muted">no-plan</Badge>}
-        {isLive && (
-          <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-phosphor-green">
-            <span className="live-dot h-1.5 w-1.5 rounded-full bg-phosphor-green" />
-            RUNNING
+            <span className="text-[9px] text-phosphor-green/40">App</span>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="rounded border border-phosphor-cyan/25 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-cyan/85 hover:border-phosphor-cyan/50"
+            >
+              {appPermissionMode}
+            </button>
+          </label>
+
+          <label
+            className="inline-flex items-center gap-1"
+            title="Grok CLI permission mode for this session"
+          >
+            <span className="text-[9px] text-phosphor-green/40">Permission</span>
+            <select
+              className="h-6 max-w-[160px] rounded border border-phosphor-green/25 bg-black/60 px-1.5 text-[10px] text-phosphor-green outline-none focus:border-phosphor-amber/50"
+              value={
+                flags.alwaysApprove
+                  ? "always-approve"
+                  : flags.permissionMode || "manual"
+              }
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "always-approve") {
+                  setGrokFlags(session.id, {
+                    alwaysApprove: true,
+                    permissionMode: undefined,
+                  });
+                  toast.warning(
+                    "Always approve is on — tools run without prompts. Use only in trusted workspaces."
+                  );
+                } else if (v === "manual") {
+                  setGrokFlags(session.id, {
+                    alwaysApprove: false,
+                    permissionMode: undefined,
+                  });
+                } else {
+                  setGrokFlags(session.id, {
+                    alwaysApprove: false,
+                    permissionMode: v,
+                  });
+                }
+              }}
+            >
+              <option value="manual">Manual (safe)</option>
+              <option value="default">Default</option>
+              <option value="acceptEdits">Accept edits</option>
+              <option value="plan">Plan</option>
+              <option value="auto">Auto</option>
+              <option value="dontAsk">Don&apos;t ask</option>
+              <option value="bypassPermissions">Bypass permissions</option>
+              <option value="always-approve">Always approve (high risk)</option>
+            </select>
+          </label>
+
+          <label className="inline-flex items-center gap-1" title="Model sticky flag">
+            <span className="text-[9px] text-phosphor-green/40">Model</span>
+            <input
+              className="h-6 w-24 rounded border border-phosphor-green/20 bg-black/50 px-1.5 font-mono text-[10px] text-phosphor-green outline-none focus:border-phosphor-cyan/40"
+              placeholder="default"
+              value={flags.model ?? ""}
+              onChange={(e) =>
+                setGrokFlags(session.id, {
+                  model: e.target.value.trim() || undefined,
+                })
+              }
+            />
+          </label>
+
+          <label className="inline-flex items-center gap-1" title="Run mode">
+            <span className="text-[9px] text-phosphor-green/40">Run</span>
+            <select
+              className="h-6 rounded border border-phosphor-green/20 bg-black/50 px-1 text-[10px] text-phosphor-green outline-none"
+              value={flags.check ? "check" : "agent"}
+              onChange={(e) =>
+                setGrokFlags(session.id, { check: e.target.value === "check" })
+              }
+            >
+              <option value="agent">Agent</option>
+              <option value="check">Check only</option>
+            </select>
+          </label>
+
+          <button
+            type="button"
+            onClick={() => setExtensionsOpen(true)}
+            className="inline-flex items-center gap-1 rounded border border-phosphor-green/15 px-1.5 py-0.5 text-[10px] text-phosphor-green/55 hover:border-phosphor-cyan/40 hover:text-phosphor-cyan"
+            title="Attach skills or agent for next turn"
+          >
+            <Sparkles className="h-3 w-3" />
+            Skills
+            {(attachedSkills.length > 0 || selectedAgent) && (
+              <span className="font-mono text-phosphor-cyan">
+                {attachedSkills.length + (selectedAgent ? 1 : 0)}
+              </span>
+            )}
+          </button>
+
+          {flags.alwaysApprove && (
+            <Badge
+              variant="amber"
+              title="Always approve — tools run without prompts. Trusted disposable workspaces only."
+            >
+              Always approve
+            </Badge>
+          )}
+          {flags.effort && (
+            <Badge variant="magenta">effort:{flags.effort}</Badge>
+          )}
+          {flags.debug && <Badge variant="error">debug</Badge>}
+
+          {isLive && (
+            <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-phosphor-amber">
+              <span className="live-dot h-1.5 w-1.5 rounded-full bg-phosphor-amber" />
+              Running
+              {promptQueue.length > 0 && (
+                <span>· {promptQueue.length} queued</span>
+              )}
+            </span>
+          )}
+        </div>
+      ) : (
+        isLive && (
+          <div className="flex items-center gap-2 border-b border-phosphor-amber/20 bg-phosphor-amber/5 px-3 py-1.5 text-xs text-phosphor-amber">
+            <span className="live-dot h-2 w-2 rounded-full bg-phosphor-amber" />
+            Running on host PC
             {promptQueue.length > 0 && (
-              <span className="text-phosphor-amber">
+              <span className="text-phosphor-amber/70">
                 · {promptQueue.length} queued
               </span>
             )}
-          </span>
-        )}
-      </div>
+          </div>
+        )
+      )}
 
       {promptQueue.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-phosphor-amber/25 bg-phosphor-amber/5 px-3 py-1.5">
-          <span className="text-[9px] uppercase tracking-widest text-phosphor-amber/80">
-            Queue
-          </span>
-          {promptQueue.map((q, i) => (
+        <div
+          className="border-b border-phosphor-amber/25 bg-phosphor-amber/5 px-3 py-1.5"
+          data-testid="prompt-queue"
+        >
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-[9px] uppercase tracking-widest text-phosphor-amber/80">
+              Follow-up queue
+            </span>
             <button
-              key={`${i}-${q.slice(0, 12)}`}
               type="button"
-              title={q}
-              onClick={() =>
-                setPromptQueue((prev) => prev.filter((_, j) => j !== i))
-              }
-              className="max-w-[180px] truncate rounded border border-phosphor-amber/30 bg-black/40 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-amber hover:border-phosphor-red/40"
+              className="ml-auto text-[9px] uppercase tracking-wider text-phosphor-green/40 hover:text-red-400"
+              onClick={() => setPromptQueue([])}
             >
-              {i + 1}. {q}
-              <X className="ml-1 inline h-2.5 w-2.5 opacity-60" />
+              Clear
             </button>
-          ))}
-          <button
-            type="button"
-            className="ml-auto text-[9px] uppercase tracking-wider text-phosphor-green/40 hover:text-phosphor-red"
-            onClick={() => setPromptQueue([])}
-          >
-            Clear queue
-          </button>
+          </div>
+          <ol className="space-y-1">
+            {promptQueue.map((q, i) => (
+              <li
+                key={`${i}-${q.slice(0, 24)}`}
+                className="flex items-center gap-1.5 rounded border border-phosphor-amber/25 bg-black/35 px-1.5 py-1"
+              >
+                <span className="w-4 shrink-0 font-mono text-[10px] text-phosphor-amber/70">
+                  {i + 1}
+                </span>
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-phosphor-amber hover:underline"
+                  title="Edit — load into composer"
+                  onClick={() => {
+                    setValue(q);
+                    setPromptQueue((prev) => prev.filter((_, j) => j !== i));
+                    taRef.current?.focus();
+                  }}
+                >
+                  {q}
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 px-1 text-[10px] text-phosphor-green/40 hover:text-phosphor-cyan disabled:opacity-30"
+                  disabled={i === 0}
+                  title="Move up"
+                  onClick={() =>
+                    setPromptQueue((prev) => {
+                      if (i === 0) return prev;
+                      const next = [...prev];
+                      [next[i - 1], next[i]] = [next[i], next[i - 1]];
+                      return next;
+                    })
+                  }
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 px-1 text-[10px] text-phosphor-green/40 hover:text-phosphor-cyan disabled:opacity-30"
+                  disabled={i === promptQueue.length - 1}
+                  title="Move down"
+                  onClick={() =>
+                    setPromptQueue((prev) => {
+                      if (i >= prev.length - 1) return prev;
+                      const next = [...prev];
+                      [next[i], next[i + 1]] = [next[i + 1], next[i]];
+                      return next;
+                    })
+                  }
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 text-phosphor-green/40 hover:text-red-400"
+                  title="Remove"
+                  onClick={() =>
+                    setPromptQueue((prev) => prev.filter((_, j) => j !== i))
+                  }
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
 
@@ -632,8 +794,8 @@ export function PromptComposer() {
         </div>
       )}
 
-      {/* Recent turns */}
-      {(session.promptHistory?.length ?? 0) > 0 && (
+      {/* Recent turns — skip on mobile to save space */}
+      {!mobile && (session.promptHistory?.length ?? 0) > 0 && (
         <div className="flex max-h-16 gap-1 overflow-x-auto border-b border-phosphor-green/10 px-2 py-1">
           {[...(session.promptHistory ?? [])].slice(-8).reverse().map((t) => (
             <button
@@ -656,27 +818,35 @@ export function PromptComposer() {
         </div>
       )}
 
-      <div className="flex items-end gap-2 p-2">
+      <div className={cn("flex items-end gap-2 p-2", mobile && "gap-2.5 p-3")}>
         <div className="relative min-w-0 flex-1">
           <textarea
             ref={taRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={onKeyDown}
-            rows={2}
+            rows={mobile ? 3 : 2}
             placeholder={
               busy
-                ? "Type a follow-up and Enter to queue…  (runs after current turn)"
-                : "Prompt Grok…  or type / for commands (e.g. /continue, /model, /always-approve)"
+                ? mobile
+                  ? "Follow-up… (queues until done)"
+                  : "Type a follow-up and Enter to queue…  (runs after current turn)"
+                : mobile
+                  ? "Message Grok on the host PC…"
+                  : "Prompt Grok…  or type / for commands (e.g. /continue, /model)"
             }
-            className="w-full resize-none rounded-md border border-phosphor-green/25 bg-black/50 px-3 py-2 font-mono text-sm text-phosphor-green outline-none placeholder:text-phosphor-green/30 focus:border-phosphor-green/50 focus:ring-1 focus:ring-phosphor-green/40 focus:ring-[var(--focus-ring)]"
+            className={cn(
+              "w-full resize-none rounded-md border border-phosphor-green/25 bg-black/50 px-3 py-2 text-sm text-phosphor-green outline-none placeholder:text-phosphor-green/30 focus:border-phosphor-green/50 focus:ring-1 focus:ring-[var(--focus-ring)]",
+              mobile ? "min-h-[5.5rem] text-base leading-relaxed" : "font-mono"
+            )}
           />
         </div>
-        <div className="flex shrink-0 flex-col gap-1">
+        <div className={cn("flex shrink-0 flex-col gap-1", mobile && "gap-1.5")}>
           {(busy || isLive) && (
             <Button
               variant="destructive"
-              size="sm"
+              size={mobile ? "default" : "sm"}
+              className={mobile ? "min-h-11 min-w-[4.5rem]" : undefined}
               onClick={() => void stopRun()}
               title="Stop run and clear queue"
             >
@@ -686,8 +856,9 @@ export function PromptComposer() {
           )}
           {busy || isLive ? (
             <Button
-              size="sm"
+              size={mobile ? "default" : "sm"}
               variant="amber"
+              className={mobile ? "min-h-11 min-w-[4.5rem]" : undefined}
               onClick={() => void submit()}
               disabled={!value.trim()}
               title="Queue follow-up (Enter)"
@@ -698,7 +869,8 @@ export function PromptComposer() {
           ) : (
             <>
               <Button
-                size="sm"
+                size={mobile ? "default" : "sm"}
+                className={mobile ? "min-h-11 min-w-[4.5rem]" : undefined}
                 onClick={() => void submit()}
                 disabled={!value.trim()}
                 title="Send (Enter)"
@@ -706,38 +878,40 @@ export function PromptComposer() {
                 <CornerDownLeft className="h-3.5 w-3.5" />
                 Send
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!value.trim() || !session.config.cwd}
-                title="Queue as background job — keeps this session free"
-                onClick={() => {
-                  const text = value.trim();
-                  if (!text || !session.config.cwd) return;
-                  enqueueBackgroundJob({
-                    title: text.slice(0, 48),
-                    prompt: text,
-                    cwd: session.config.cwd,
-                    isolate: true,
-                    parentSessionId: session.id,
-                  });
-                  setValue("");
-                  toast.success("Queued in background", {
-                    description: "Open Monitor to track progress",
-                    action: {
-                      label: "Monitor",
-                      onClick: () =>
-                        useSpokStore.getState().setMonitorOpen(true),
-                    },
-                  });
-                }}
-              >
-                <Layers className="h-3.5 w-3.5" />
-                BG
-              </Button>
+              {!mobile && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!value.trim() || !session.config.cwd}
+                  title="Queue as background job — keeps this session free"
+                  onClick={() => {
+                    const text = value.trim();
+                    if (!text || !session.config.cwd) return;
+                    enqueueBackgroundJob({
+                      title: text.slice(0, 48),
+                      prompt: text,
+                      cwd: session.config.cwd,
+                      isolate: true,
+                      parentSessionId: session.id,
+                    });
+                    setValue("");
+                    toast.success("Queued in background", {
+                      description: "Open Monitor to track progress",
+                      action: {
+                        label: "Monitor",
+                        onClick: () =>
+                          useSpokStore.getState().setMonitorOpen(true),
+                      },
+                    });
+                  }}
+                >
+                  <Layers className="h-3.5 w-3.5" />
+                  BG
+                </Button>
+              )}
             </>
           )}
-          {busy && (
+          {busy && !mobile && (
             <span className="inline-flex items-center justify-center gap-1 text-[10px] text-phosphor-amber">
               <Loader2 className="h-3 w-3 animate-spin" />
               live
@@ -746,30 +920,36 @@ export function PromptComposer() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between px-3 pb-1.5 text-[10px] text-phosphor-green/30">
-        <span>
-          <kbd className="rounded border border-phosphor-green/20 px-1">Enter</kbd>{" "}
-          {busy ? "queue" : "send"} ·{" "}
-          <kbd className="rounded border border-phosphor-green/20 px-1">Shift+Enter</kbd>{" "}
-          newline ·{" "}
-          <kbd className="rounded border border-phosphor-green/20 px-1">/</kbd>{" "}
-          commands
-        </span>
-        <button
-          type="button"
-          onClick={() => setExtensionsOpen(true)}
-          className="inline-flex items-center gap-1 font-mono text-phosphor-green/40 hover:text-phosphor-cyan"
-          title="Open Extension Center"
-        >
-          <Puzzle className="h-3 w-3" />
-          extensions
-          {skillCatalog.length > 0 && (
-            <span className="text-phosphor-green/25">
-              · {skillCatalog.length} skills
-            </span>
-          )}
-        </button>
-      </div>
+      {!mobile && (
+        <div className="flex items-center justify-between px-3 pb-1.5 text-[10px] text-phosphor-green/30">
+          <span>
+            <kbd className="rounded border border-phosphor-green/20 px-1">
+              Enter
+            </kbd>{" "}
+            {busy ? "queue" : "send"} ·{" "}
+            <kbd className="rounded border border-phosphor-green/20 px-1">
+              Shift+Enter
+            </kbd>{" "}
+            newline ·{" "}
+            <kbd className="rounded border border-phosphor-green/20 px-1">/</kbd>{" "}
+            commands
+          </span>
+          <button
+            type="button"
+            onClick={() => setExtensionsOpen(true)}
+            className="inline-flex items-center gap-1 font-mono text-phosphor-green/40 hover:text-phosphor-cyan"
+            title="Open Extension Center"
+          >
+            <Puzzle className="h-3 w-3" />
+            extensions
+            {skillCatalog.length > 0 && (
+              <span className="text-phosphor-green/25">
+                · {skillCatalog.length} skills
+              </span>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
