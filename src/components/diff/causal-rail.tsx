@@ -12,13 +12,16 @@ import {
   X,
   Link2,
   ChevronRight,
+  Layers,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import {
   causalKindLabel,
   getCausalStepsForFile,
+  getCausalStepsForHunk,
   type CausalStep,
   type CausalStepKind,
+  type HunkCausalBundle,
 } from "@/lib/causal-links";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -64,16 +67,80 @@ function kindTone(kind: CausalStepKind): string {
   }
 }
 
+function StepButton({
+  step,
+  index,
+  selected,
+  onStep,
+  showMatch,
+}: {
+  step: CausalStep;
+  index: number;
+  selected: boolean;
+  onStep: (step: CausalStep) => void;
+  showMatch?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onStep(step)}
+      className={cn(
+        "flex w-full items-start gap-2 rounded border px-2 py-1.5 text-left transition hover:bg-phosphor-green/8",
+        kindTone(step.kind),
+        selected && "bg-phosphor-green/10 ring-1 ring-phosphor-green/30",
+        step.hunkScoped && "border-phosphor-cyan/40"
+      )}
+    >
+      <span className="mt-0.5 font-mono text-[9px] text-phosphor-green/35">
+        {index + 1}
+      </span>
+      <KindIcon kind={step.kind} />
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-1">
+          <Badge variant="muted" className="h-4 px-1 text-[8px] uppercase">
+            {causalKindLabel(step.kind)}
+          </Badge>
+          {step.direct && (
+            <span className="text-[8px] uppercase tracking-wider text-phosphor-cyan/60">
+              direct
+            </span>
+          )}
+          {showMatch && step.hunkScoped && step.matchReason && (
+            <span className="rounded bg-phosphor-cyan/10 px-1 text-[8px] text-phosphor-cyan/80">
+              {step.matchReason}
+            </span>
+          )}
+        </span>
+        <span className="mt-0.5 block truncate text-[11px] font-medium text-phosphor-green/90">
+          {step.title}
+        </span>
+        {step.summary && step.summary !== step.title && (
+          <span className="mt-0.5 line-clamp-2 block text-[10px] text-phosphor-green/45">
+            {step.summary}
+          </span>
+        )}
+        <span className="mt-0.5 block text-[9px] text-phosphor-green/30">
+          {formatRelativeTime(step.timestamp)}
+        </span>
+      </span>
+      <ChevronRight className="mt-1 h-3 w-3 shrink-0 opacity-40" />
+    </button>
+  );
+}
+
 /**
- * "Why did this change?" drawer / rail for the selected file.
+ * "Why did this change?" drawer / rail for the selected file / hunk.
  * Lists linked thinking, tools, plans, approvals, and review comments.
  */
 export function CausalRail({
   className,
   compact = false,
+  /** When set, rank and filter steps for this hunk index. */
+  hunkIndex,
 }: {
   className?: string;
   compact?: boolean;
+  hunkIndex?: number;
 }) {
   const session = useSpokStore((s) =>
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
@@ -85,12 +152,26 @@ export function CausalRail({
   const setViewMode = useSpokStore((s) => s.setViewMode);
 
   const fileId = session?.selectedFileId ?? null;
-  const bundle = useMemo(() => {
+  const file = fileId && session ? session.files[fileId] : null;
+  const hasHunks = !!file && file.hunks.length > 0;
+  const activeHunk =
+    hunkIndex != null && hasHunks && hunkIndex >= 0 && hunkIndex < file!.hunks.length
+      ? hunkIndex
+      : hasHunks
+        ? 0
+        : null;
+
+  const fileBundle = useMemo(() => {
     if (!session || !fileId) return null;
     return getCausalStepsForFile(session, fileId);
   }, [session, fileId]);
 
-  if (!open || !session || !fileId || !bundle) return null;
+  const hunkBundle = useMemo((): HunkCausalBundle | null => {
+    if (!session || !fileId || activeHunk == null) return null;
+    return getCausalStepsForHunk(session, fileId, activeHunk);
+  }, [session, fileId, activeHunk]);
+
+  if (!open || !session || !fileId || !fileBundle) return null;
 
   const onStep = (step: CausalStep) => {
     selectTrace(step.nodeId);
@@ -99,6 +180,18 @@ export function CausalRail({
     );
     setViewMode("workspace");
   };
+
+  const primarySteps =
+    hunkBundle && hunkBundle.hunkSteps.length > 0
+      ? hunkBundle.hunkSteps
+      : hunkBundle?.steps.length
+        ? hunkBundle.steps.slice(0, 6)
+        : fileBundle.steps;
+  const broader =
+    hunkBundle && hunkBundle.hunkSteps.length > 0
+      ? hunkBundle.broaderSteps
+      : [];
+  const comments = hunkBundle?.comments ?? fileBundle.comments;
 
   return (
     <aside
@@ -117,10 +210,26 @@ export function CausalRail({
           </div>
           <div
             className="truncate font-mono text-[11px] text-phosphor-green/85"
-            title={bundle.path}
+            title={fileBundle.path}
           >
-            {bundle.path}
+            {fileBundle.path}
           </div>
+          {hunkBundle && (
+            <div
+              className="mt-1 flex items-center gap-1 font-mono text-[9px] text-phosphor-cyan/75"
+              data-testid="causal-hunk-scope"
+              title={hunkBundle.hunkHeader}
+            >
+              <Layers className="h-2.5 w-2.5 shrink-0" />
+              <span className="truncate">
+                Hunk {hunkBundle.hunkIndex + 1}
+                {file && file.hunks.length > 0
+                  ? `/${file.hunks.length}`
+                  : ""}{" "}
+                · L{hunkBundle.newLineStart}–{hunkBundle.newLineEnd}
+              </span>
+            </div>
+          )}
         </div>
         <Button
           variant="ghost"
@@ -135,69 +244,61 @@ export function CausalRail({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-2 p-2">
-          {bundle.steps.length === 0 ? (
+          {primarySteps.length === 0 ? (
             <p className="px-1 py-3 text-[11px] leading-relaxed text-phosphor-green/45">
               No linked agent steps yet. Links appear when the stream reports
               file edits or when you select a related thinking step.
             </p>
           ) : (
-            <ol className="space-y-1.5">
-              {bundle.steps.map((step, i) => (
-                <li key={step.nodeId}>
-                  <button
-                    type="button"
-                    onClick={() => onStep(step)}
-                    className={cn(
-                      "flex w-full items-start gap-2 rounded border px-2 py-1.5 text-left transition hover:bg-phosphor-green/8",
-                      kindTone(step.kind),
-                      session.selectedTraceId === step.nodeId &&
-                        "bg-phosphor-green/10 ring-1 ring-phosphor-green/30"
-                    )}
-                  >
-                    <span className="mt-0.5 font-mono text-[9px] text-phosphor-green/35">
-                      {i + 1}
-                    </span>
-                    <KindIcon kind={step.kind} />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1">
-                        <Badge
-                          variant="muted"
-                          className="h-4 px-1 text-[8px] uppercase"
-                        >
-                          {causalKindLabel(step.kind)}
-                        </Badge>
-                        {step.direct && (
-                          <span className="text-[8px] uppercase tracking-wider text-phosphor-cyan/60">
-                            direct
-                          </span>
-                        )}
-                      </span>
-                      <span className="mt-0.5 block truncate text-[11px] font-medium text-phosphor-green/90">
-                        {step.title}
-                      </span>
-                      {step.summary && step.summary !== step.title && (
-                        <span className="mt-0.5 line-clamp-2 block text-[10px] text-phosphor-green/45">
-                          {step.summary}
-                        </span>
-                      )}
-                      <span className="mt-0.5 block text-[9px] text-phosphor-green/30">
-                        {formatRelativeTime(step.timestamp)}
-                      </span>
-                    </span>
-                    <ChevronRight className="mt-1 h-3 w-3 shrink-0 opacity-40" />
-                  </button>
-                </li>
-              ))}
-            </ol>
+            <>
+              {hunkBundle && hunkBundle.hunkSteps.length > 0 && (
+                <div className="font-mono text-[9px] uppercase tracking-wider text-phosphor-cyan/65">
+                  This hunk
+                </div>
+              )}
+              <ol className="space-y-1.5">
+                {primarySteps.map((step, i) => (
+                  <li key={step.nodeId}>
+                    <StepButton
+                      step={step}
+                      index={i}
+                      selected={session.selectedTraceId === step.nodeId}
+                      onStep={onStep}
+                      showMatch={!!hunkBundle}
+                    />
+                  </li>
+                ))}
+              </ol>
+            </>
           )}
 
-          {bundle.comments.length > 0 && (
+          {broader.length > 0 && (
+            <div className="border-t border-phosphor-green/10 pt-2">
+              <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-phosphor-green/45">
+                Broader file context
+              </div>
+              <ol className="space-y-1.5">
+                {broader.slice(0, 6).map((step, i) => (
+                  <li key={step.nodeId}>
+                    <StepButton
+                      step={step}
+                      index={i}
+                      selected={session.selectedTraceId === step.nodeId}
+                      onStep={onStep}
+                    />
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {comments.length > 0 && (
             <div className="border-t border-phosphor-green/10 pt-2">
               <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-phosphor-cyan/60">
                 Review comments
               </div>
               <ul className="space-y-1.5">
-                {bundle.comments.map((c) => (
+                {comments.map((c) => (
                   <li
                     key={c.id}
                     className="rounded border border-phosphor-cyan/20 bg-phosphor-cyan/5 px-2 py-1.5 text-[11px] text-phosphor-green/75"
@@ -232,10 +333,10 @@ export function CausalRail({
             </div>
           )}
 
-          {bundle.missingTraceIds.length > 0 && (
+          {fileBundle.missingTraceIds.length > 0 && (
             <p className="text-[9px] text-phosphor-amber/70">
-              {bundle.missingTraceIds.length} linked step
-              {bundle.missingTraceIds.length === 1 ? "" : "s"} no longer in
+              {fileBundle.missingTraceIds.length} linked step
+              {fileBundle.missingTraceIds.length === 1 ? "" : "s"} no longer in
               memory (may still be on disk).
             </p>
           )}
@@ -245,8 +346,8 @@ export function CausalRail({
   );
 }
 
-/** Compact event rail chips under the diff toolbar. */
-export function CausalMiniRail() {
+/** Compact event rail chips under the diff toolbar — scoped to current hunk when possible. */
+export function CausalMiniRail({ hunkIndex }: { hunkIndex?: number }) {
   const session = useSpokStore((s) =>
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
   );
@@ -255,12 +356,35 @@ export function CausalMiniRail() {
   const open = useSpokStore((s) => s.causalDrawerOpen);
 
   const fileId = session?.selectedFileId ?? null;
-  const bundle = useMemo(() => {
+  const file = fileId && session ? session.files[fileId] : null;
+
+  const bundle = useMemo((): {
+    steps: CausalStep[];
+    chips: CausalStep[];
+    hunkIndex?: number;
+  } | null => {
     if (!session || !fileId) return null;
-    return getCausalStepsForFile(session, fileId);
-  }, [session, fileId]);
+    if (
+      file &&
+      file.hunks.length > 0 &&
+      hunkIndex != null &&
+      hunkIndex >= 0 &&
+      hunkIndex < file.hunks.length
+    ) {
+      const hunk = getCausalStepsForHunk(session, fileId, hunkIndex);
+      if (!hunk) return null;
+      const chips =
+        hunk.hunkSteps.length > 0 ? hunk.hunkSteps : hunk.steps;
+      return { steps: hunk.steps, chips, hunkIndex: hunk.hunkIndex };
+    }
+    const fileBundle = getCausalStepsForFile(session, fileId);
+    if (!fileBundle) return null;
+    return { steps: fileBundle.steps, chips: fileBundle.steps };
+  }, [session, fileId, file, hunkIndex]);
 
   if (!session || !fileId || !bundle || bundle.steps.length === 0) return null;
+
+  const chips = bundle.chips;
 
   return (
     <div
@@ -274,8 +398,13 @@ export function CausalMiniRail() {
         title="Toggle Why this change"
       >
         Why
+        {bundle.hunkIndex != null && (
+          <span className="ml-1 text-phosphor-cyan/60">
+            · h{bundle.hunkIndex + 1}
+          </span>
+        )}
       </button>
-      {bundle.steps.slice(0, 8).map((step) => (
+      {chips.slice(0, 8).map((step) => (
         <button
           key={step.nodeId}
           type="button"
@@ -285,17 +414,22 @@ export function CausalMiniRail() {
           }}
           className={cn(
             "inline-flex max-w-[120px] shrink-0 items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[9px]",
-            kindTone(step.kind)
+            kindTone(step.kind),
+            step.hunkScoped && "ring-1 ring-phosphor-cyan/30"
           )}
-          title={step.title}
+          title={
+            step.matchReason
+              ? `${step.title} · ${step.matchReason}`
+              : step.title
+          }
         >
           <KindIcon kind={step.kind} />
           <span className="truncate">{step.toolName || step.title}</span>
         </button>
       ))}
-      {bundle.steps.length > 8 && (
+      {chips.length > 8 && (
         <span className="shrink-0 text-[9px] text-phosphor-green/35">
-          +{bundle.steps.length - 8}
+          +{chips.length - 8}
         </span>
       )}
     </div>

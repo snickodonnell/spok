@@ -33,6 +33,16 @@ const GROUPS: { title: string; rows: { keys: string; action: string }[] }[] = [
     ],
   },
   {
+    title: "Review (Changes tab)",
+    rows: [
+      { keys: "j / k  or  ] / [", action: "Next / previous file in risk queue" },
+      { keys: "n / p", action: "Next / previous diff hunk" },
+      { keys: "w", action: "Toggle Why causal rail" },
+      { keys: "u", action: "Toggle unified / split diff layout" },
+      { keys: "s", action: "Stage selected file (when mutable)" },
+    ],
+  },
+  {
     title: "Trace",
     rows: [
       { keys: "↑ / ↓", action: "Navigate nodes" },

@@ -7,6 +7,7 @@
 import { nanoid } from "nanoid";
 import type { FileDiff, Session, StreamEvent, TraceNode } from "./types";
 import { buildFileTree, createFileDiff } from "./diff-utils";
+import { buildFileChangeLinks } from "./causal-links";
 import { streamEventToNodeType, extractPaths } from "./parser";
 import {
   isNonThoughtContent,
@@ -317,14 +318,7 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
       timestamp: workingEvent.timestamp,
       status: "success",
       children: prev?.children ?? [],
-      links: [
-        {
-          kind: "file",
-          targetId: fd.id,
-          path,
-          label: path,
-        },
-      ],
+      links: buildFileChangeLinks(fd, path),
       depth,
       meta: workingEvent.meta,
     });

@@ -1,6 +1,6 @@
 # Spok Harness Competitive Development Plan
 
-Last updated: 2026-07-10 (perf + progressive session restore)
+Last updated: 2026-07-11 (fast boot: UI prefs cache + non-blocking restore + lean snapshots)
 
 This is the current product and engineering source of truth for making Spok a world-class Grok Build harness. Older audit snapshots and completed UI milestone trackers have been removed so planning stays focused on the next product leap.
 
@@ -107,6 +107,7 @@ Outcome: Spok feels fast and dependable on real Grok Build sessions.
 - ~~Virtualize high-volume thinking stream and raw log panes~~ **Done**.
 - ~~Make Monaco and heavy diff views lazy by default~~ **Done** (active-tab mount + dynamic Monaco).
 - ~~Progressive / snapshot-first session restore~~ **Done:** last active full-materialize; sidebar shells; background snapshot fill; `listSessionMetas` no longer scans NDJSON; lean snapshots on disk.
+- ~~Fast relaunch (2026-07-11):~~ **UI prefs** (`spok.uiPrefs` localStorage + layout boot script) apply CRT/theme before `/api/settings`. Boot **unblocks on meta shells** (no wait for multi-MB snapshot parse); active body loads in background with status “loading…”. **Lean compact snapshots** (no pretty-print; tiny eventLog tail; truncated node text; rewrite fat legacy snapshots on first read).
 - ~~Add an always-visible validation lane with command status, exit code, duration, and linked artifacts.~~ **Done** (Validation tab).
 - ~~Prompt composer file attachments (images / PDFs / documents) with session-scoped storage and Grok ACP `--prompt-file` integration.~~ **Done (2026-07-10):** paperclip + drag/drop/paste; files under `~/.spok/sessions/<id>/attachments/`; vision via inline image blocks; docs via embedded text or `resource_link`.
 - ~~Update E2E coverage~~ **Done (partial):** Playwright smoke covers workspace tabs + composer attach control after sample load.
@@ -114,25 +115,28 @@ Outcome: Spok feels fast and dependable on real Grok Build sessions.
 
 ### Horizon 2: Review Workbench
 
-Target: 1-2 months
+Target: 1-2 months · **Status: foundations shipped (2026-07-11)** — queue, risk labels, keyboard flow, recipes, summaries, issue markers.
 
 Outcome: Spok becomes better than a terminal for understanding and accepting agent work.
 
-- Build a review queue that groups changes by intent, file, command, and risk.
-- Add side-by-side and inline diff modes with keyboard review flow.
-- Show "why this changed" by linking each hunk to trace nodes, tool calls, and prompts.
-- Add file risk labels: generated, config, security-sensitive, test-only, unknown binary, large file.
-- Add one-click validation recipes: test touched packages, run last failed command, run slash catalog check, build current workspace.
-- Add review summaries that can be copied into PR descriptions.
-- Add persistent issue markers for failed tests, policy denials, incomplete tool calls, and parser warnings.
+- ~~Build a review queue that groups changes by intent, file, command, and risk.~~ **Done:** `buildReviewQueue` + Changes sidebar **Queue** mode (`src/lib/review-queue.ts`, `review-queue-panel.tsx`) — groups security / config / binary / large / source / generated / test / docs with intent lines from causal steps.
+- ~~Add side-by-side and inline diff modes with keyboard review flow.~~ **Done (modes existed):** unified/split + keyboard **j/k** files, **n/p** hunks, **w** why, **u** layout, **s** stage when Changes tab active.
+- ~~Show "why this changed" by linking each hunk to trace nodes, tool calls, and prompts.~~ **Done (2026-07-11):** `getCausalStepsForHunk` + `buildFileChangeLinks` on reduce; Why rail scopes to active hunk (`n`/`p`); mini-rail chips prefer hunk-scoped steps.
+- ~~Add file risk labels: generated, config, security-sensitive, test-only, unknown binary, large file.~~ **Done:** `classifyFileRisk` + badges on queue, tree (high-risk), Changes header, Review file rows (`src/lib/file-risk.ts`).
+- ~~Add one-click validation recipes: test touched packages, run last failed command, run slash catalog check, build current workspace.~~ **Done:** Validation recipes bar prefills composer (`src/lib/validation-recipes.ts`, `validation-recipes-bar.tsx`).
+- ~~Add review summaries that can be copied into PR descriptions.~~ **Done:** `buildReviewSummary` + Changes **Summary** + Review PR **Fill from review** / copy (`src/lib/review-summary.ts`).
+- ~~Add persistent issue markers for failed tests, policy denials, incomplete tool calls, and parser warnings.~~ **Done:** `buildReviewIssueMarkers` surfaces in queue issues strip + summary; deeper sticky gutter markers still open.
+- ~~Dogfood review queue via sample playback.~~ **Done:** auth sample expanded (config/docs/env + multi-file); `focusReviewWorkbench` opens Changes + top-risk file + Why rail after sample complete.
+- **Still open (Horizon 2 polish):** sticky issue gutter in Monaco; deeper validation artifact browser.
+- **Hydration / HTML:** nested `<button>` in Validation lane fixed (row is `role=button` div); notification backdrop no longer uses self-closing `<button />`.
 
 ### Horizon 3: Agent Mission Control
 
-Target: 2-3 months
+Target: 2-3 months · **Status: foundation started (2026-07-11)** — session inbox lanes ship.
 
 Outcome: Spok can manage many coding efforts at once.
 
-- Add a session inbox with queued, running, waiting-for-approval, failed, and ready-for-review states.
+- ~~Add a session inbox with queued, running, waiting-for-approval, failed, and ready-for-review states.~~ **Done (2026-07-11):** pure `buildSessionInbox` (`src/lib/session-inbox.ts`) classifies sessions into waiting / running / queued / failed / ready_review / idle from session status, git dirtiness, conflicts, and linked automation jobs. Sidebar **Inbox** groups by lane with operational reasons; topbar attention chip; mobile Sessions tab uses the same lanes. Collapses Idle when other work exists. Fingerprints avoid stream-tick re-renders.
 - Support multiple concurrent Grok Build agents, each isolated by worktree and policy profile.
 - Add worktree creation, branch naming, cleanup, and PR handoff flows.
 - Add routine/scheduled runs for recurring maintenance tasks.
@@ -174,6 +178,7 @@ The product should feel quiet, dense, and operational. It should not feel like a
 ### Shell
 
 - Keep primary navigation predictable: Inbox, Workspaces, Harness, Automations, Extensions.
+- ~~Session list is an operational inbox~~ **Done (2026-07-11):** sidebar Inbox groups by lane (Needs attention → Running → Queued → Failed → Ready for review → Idle) with one-line reasons; topbar chip surfaces attention/live/review counts.
 - Treat transcript, thinking, events, changes, review, validation, and artifacts as work surfaces with stable tabs.
 - Maintain a clear session status model: idle, starting, running, waiting, blocked, validating, ready for review, failed, complete.
 - Make mobile a real control surface, not a compressed desktop clone.
@@ -229,11 +234,11 @@ The product should feel quiet, dense, and operational. It should not feel like a
 
 Spok should reach these capabilities before being called competitive:
 
-- ~~Fast desktop launch and session reopen.~~ **Partial / strong:** progressive restore + stream/UI perf pass; formal cold-launch measurement on device still open.
-- Multi-session inbox with concurrent agents. *(Monitor / automation jobs exist; full inbox UX still open.)*
+- ~~Fast desktop launch and session reopen.~~ **Strong (2026-07-11):** instant cached theme; shell-first unblock; lean snapshots; residual: cold Next compile + first fat-snapshot rewrite once.
+- ~~Multi-session inbox with concurrent agents.~~ **Partial / strong:** operational inbox lanes + attention chrome ship; concurrent worktree-isolated agents still open.
 - Worktree and branch orchestration. *(Git panel + worktree helpers exist; full orchestration UX still open.)*
-- First-class review workbench with trace-linked diffs. *(Changes/Review + causal rail ship; Horizon 2 queue/recipes still open.)*
-- ~~Validation lane with commands, tests, failures, and artifacts.~~ **Partial:** Validation tab ships tools/tests/builds/approvals/policy with jump-to-trace; artifact browser and one-click recipes still open.
+- ~~First-class review workbench with trace-linked diffs.~~ **Partial / strong:** risk-ordered queue, labels, keyboard flow, summaries, recipes ship; per-hunk causality still open.
+- ~~Validation lane with commands, tests, failures, and artifacts.~~ **Partial:** Validation tab + one-click recipes ship; artifact browser still open.
 - MCP management with permissioned invocation logs. *(MCP registry + trust basics ship; full management UI still open.)*
 - Hooks, skills, and project rules. *(Discovery, attach, hooks run ship; conflict/ordering UI still open.)*
 - ~~Mobile/LAN continuity.~~ **Done for dogfood:** host sync, mobile shell, `dev:lan`.

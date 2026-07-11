@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, before, after } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -123,5 +123,98 @@ describe("session store filesystem", () => {
         command: "grok",
       });
     });
+  });
+
+  it("writes lean compact snapshots and trims fat eventLog on read", () => {
+    const id = "leansnapshot01";
+    createSessionOnDisk({
+      id,
+      name: "Lean",
+      status: "ready",
+      createdAt: 1,
+      updatedAt: 1,
+      source: "live",
+      cwd: "/repo",
+      command: "grok",
+    });
+
+    const hugeContent = "x".repeat(5000);
+    const nodes: Session["nodes"] = {};
+    for (let i = 0; i < 5; i++) {
+      nodes[`n${i}`] = {
+        id: `n${i}`,
+        parentId: null,
+        type: "thinking",
+        title: `t${i}`,
+        content: hugeContent,
+        timestamp: i,
+        children: [],
+        links: [],
+        depth: 0,
+      };
+    }
+    const fatEvents = Array.from({ length: 80 }, (_, i) => ({
+      version: 1 as const,
+      type: "thinking" as const,
+      timestamp: i,
+      id: `e${i}`,
+      title: "t",
+      content: hugeContent,
+      status: "success" as const,
+      provider: "grok" as const,
+    }));
+
+    writeSnapshot(id, {
+      id,
+      name: "Lean",
+      status: "ready",
+      createdAt: 1,
+      updatedAt: 1,
+      config: {
+        cwd: "/repo",
+        command: "grok",
+        args: [],
+        autoScroll: true,
+        playbackSpeed: 1,
+      },
+      metrics: {
+        startedAt: null,
+        endedAt: null,
+        elapsedMs: 0,
+        toolCallCount: 0,
+        thinkingSteps: 5,
+        filesChanged: 0,
+        linesAdded: 0,
+        linesDeleted: 0,
+        subagentCount: 0,
+        errorCount: 0,
+      },
+      rootTraceIds: ["n0"],
+      nodes,
+      files: {},
+      fileTree: [],
+      selectedTraceId: null,
+      selectedFileId: null,
+      timelineCursor: null,
+      rawLog: [],
+      source: "live",
+      promptHistory: [],
+      eventLog: fatEvents,
+      eventCount: 80,
+    });
+
+    const snap = readSnapshot(id);
+    assert.ok(snap);
+    assert.ok((snap!.eventLog?.length ?? 0) <= 24);
+    for (const n of Object.values(snap!.nodes)) {
+      assert.ok((n.content?.length ?? 0) <= 1200);
+    }
+
+    // Compact on disk (no pretty multi-line indent for snapshot)
+    const text = readFileSync(path.join(dir, id, "snapshot.json"), "utf8");
+    assert.ok(!text.startsWith("{\n  "));
+    assert.ok(text.length < 50_000);
+
+    deleteSessionOnDisk(id);
   });
 });

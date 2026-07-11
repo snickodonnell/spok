@@ -4,11 +4,11 @@ export const authRefactorMeta: SampleSessionMeta = {
   id: "sample-auth-refactor",
   name: "Auth middleware refactor",
   description:
-    "Grok Build refactors Express auth middleware into modular JWT + session handlers with tests.",
+    "Grok Build refactors Express auth into modular JWT + session handlers with tests, package scripts, docs, and env example — dogfoods the risk-ordered review queue.",
   duration: "~2m",
-  filesChanged: 5,
+  filesChanged: 9,
   toolCalls: 12,
-  tags: ["refactor", "typescript", "auth"],
+  tags: ["refactor", "typescript", "auth", "review-queue"],
 };
 
 const t0 = Date.now() - 120_000;
@@ -441,13 +441,133 @@ usersRouter.get(
     content: "Updated routes to use requireRole",
     status: "success",
   }),
-  ev(45000, {
+  // Config / docs / env — dogfood risk-ordered review queue groups
+  ev(45200, {
+    type: "thinking",
+    id: "th5",
+    parentId: "g1",
+    title: "Project packaging",
+    content:
+      "Add a scripts.test entry in package.json, document the auth split in README, and keep .env.example in sync without committing secrets.",
+    status: "success",
+  }),
+  ev(45500, {
+    type: "file_change",
+    id: "fc6",
+    parentId: "th5",
+    title: "File: package.json",
+    path: "package.json",
+    diffStatus: "modified",
+    oldContent: `{
+  "name": "demo-api",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx src/index.ts"
+  }
+}
+`,
+    newContent: `{
+  "name": "demo-api",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}
+`,
+    content: "Added test and typecheck scripts",
+    status: "success",
+  }),
+  ev(45800, {
+    type: "file_change",
+    id: "fc7",
+    parentId: "th5",
+    title: "File: README.md",
+    path: "README.md",
+    diffStatus: "modified",
+    oldContent: `# Demo API
+
+Express API with JWT auth middleware.
+`,
+    newContent: `# Demo API
+
+Express API with modular JWT auth middleware.
+
+## Auth stack
+
+- \`verifyJwt\` — bearer extraction + verification
+- \`loadSession\` — optional session hydration
+- \`requireRole\` — composable role guard
+- \`authMiddleware\` — backwards-compatible composer
+
+Run tests with \`npm test\`.
+`,
+    content: "Documented modular auth middleware",
+    status: "success",
+  }),
+  ev(46100, {
+    type: "file_change",
+    id: "fc8",
+    parentId: "th5",
+    title: "File: .env.example",
+    path: ".env.example",
+    diffStatus: "added",
+    oldContent: "",
+    newContent: `JWT_SECRET=replace-me
+SESSION_TTL_SECONDS=3600
+`,
+    content: "Added env example (no real secrets)",
+    status: "success",
+  }),
+  // Multi-hunk edit: two separate regions so per-hunk causality can zip
+  ev(46400, {
+    type: "file_change",
+    id: "fc9",
+    parentId: "g1",
+    title: "File: src/utils/jwt.ts",
+    path: "src/utils/jwt.ts",
+    diffStatus: "modified",
+    oldContent: `import jwt from "jsonwebtoken";
+
+const SECRET = process.env.JWT_SECRET || "dev-secret";
+
+export type JwtPayload = { sub: string; role: string };
+
+export function verifyToken(token: string): JwtPayload {
+  return jwt.verify(token, SECRET) as JwtPayload;
+}
+
+export function signToken(payload: JwtPayload): string {
+  return jwt.sign(payload, SECRET, { expiresIn: "1h" });
+}
+`,
+    newContent: `import jwt from "jsonwebtoken";
+
+const SECRET = process.env.JWT_SECRET || "dev-secret";
+
+export type JwtPayload = { sub: string; role: string };
+
+/** Verify signature + expiry; throws on invalid tokens. */
+export function verifyToken(token: string): JwtPayload {
+  return jwt.verify(token, SECRET) as JwtPayload;
+}
+
+/** Issue a short-lived access token for the given subject. */
+export function signToken(payload: JwtPayload): string {
+  return jwt.sign(payload, SECRET, { expiresIn: "1h" });
+}
+`,
+    content: "Documented JWT helpers (multi-hunk docs)",
+    status: "success",
+  }),
+  ev(46600, {
     type: "plan_update",
     id: "pl3",
     parentId: "pl1",
     title: "Plan complete",
     content:
-      "✓ Extract JWT verification\n✓ Extract session loading\n✓ Refactor auth.ts composer\n✓ Add unit tests\n✓ Update routes\n✓ All tests passing",
+      "✓ Extract JWT verification\n✓ Extract session loading\n✓ Refactor auth.ts composer\n✓ Add unit tests\n✓ Update routes\n✓ All tests passing\n✓ Package scripts + docs + env example",
     status: "success",
   }),
   ev(47000, {
@@ -456,7 +576,7 @@ usersRouter.get(
     parentId: "g1",
     title: "Summary",
     content:
-      "Auth middleware is now modular:\n- verify-jwt.ts — token verification\n- load-session.ts — session hydration\n- auth.ts — composer + requireRole\n- routes use requireRole for admin\n- 4 unit tests passing\n\nPublic authMiddleware() API preserved for existing callers.",
+      "Auth middleware is now modular:\n- verify-jwt.ts — token verification\n- load-session.ts — session hydration\n- auth.ts — composer + requireRole\n- routes use requireRole for admin\n- 4 unit tests passing\n- package.json scripts + README + .env.example\n\nPublic authMiddleware() API preserved for existing callers.\n\nReview tip: open Changes → Queue to walk files by risk (config / security / source / tests / docs).",
     status: "success",
   }),
   ev(48000, {

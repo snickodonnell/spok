@@ -2,6 +2,8 @@
 
 import { useSpokStore } from "@/lib/store";
 import { FileTree } from "./file-tree";
+import { ReviewQueuePanel } from "./review-queue-panel";
+import { FileRiskBadge } from "./file-risk-badge";
 import { DiffStatChip, MonacoDiff, type DiffLayout } from "./monaco-diff";
 import { HunkNav } from "./hunk-nav";
 import { CausalRail, CausalMiniRail } from "./causal-rail";
@@ -16,16 +18,45 @@ import {
   Minus,
   Trash2,
   Link2,
+  ListTree,
+  FolderTree,
+  FileText,
+  ClipboardCopy,
 } from "lucide-react";
 import { unifiedDiffText } from "@/lib/diff-utils";
-import { useEffect, useState } from "react";
+import { classifyFileRisk } from "@/lib/file-risk";
+import {
+  buildReviewQueue,
+  nextReviewFileId,
+  reviewQueueIndex,
+} from "@/lib/review-queue";
+import { buildReviewSummary } from "@/lib/review-summary";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { refreshGitDiff } from "@/lib/harness";
 import { runGitAndRefresh } from "@/lib/git/client";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CommitChecklist } from "@/components/git/commit-checklist";
+import { cn } from "@/lib/utils";
 
 const LAYOUT_KEY = "spok.diffLayout";
+const SIDEBAR_MODE_KEY = "spok.changesSidebar";
+
+type SidebarMode = "queue" | "tree";
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  ) {
+    return true;
+  }
+  if (target.isContentEditable) return true;
+  if (target.getAttribute("role") === "textbox") return true;
+  return false;
+}
 
 export function DiffPanel() {
   const session = useSpokStore((s) =>
@@ -35,23 +66,35 @@ export function DiffPanel() {
   const causalOpen = useSpokStore((s) => s.causalDrawerOpen);
   const setCausalOpen = useSpokStore((s) => s.setCausalDrawerOpen);
   const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
+  const selectFile = useSpokStore((s) => s.selectFile);
+  const workspaceRightTab = useSpokStore((s) => s.workspaceRightTab);
+
   const file = session?.selectedFileId
     ? session.files[session.selectedFileId]
     : null;
   const [copied, setCopied] = useState(false);
+  const [summaryCopied, setSummaryCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [layout, setLayout] = useState<DiffLayout>("unified");
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>("queue");
+  const [hunkIdx, setHunkIdx] = useState(0);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LAYOUT_KEY);
       if (saved === "unified" || saved === "split") setLayout(saved);
+      const side = localStorage.getItem(SIDEBAR_MODE_KEY);
+      if (side === "queue" || side === "tree") setSidebarMode(side);
     } catch {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    setHunkIdx(0);
+  }, [file?.id]);
 
   const onLayoutChange = (next: DiffLayout) => {
     setLayout(next);
@@ -62,8 +105,29 @@ export function DiffPanel() {
     }
   };
 
+  const onSidebarMode = (mode: SidebarMode) => {
+    setSidebarMode(mode);
+    try {
+      localStorage.setItem(SIDEBAR_MODE_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+  };
+
   const planMode = appPermissionMode === "plan";
   const canMutate = !!session?.config.cwd && !planMode;
+
+  const queue = useMemo(
+    () => (session ? buildReviewQueue(session) : null),
+    [session]
+  );
+
+  const fileRisk = useMemo(
+    () => (file ? classifyFileRisk(file.path, file) : null),
+    [file]
+  );
+
+  const queuePos = queue ? reviewQueueIndex(queue, file?.id) : -1;
 
   const copyDiff = async () => {
     if (!file) return;
@@ -71,6 +135,17 @@ export function DiffPanel() {
     setCopied(true);
     toast.success("Diff copied to clipboard");
     setTimeout(() => setCopied(false), 1500);
+  };
+
+  const copySummary = async () => {
+    if (!session) return;
+    const summary = buildReviewSummary(session);
+    await navigator.clipboard.writeText(summary.clipboard);
+    setSummaryCopied(true);
+    toast.success("Review summary copied", {
+      description: summary.title,
+    });
+    setTimeout(() => setSummaryCopied(false), 1500);
   };
 
   const downloadDiff = () => {
@@ -146,8 +221,87 @@ export function DiffPanel() {
     }
   };
 
-  const fileCount = session ? Object.keys(session.files).length : 0;
+  const goFile = useCallback(
+    (delta: 1 | -1) => {
+      if (!queue) return;
+      const next = nextReviewFileId(queue, file?.id ?? null, delta);
+      if (next) selectFile(next);
+    },
+    [queue, file?.id, selectFile]
+  );
 
+  const goHunk = useCallback(
+    (delta: 1 | -1) => {
+      if (!file || file.hunks.length === 0) return;
+      setHunkIdx((i) => {
+        const next = Math.max(0, Math.min(file.hunks.length - 1, i + delta));
+        return next;
+      });
+    },
+    [file]
+  );
+
+  // Keyboard review flow (active when Changes tab is visible)
+  useEffect(() => {
+    if (workspaceRightTab !== "changes") return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const key = e.key.toLowerCase();
+      if (key === "j" || key === "]") {
+        e.preventDefault();
+        goFile(1);
+        return;
+      }
+      if (key === "k" || key === "[") {
+        e.preventDefault();
+        goFile(-1);
+        return;
+      }
+      if (key === "n") {
+        e.preventDefault();
+        goHunk(1);
+        return;
+      }
+      if (key === "p") {
+        e.preventDefault();
+        goHunk(-1);
+        return;
+      }
+      if (key === "w") {
+        e.preventDefault();
+        setCausalOpen(!useSpokStore.getState().causalDrawerOpen);
+        return;
+      }
+      if (key === "u") {
+        e.preventDefault();
+        onLayoutChange(layout === "unified" ? "split" : "unified");
+        return;
+      }
+      if (key === "s" && canMutate && file && (file.unstaged || file.untracked)) {
+        e.preventDefault();
+        void stageFile();
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // stageFile closes over session/file — intentional for current selection
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    workspaceRightTab,
+    goFile,
+    goHunk,
+    setCausalOpen,
+    layout,
+    canMutate,
+    file,
+  ]);
+
+  const fileCount = session ? Object.keys(session.files).length : 0;
   const relatedCount = file?.relatedTraceIds.length ?? 0;
 
   return (
@@ -160,6 +314,14 @@ export function DiffPanel() {
           <span className="font-mono text-[10px] text-phosphor-green/40">
             {fileCount} file{fileCount === 1 ? "" : "s"}
           </span>
+          {queue && queuePos >= 0 && (
+            <span
+              className="rounded border border-phosphor-green/20 bg-black/30 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-cyan/80"
+              title="Position in risk-ordered review queue"
+            >
+              {queuePos + 1}/{queue.flat.length}
+            </span>
+          )}
           {session?.config.cwd && (
             <Button
               variant="ghost"
@@ -176,7 +338,7 @@ export function DiffPanel() {
           )}
         </div>
         {file && (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             <Badge
               variant={
                 file.status === "added"
@@ -190,6 +352,7 @@ export function DiffPanel() {
             >
               {file.status}
             </Badge>
+            {fileRisk && <FileRiskBadge risk={fileRisk} />}
             {file.staged && (
               <Badge variant="success" className="text-[9px]">
                 staged
@@ -217,12 +380,12 @@ export function DiffPanel() {
               additions={file.additions}
               deletions={file.deletions}
             />
-            <HunkNav file={file} />
+            <HunkNav file={file} index={hunkIdx} onJump={setHunkIdx} />
             <Button
               variant={causalOpen ? "secondary" : "ghost"}
               size="sm"
               className="h-7 gap-1 text-[10px]"
-              title="Why did this change?"
+              title="Why did this change? (w)"
               onClick={() => setCausalOpen(!causalOpen)}
             >
               <Link2 className="h-3 w-3" />
@@ -240,7 +403,7 @@ export function DiffPanel() {
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    title="Stage file"
+                    title="Stage file (s)"
                     disabled={busy}
                     onClick={() => void stageFile()}
                   >
@@ -273,24 +436,50 @@ export function DiffPanel() {
                 )}
               </>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={copyDiff}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={copyDiff}
+              title="Copy unified diff"
+            >
               {copied ? (
                 <Check className="h-3.5 w-3.5 text-phosphor-green" />
               ) : (
                 <Copy className="h-3.5 w-3.5" />
               )}
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={downloadDiff}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={downloadDiff}
+              title="Download .diff"
+            >
               <Download className="h-3.5 w-3.5" />
             </Button>
           </div>
         )}
       </div>
 
-      <CausalMiniRail />
+      <CausalMiniRail hunkIndex={hunkIdx} />
 
       <div className="flex items-center gap-2 border-b border-phosphor-green/10 px-2 py-1">
         <CommitChecklist compact className="min-w-0 flex-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 shrink-0 gap-1 text-[10px]"
+          onClick={() => void copySummary()}
+          title="Copy PR review summary"
+        >
+          {summaryCopied ? (
+            <Check className="h-3 w-3 text-phosphor-green" />
+          ) : (
+            <ClipboardCopy className="h-3 w-3" />
+          )}
+          Summary
+        </Button>
         <Button
           variant="ghost"
           size="sm"
@@ -301,20 +490,84 @@ export function DiffPanel() {
         </Button>
       </div>
 
-      {/* File tree + diff + optional causal rail */}
+      {/* File queue/tree + diff + optional causal rail */}
       <div className="flex min-h-0 flex-1">
-        <div className="w-56 shrink-0 overflow-auto border-r border-phosphor-green/15">
-          <FileTree />
+        <div className="flex w-60 shrink-0 flex-col border-r border-phosphor-green/15">
+          <div
+            className="flex shrink-0 items-center gap-0.5 border-b border-phosphor-green/10 p-1"
+            role="tablist"
+            aria-label="Changes sidebar mode"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidebarMode === "queue"}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1 rounded px-1.5 py-1 text-[10px] transition",
+                sidebarMode === "queue"
+                  ? "bg-phosphor-green/12 text-phosphor-green"
+                  : "text-phosphor-green/45 hover:bg-phosphor-green/5 hover:text-phosphor-green/75"
+              )}
+              onClick={() => onSidebarMode("queue")}
+            >
+              <ListTree className="h-3 w-3" />
+              Queue
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidebarMode === "tree"}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1 rounded px-1.5 py-1 text-[10px] transition",
+                sidebarMode === "tree"
+                  ? "bg-phosphor-green/12 text-phosphor-green"
+                  : "text-phosphor-green/45 hover:bg-phosphor-green/5 hover:text-phosphor-green/75"
+              )}
+              onClick={() => onSidebarMode("tree")}
+            >
+              <FolderTree className="h-3 w-3" />
+              Tree
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {sidebarMode === "queue" ? <ReviewQueuePanel /> : <FileTree />}
+          </div>
         </div>
         <div className="min-w-0 flex-1">
-          <MonacoDiff
-            file={file}
-            className="h-full"
-            layout={layout}
-            onLayoutChange={onLayoutChange}
-          />
+          {!file && queue && queue.flat.length > 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <FileText className="h-8 w-8 text-phosphor-green/25" />
+              <p className="font-mono text-[10px] uppercase tracking-widest text-phosphor-green/45">
+                Ready to review
+              </p>
+              <p className="max-w-sm text-[11px] text-phosphor-green/40">
+                {queue.summary.headline}. Select a file from the risk-ordered
+                queue, or press{" "}
+                <kbd className="rounded border border-phosphor-green/25 px-1 font-mono text-[10px]">
+                  j
+                </kbd>{" "}
+                to start.
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-7 text-[10px]"
+                onClick={() => selectFile(queue.flat[0].fileId)}
+              >
+                Review first file
+              </Button>
+            </div>
+          ) : (
+            <MonacoDiff
+              file={file}
+              className="h-full"
+              layout={layout}
+              onLayoutChange={onLayoutChange}
+              revealHunkIndex={hunkIdx}
+            />
+          )}
         </div>
-        <CausalRail />
+        <CausalRail hunkIndex={hunkIdx} />
       </div>
 
       <ConfirmDialog

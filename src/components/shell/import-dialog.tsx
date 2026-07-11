@@ -16,6 +16,7 @@ import { parseBulkText } from "@/lib/parser";
 import { parseUnifiedDiff } from "@/lib/diff-utils";
 import { playEvents } from "@/lib/playback";
 import { SAMPLES } from "@/lib/samples";
+import { focusReviewWorkbench } from "@/lib/samples/focus-review";
 import { parseImportPayload } from "@/lib/export-session";
 import { replayEvents } from "@/lib/session-replay";
 import { registerDurableSession } from "@/lib/session-persist-client";
@@ -197,7 +198,11 @@ export function ImportDialog() {
         speed: 1.5,
         onComplete: () => {
           updateSession(id, { status: "completed" });
-          toast.success("Sample complete");
+          const store = useSpokStore.getState();
+          const focus = focusReviewWorkbench(store, id);
+          toast.success("Sample complete — review queue ready", {
+            description: focus.headline,
+          });
         },
       }
     );

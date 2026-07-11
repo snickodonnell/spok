@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { UI_PREFS_BOOT_SCRIPT } from "@/lib/ui-prefs-cache";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -44,7 +45,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" data-theme="professional">
+    <html lang="en" className="dark" data-theme="professional" suppressHydrationWarning>
+      <head>
+        {/* Apply cached CRT/theme before paint — must not wait on /api/settings */}
+        <script dangerouslySetInnerHTML={{ __html: UI_PREFS_BOOT_SCRIPT }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

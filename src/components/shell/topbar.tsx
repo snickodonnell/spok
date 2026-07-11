@@ -12,6 +12,7 @@ import {
   Bell,
   Keyboard,
   Palette,
+  Inbox,
 } from "lucide-react";
 import type { UiTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,11 @@ import {
   PRODUCT_MODE_META,
   type ProductMode,
 } from "@/lib/product-modes";
+import {
+  buildSessionInbox,
+  inboxJobsFingerprint,
+  inboxSessionFingerprint,
+} from "@/lib/session-inbox";
 import { cn } from "@/lib/utils";
 
 const PRODUCT_MODES: ProductMode[] = ["run", "review", "automate", "extend"];
@@ -46,6 +52,19 @@ export function Topbar() {
   const activeJobs = automationJobs.filter((j) =>
     ["queued", "running", "waiting_approval"].includes(j.status)
   ).length;
+  // Lightweight inbox attention badge (same fingerprints as sidebar).
+  const sessionListKey = useSpokStore((s) =>
+    Object.values(s.sessions)
+      .map((sess) => inboxSessionFingerprint(sess))
+      .sort()
+      .join("|")
+  );
+  const jobsKey = useSpokStore((s) => inboxJobsFingerprint(s.automationJobs));
+  void sessionListKey;
+  void jobsKey;
+  const inboxSummary = buildSessionInbox(useSpokStore.getState().sessions, {
+    jobs: useSpokStore.getState().automationJobs,
+  }).summary;
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);
   const setScanlines = useSpokStore((s) => s.setScanlines);
@@ -137,6 +156,34 @@ export function Topbar() {
             );
           })}
         </nav>
+        {(inboxSummary.attentionCount > 0 ||
+          inboxSummary.activeCount > 0 ||
+          inboxSummary.readyReviewCount > 0) && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!sidebarOpen) setSidebarOpen(true);
+            }}
+            className="inline-flex items-center gap-1 rounded border border-phosphor-green/20 px-1.5 py-0.5 transition hover:border-phosphor-cyan/40 hover:bg-phosphor-cyan/5"
+            title={inboxSummary.headline}
+            data-testid="inbox-attention-chip"
+          >
+            <Inbox className="h-3 w-3 text-phosphor-cyan/80" />
+            {inboxSummary.attentionCount > 0 ? (
+              <Badge variant="amber" className="h-4 px-1 text-[8px]">
+                {inboxSummary.attentionCount} attn
+              </Badge>
+            ) : inboxSummary.activeCount > 0 ? (
+              <Badge variant="default" className="h-4 px-1 text-[8px]">
+                {inboxSummary.activeCount} live
+              </Badge>
+            ) : (
+              <Badge variant="cyan" className="h-4 px-1 text-[8px]">
+                {inboxSummary.readyReviewCount} review
+              </Badge>
+            )}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}

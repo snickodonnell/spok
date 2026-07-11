@@ -38,8 +38,8 @@ export function computeLineDiff(
     };
   }
 
-  let oldLines = oldText.length ? oldText.split("\n") : [];
-  let newLines = newText.length ? newText.split("\n") : [];
+  const oldLines = oldText.length ? oldText.split("\n") : [];
+  const newLines = newText.length ? newText.split("\n") : [];
 
   // Truncate pathological sizes before allocating the DP table
   if (oldLines.length > MAX_LINES_EACH || newLines.length > MAX_LINES_EACH) {

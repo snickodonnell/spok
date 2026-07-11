@@ -27,6 +27,33 @@ import {
   reduceStreamEvents,
   recomputeSessionMetrics,
 } from "./session-reduce";
+import {
+  readCachedUiPrefs,
+  writeCachedUiPrefs,
+} from "./ui-prefs-cache";
+
+/** Seed appearance from localStorage so CRT/theme don't wait on /api/settings. */
+const cachedUi = readCachedUiPrefs();
+
+function persistUiPrefsFromState(s: {
+  uiTheme: import("./theme").UiTheme;
+  crtEnabled: boolean;
+  scanlines: boolean;
+  reducedMotion: boolean;
+  appPermissionMode: import("./settings/types").AppPermissionMode;
+  osNotifications: boolean;
+  nativeFolderPicker: boolean;
+}) {
+  writeCachedUiPrefs({
+    theme: s.uiTheme,
+    crtEnabled: s.crtEnabled,
+    scanlines: s.scanlines,
+    reducedMotion: s.reducedMotion,
+    permissionMode: s.appPermissionMode,
+    osNotifications: s.osNotifications,
+    nativeFolderPicker: s.nativeFolderPicker,
+  });
+}
 
 const defaultConfig: SessionConfig = {
   cwd: "",
@@ -129,6 +156,11 @@ interface SpokState {
   nativeFolderPicker: boolean;
   keyboardHelpOpen: boolean;
   diagnosticsOpen: boolean;
+  /**
+   * One-shot prompt text for the composer (validation recipes, command palette).
+   * Composer consumes and clears via clearComposerPrefill.
+   */
+  composerPrefill: string | null;
 
   // selectors helpers
   getActiveSession: () => Session | null;
@@ -163,6 +195,8 @@ interface SpokState {
   setNativeFolderPicker: (v: boolean) => void;
   setKeyboardHelpOpen: (open: boolean) => void;
   setDiagnosticsOpen: (open: boolean) => void;
+  setComposerPrefill: (text: string | null) => void;
+  clearComposerPrefill: () => void;
 
   /**
    * Create a session. When `activate` is false, the current active session
@@ -275,7 +309,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   extensionsOpen: false,
   selectedSkillIds: [],
   selectedAgentId: null,
-  appPermissionMode: "manual",
+  appPermissionMode: cachedUi?.permissionMode ?? "manual",
   monitorOpen: false,
   notificationsOpen: false,
   automationJobs: [],
@@ -294,14 +328,15 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   },
   expandedNodeIds: new Set(),
   linkedHighlightFileId: null,
-  crtEnabled: false,
-  scanlines: false,
-  uiTheme: "professional",
-  reducedMotion: false,
-  osNotifications: true,
-  nativeFolderPicker: true,
+  crtEnabled: cachedUi?.crtEnabled ?? false,
+  scanlines: cachedUi?.scanlines ?? false,
+  uiTheme: cachedUi?.theme ?? "professional",
+  reducedMotion: cachedUi?.reducedMotion ?? false,
+  osNotifications: cachedUi?.osNotifications ?? true,
+  nativeFolderPicker: cachedUi?.nativeFolderPicker ?? true,
   keyboardHelpOpen: false,
   diagnosticsOpen: false,
+  composerPrefill: null,
 
   getActiveSession: () => {
     const { sessions, activeSessionId } = get();
@@ -367,7 +402,10 @@ export const useSpokStore = create<SpokState>((set, get) => ({
     })),
   clearSelectedSkills: () => set({ selectedSkillIds: [] }),
   setSelectedAgentId: (id) => set({ selectedAgentId: id }),
-  setAppPermissionMode: (mode) => set({ appPermissionMode: mode }),
+  setAppPermissionMode: (mode) => {
+    set({ appPermissionMode: mode });
+    persistUiPrefsFromState(get());
+  },
   setTraceFilter: (filter) =>
     set((s) => ({ traceFilter: { ...s.traceFilter, ...filter } })),
   toggleExpanded: (id) =>
@@ -384,20 +422,38 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       return { expandedNodeIds: new Set(Object.keys(session.nodes)) };
     }),
   collapseAll: () => set({ expandedNodeIds: new Set() }),
-  setCrtEnabled: (v) => set({ crtEnabled: v }),
-  setScanlines: (v) => set({ scanlines: v }),
+  setCrtEnabled: (v) => {
+    set({ crtEnabled: v });
+    persistUiPrefsFromState(get());
+  },
+  setScanlines: (v) => {
+    set({ scanlines: v });
+    persistUiPrefsFromState(get());
+  },
   setUiTheme: (theme) => {
     if (theme === "crt") {
       set({ uiTheme: theme, crtEnabled: true, scanlines: true });
     } else {
       set({ uiTheme: theme, crtEnabled: false, scanlines: false });
     }
+    persistUiPrefsFromState(get());
   },
-  setReducedMotion: (v) => set({ reducedMotion: v }),
-  setOsNotifications: (v) => set({ osNotifications: v }),
-  setNativeFolderPicker: (v) => set({ nativeFolderPicker: v }),
+  setReducedMotion: (v) => {
+    set({ reducedMotion: v });
+    persistUiPrefsFromState(get());
+  },
+  setOsNotifications: (v) => {
+    set({ osNotifications: v });
+    persistUiPrefsFromState(get());
+  },
+  setNativeFolderPicker: (v) => {
+    set({ nativeFolderPicker: v });
+    persistUiPrefsFromState(get());
+  },
   setKeyboardHelpOpen: (open) => set({ keyboardHelpOpen: open }),
   setDiagnosticsOpen: (open) => set({ diagnosticsOpen: open }),
+  setComposerPrefill: (text) => set({ composerPrefill: text }),
+  clearComposerPrefill: () => set({ composerPrefill: null }),
 
   createSession: (partial, opts) => {
     const session = createSession(partial);

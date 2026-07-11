@@ -31,6 +31,7 @@ import {
   buildValidationLane,
   validationTabBadge,
 } from "@/lib/validation-lane";
+import { buildReviewQueue } from "@/lib/review-queue";
 import { startMark } from "@/lib/perf";
 
 /**
@@ -73,6 +74,14 @@ export function Workspace() {
     if (!session) return 0;
     return validationTabBadge(buildValidationLane(session).summary);
   }, [sessionId, validationKey]);
+
+  const reviewAttention = useMemo(() => {
+    if (!sessionId) return 0;
+    const session = useSpokStore.getState().sessions[sessionId];
+    if (!session) return 0;
+    const q = buildReviewQueue(session);
+    return q.summary.highRiskCount + q.summary.issueCount;
+  }, [sessionId, filesChanged, validationKey]);
 
   const prevTab = useRef(rightTab);
   useEffect(() => {
@@ -170,6 +179,11 @@ export function Workspace() {
                   >
                     <GitPullRequest className="h-3 w-3" />
                     Review
+                    {reviewAttention > 0 && (
+                      <span className="ml-0.5 rounded bg-phosphor-amber/20 px-1 font-mono text-[9px] text-phosphor-amber">
+                        {reviewAttention}
+                      </span>
+                    )}
                   </TabsTrigger>
                   <TabsTrigger
                     value="validation"

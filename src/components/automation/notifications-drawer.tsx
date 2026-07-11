@@ -42,11 +42,18 @@ export function NotificationsDrawer() {
 
   return (
     <div className="fixed inset-0 z-[90] flex justify-end">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
         aria-label="Close notifications"
         onClick={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " " || e.key === "Escape") {
+            e.preventDefault();
+            setOpen(false);
+          }
+        }}
       />
       <aside className="relative z-10 flex h-full w-full max-w-md flex-col border-l border-phosphor-green/20 bg-crt-panel shadow-[-12px_0_40px_rgba(0,0,0,0.45)]">
         <div className="flex items-center gap-2 border-b border-phosphor-green/15 px-4 py-3">

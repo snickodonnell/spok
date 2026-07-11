@@ -76,6 +76,8 @@ export function MonacoDiff({
   layout = "unified",
   onLayoutChange,
   showLayoutToggle = true,
+  /** 0-based hunk index to reveal in the modified editor. */
+  revealHunkIndex,
 }: {
   file: FileDiff | null;
   className?: string;
@@ -83,6 +85,7 @@ export function MonacoDiff({
   layout?: DiffLayout;
   onLayoutChange?: (layout: DiffLayout) => void;
   showLayoutToggle?: boolean;
+  revealHunkIndex?: number;
 }) {
   const [ready, setReady] = useState(false);
   const [internalLayout, setInternalLayout] = useState<DiffLayout>(layout);
@@ -113,6 +116,19 @@ export function MonacoDiff({
       renderSideBySide: view === "split",
     });
   }, [view]);
+
+  // Keyboard / hunk-nav: scroll modified pane to the selected hunk
+  useEffect(() => {
+    if (revealHunkIndex == null || !file) return;
+    const hunk = file.hunks[revealHunkIndex];
+    if (!hunk) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+    const modified = ed.getModifiedEditor();
+    const line = Math.max(1, hunk.newStart || 1);
+    modified.revealLineInCenter(line);
+    modified.setPosition({ lineNumber: line, column: 1 });
+  }, [revealHunkIndex, file]);
 
   if (!file) {
     return (

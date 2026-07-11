@@ -36,6 +36,7 @@ import {
   resolveCurrentWorkspace,
 } from "@/lib/workspace-session";
 import { SAMPLES } from "@/lib/samples";
+import { focusReviewWorkbench } from "@/lib/samples/focus-review";
 import { playEvents } from "@/lib/playback";
 import { buildExportPayload } from "@/lib/export-session";
 import { toast } from "sonner";
@@ -113,7 +114,10 @@ export function CommandPalette() {
         speed: 1.5,
         onComplete: () => {
           updateSession(id, { status: "completed" });
-          toast.success("Sample playback complete");
+          const focus = focusReviewWorkbench(useSpokStore.getState(), id);
+          toast.success("Sample complete — review queue ready", {
+            description: focus.headline,
+          });
         },
       }
     );

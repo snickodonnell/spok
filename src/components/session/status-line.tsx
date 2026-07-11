@@ -50,6 +50,11 @@ export function StatusLine() {
       ? s.sessions[s.activeSessionId!]?.gitSummary?.branch
       : undefined
   );
+  const hydratePartial = useSpokStore((s) =>
+    s.activeSessionId
+      ? !!s.sessions[s.activeSessionId!]?.hydratePartial
+      : false
+  );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [cliLoading, setCliLoading] = useState(false);
@@ -156,6 +161,17 @@ export function StatusLine() {
               : `${command} missing`}
         </span>
       </span>
+
+      {hydratePartial && (
+        <span
+          className="inline-flex items-center gap-1 text-phosphor-cyan/80"
+          title="Loading transcript and changes from disk"
+          data-testid="session-body-loading"
+        >
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span className="font-mono">loading…</span>
+        </span>
+      )}
 
       <span
         className="ml-auto inline-flex items-center gap-1 text-phosphor-green/40"

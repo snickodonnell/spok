@@ -33,6 +33,10 @@ import { SAMPLES } from "@/lib/samples";
 import { playEvents } from "@/lib/playback";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import type { LayoutPreference } from "@/lib/mobile-layout";
+import {
+  buildSessionInbox,
+  INBOX_LANE_META,
+} from "@/lib/session-inbox";
 
 /** Lazy dialogs — desktop-style launch is secondary; mobile uses full-screen picker */
 const ImportDialog = dynamic(
@@ -765,14 +769,7 @@ function MobileSessions({
   layoutPreference,
   onLayoutPreference,
 }: {
-  sessions: Array<{
-    id: string;
-    name: string;
-    status: string;
-    updatedAt: number;
-    config: { cwd: string };
-    source: string;
-  }>;
+  sessions: import("@/lib/types").Session[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onOpenRepo: () => void;
@@ -780,6 +777,8 @@ function MobileSessions({
   layoutPreference: LayoutPreference;
   onLayoutPreference: (p: LayoutPreference) => void;
 }) {
+  const inbox = useMemo(() => buildSessionInbox(sessions), [sessions]);
+
   return (
     <div className="h-full overflow-y-auto p-3 pb-6">
       <div className="mb-3 flex flex-wrap gap-2">
@@ -793,36 +792,66 @@ function MobileSessions({
         </Button>
       </div>
 
-      <h2 className="mb-2 text-[11px] font-medium text-phosphor-green/45">
-        Sessions on host
-      </h2>
-      {sessions.length === 0 ? (
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-[11px] font-medium text-phosphor-green/45">
+          Session inbox
+        </h2>
+        {inbox.summary.total > 0 && (
+          <span className="font-mono text-[10px] text-phosphor-green/40">
+            {inbox.summary.headline}
+          </span>
+        )}
+      </div>
+      {inbox.summary.total === 0 ? (
         <p className="text-sm text-phosphor-green/40">No sessions yet</p>
       ) : (
-        <ul className="space-y-1.5">
-          {sessions.map((s) => (
-            <li key={s.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(s.id)}
-                className={cn(
-                  "w-full rounded-xl border px-3 py-3 text-left transition",
-                  s.id === activeId
-                    ? "border-phosphor-cyan/40 bg-phosphor-cyan/10"
-                    : "border-phosphor-green/12 bg-black/25 active:bg-phosphor-green/8"
-                )}
-              >
-                <div className="truncate text-sm font-medium">{s.name}</div>
-                <div className="mt-0.5 truncate font-mono text-[10px] text-phosphor-green/40">
-                  {s.config.cwd || s.source}
-                </div>
-                <div className="mt-1 text-[10px] text-phosphor-green/35">
-                  {s.status} · {formatRelativeTime(s.updatedAt)}
-                </div>
-              </button>
-            </li>
+        <div className="space-y-3">
+          {inbox.groups.map(({ lane, entries }) => (
+            <div key={lane} data-testid={`mobile-inbox-lane-${lane}`}>
+              <div className="mb-1.5 px-0.5 text-[10px] font-medium uppercase tracking-widest text-phosphor-green/40">
+                {INBOX_LANE_META[lane].label}
+                <span className="ml-1.5 font-mono text-phosphor-green/30">
+                  {entries.length}
+                </span>
+              </div>
+              <ul className="space-y-1.5">
+                {entries.map((e) => (
+                  <li key={e.sessionId}>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(e.sessionId)}
+                      className={cn(
+                        "w-full rounded-xl border px-3 py-3 text-left transition",
+                        e.sessionId === activeId
+                          ? "border-phosphor-cyan/40 bg-phosphor-cyan/10"
+                          : "border-phosphor-green/12 bg-black/25 active:bg-phosphor-green/8"
+                      )}
+                    >
+                      <div className="truncate text-sm font-medium">{e.name}</div>
+                      <div className="mt-0.5 text-[11px] text-phosphor-green/55">
+                        {e.reason}
+                      </div>
+                      <div className="mt-0.5 truncate font-mono text-[10px] text-phosphor-green/40">
+                        {e.cwd || e.source}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-phosphor-green/35">
+                        <span className="uppercase tracking-wide">{e.lane.replace("_", " ")}</span>
+                        <span>·</span>
+                        <span>{formatRelativeTime(e.updatedAt)}</span>
+                        {e.branch && (
+                          <>
+                            <span>·</span>
+                            <span className="truncate font-mono">{e.branch}</span>
+                          </>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       <div className="mt-8 rounded-xl border border-phosphor-green/12 bg-black/20 p-3">

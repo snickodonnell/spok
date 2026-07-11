@@ -9,11 +9,13 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
-import type { DiffStatus, FileTreeNode } from "@/lib/types";
+import type { DiffStatus, FileDiff, FileTreeNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 import { DiffStatChip } from "./monaco-diff";
+import { classifyFileRisk } from "@/lib/file-risk";
+import { FileRiskBadge } from "./file-risk-badge";
 
 function statusColor(status?: DiffStatus) {
   switch (status) {
@@ -53,6 +55,7 @@ function TreeNode({
   search,
   stagedIds,
   untrackedIds,
+  filesById,
 }: {
   node: FileTreeNode;
   depth: number;
@@ -61,6 +64,7 @@ function TreeNode({
   search: string;
   stagedIds: Set<string>;
   untrackedIds: Set<string>;
+  filesById: Record<string, FileDiff>;
 }) {
   const [open, setOpen] = useState(true);
   const q = search.trim().toLowerCase();
@@ -121,6 +125,7 @@ function TreeNode({
               search={search}
               stagedIds={stagedIds}
               untrackedIds={untrackedIds}
+              filesById={filesById}
             />
           ))}
       </div>
@@ -130,6 +135,10 @@ function TreeNode({
   const selected = node.fileId === selectedId;
   const isStaged = node.fileId ? stagedIds.has(node.fileId) : false;
   const isUntracked = node.fileId ? untrackedIds.has(node.fileId) : false;
+  const fileMeta = node.fileId ? filesById[node.fileId] : undefined;
+  const risk = fileMeta
+    ? classifyFileRisk(fileMeta.path, fileMeta)
+    : classifyFileRisk(node.path);
 
   return (
     <button
@@ -161,6 +170,13 @@ function TreeNode({
       <span className={cn("text-[10px] font-bold", statusColor(node.status))}>
         {statusLetter(node.status)}
       </span>
+      {(risk.kind === "security" ||
+        risk.kind === "config" ||
+        risk.kind === "binary" ||
+        risk.level === "critical" ||
+        risk.level === "high") && (
+        <FileRiskBadge risk={risk} compact className="ml-0.5" />
+      )}
       <DiffStatChip
         className="ml-auto scale-90"
         additions={node.additions ?? 0}
@@ -225,6 +241,7 @@ export function FileTree() {
               search={search}
               stagedIds={stagedIds}
               untrackedIds={untrackedIds}
+              filesById={session.files}
             />
           ))
         )}

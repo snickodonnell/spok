@@ -64,16 +64,26 @@ function snapshotPath(id: string): string {
   return path.join(sessionDir(id), "snapshot.json");
 }
 
-function atomicWriteJson(file: string, data: unknown): void {
+function atomicWriteJson(
+  file: string,
+  data: unknown,
+  opts?: { pretty?: boolean }
+): void {
   const dir = path.dirname(file);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+  // Snapshots use compact JSON (no pretty indent) — multi-MB pretty dumps
+  // dominated cold restore time on real sessions.
+  const body =
+    opts?.pretty === false
+      ? JSON.stringify(data)
+      : JSON.stringify(data, null, 2);
+  writeFileSync(tmp, body, "utf8");
   try {
     renameSync(tmp, file);
   } catch {
     // Windows may fail rename over existing file — fallback
-    writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+    writeFileSync(file, body, "utf8");
     try {
       rmSync(tmp, { force: true });
     } catch {
@@ -304,29 +314,113 @@ export function readRawEnvelopes(id: string): RawLogEnvelope[] {
   return out;
 }
 
+/** Caps for durable snapshots — full history lives in events.ndjson. */
+export const SNAPSHOT_LIMITS = {
+  /** eventLog is optional continuity only; disk log is authoritative. */
+  maxEvents: 24,
+  maxRaw: 120,
+  /** Per-node content/summary cap (chars). */
+  maxNodeText: 1200,
+  /** Per-file full-text preview cap (chars). Hunks retained. */
+  maxFileText: 8000,
+} as const;
+
+/**
+ * Produce a restore-friendly snapshot payload.
+ * Strips fat fields that dominated multi-MB snapshot.json files in the wild
+ * (duplicated eventLog + huge node text + pretty indent).
+ */
+export function leanSessionForSnapshot(session: Session): Session {
+  const MAX_SNAP_EVENTS = SNAPSHOT_LIMITS.maxEvents;
+  const MAX_SNAP_RAW = SNAPSHOT_LIMITS.maxRaw;
+  const MAX_NODE_TEXT = SNAPSHOT_LIMITS.maxNodeText;
+  const MAX_FILE_TEXT = SNAPSHOT_LIMITS.maxFileText;
+
+  const eventLog = session.eventLog ?? [];
+  const rawLog = session.rawLog ?? [];
+
+  const nodes: Session["nodes"] = {};
+  for (const [nid, node] of Object.entries(session.nodes ?? {})) {
+    const content =
+      node.content && node.content.length > MAX_NODE_TEXT
+        ? node.content.slice(0, MAX_NODE_TEXT)
+        : node.content;
+    const summary =
+      node.summary && node.summary.length > MAX_NODE_TEXT
+        ? node.summary.slice(0, MAX_NODE_TEXT)
+        : node.summary;
+    nodes[nid] = {
+      ...node,
+      content: content ?? node.content,
+      summary,
+      // Drop bulky unstructured meta from snapshots
+      meta: undefined,
+    };
+  }
+
+  const files: Session["files"] = {};
+  for (const [fid, file] of Object.entries(session.files ?? {})) {
+    const oldContent =
+      file.oldContent && file.oldContent.length > MAX_FILE_TEXT
+        ? file.oldContent.slice(0, MAX_FILE_TEXT)
+        : file.oldContent;
+    const newContent =
+      file.newContent && file.newContent.length > MAX_FILE_TEXT
+        ? file.newContent.slice(0, MAX_FILE_TEXT)
+        : file.newContent;
+    files[fid] = {
+      ...file,
+      oldContent,
+      newContent,
+    };
+  }
+
+  const trimEventText = (s: string | undefined, max: number) =>
+    s && s.length > max ? s.slice(0, max) : s;
+
+  const slimEvents = (
+    eventLog.length > MAX_SNAP_EVENTS
+      ? eventLog.slice(eventLog.length - MAX_SNAP_EVENTS)
+      : eventLog
+  ).map((ev) => ({
+    ...ev,
+    content: trimEventText(ev.content, MAX_NODE_TEXT),
+    summary: trimEventText(ev.summary, MAX_NODE_TEXT),
+    oldContent: trimEventText(ev.oldContent, MAX_FILE_TEXT),
+    newContent: trimEventText(ev.newContent, MAX_FILE_TEXT),
+  }));
+
+  return {
+    ...session,
+    hydratePartial: undefined,
+    nodes,
+    files,
+    // eventLog is the #1 fat field on large sessions — keep a tiny tail only
+    eventLog: slimEvents,
+    rawLog: rawLog
+      .slice(Math.max(0, rawLog.length - MAX_SNAP_RAW))
+      .map((l) => {
+        const t = redactSecrets(l).text;
+        return t.length > 400 ? t.slice(0, 400) : t;
+      }),
+    eventCount: session.eventCount ?? eventLog.length,
+  };
+}
+
+/**
+ * Normalize snapshots loaded from disk (including older fat writes).
+ * Safe to call on every read — keeps boot/main-thread work bounded.
+ */
+export function normalizeLoadedSnapshot(session: Session): Session {
+  return leanSessionForSnapshot(session);
+}
+
 export function writeSnapshot(id: string, session: Session): void {
   if (!existsSync(sessionDir(id))) {
     throw new Error(`Session not found: ${id}`);
   }
-  // Keep snapshots lean for fast boot restore — full event log lives in
-  // events.ndjson; in-memory tails are enough for Thinking/UI continuity.
-  const MAX_SNAP_EVENTS = 120;
-  const MAX_SNAP_RAW = 400;
-  const eventLog = session.eventLog ?? [];
-  const rawLog = session.rawLog ?? [];
-  const scrubbed: Session = {
-    ...session,
-    hydratePartial: undefined,
-    eventLog:
-      eventLog.length > MAX_SNAP_EVENTS
-        ? eventLog.slice(eventLog.length - MAX_SNAP_EVENTS)
-        : eventLog,
-    rawLog: rawLog
-      .slice(Math.max(0, rawLog.length - MAX_SNAP_RAW))
-      .map((l) => redactSecrets(l).text),
-    eventCount: session.eventCount ?? eventLog.length,
-  };
-  atomicWriteJson(snapshotPath(id), scrubbed);
+  const scrubbed = leanSessionForSnapshot(session);
+  atomicWriteJson(snapshotPath(id), scrubbed, { pretty: false });
   updateSessionMeta(id, {
     name: session.name,
     status:
@@ -343,7 +437,34 @@ export function writeSnapshot(id: string, session: Session): void {
 }
 
 export function readSnapshot(id: string): Session | null {
-  return readJsonFile<Session>(snapshotPath(id));
+  const file = snapshotPath(id);
+  if (!existsSync(file)) return null;
+  let rawText: string;
+  try {
+    rawText = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  let raw: Session;
+  try {
+    raw = JSON.parse(rawText) as Session;
+  } catch {
+    return null;
+  }
+  const lean = normalizeLoadedSnapshot(raw);
+  // Rewrite legacy fat/pretty snapshots so the next boot is fast.
+  // Threshold ~400KB or eventLog longer than the new cap.
+  const fatOnDisk =
+    rawText.length > 400_000 ||
+    (raw.eventLog?.length ?? 0) > SNAPSHOT_LIMITS.maxEvents + 8;
+  if (fatOnDisk) {
+    try {
+      atomicWriteJson(file, lean, { pretty: false });
+    } catch {
+      /* non-fatal */
+    }
+  }
+  return lean;
 }
 
 export function deleteSessionOnDisk(id: string): boolean {

@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useSpokStore } from "@/lib/store";
 import { SAMPLES } from "@/lib/samples";
+import { focusReviewWorkbench } from "@/lib/samples/focus-review";
 import { playEvents } from "@/lib/playback";
 import { localFetch } from "@/lib/local-api-client";
 import { toast } from "sonner";
@@ -92,7 +93,11 @@ export function WelcomeScreen() {
         speed: 1.5,
         onComplete: () => {
           updateSession(sessionId, { status: "completed" });
-          toast.success("Sample playback complete");
+          const store = useSpokStore.getState();
+          const focus = focusReviewWorkbench(store, sessionId);
+          toast.success("Sample complete — review queue ready", {
+            description: focus.headline,
+          });
         },
       }
     );

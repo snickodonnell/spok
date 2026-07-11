@@ -13,6 +13,8 @@ import {
 } from "@/lib/session-hydrate";
 import { trustWorkspace } from "@/lib/local-api-client";
 import { fetchSettings } from "@/lib/settings-client";
+import { writeCachedUiPrefs } from "@/lib/ui-prefs-cache";
+import { startMark } from "@/lib/perf";
 import type { Session, SessionMetaRecord } from "@/lib/types";
 
 const LAST_ACTIVE_KEY = "spok.lastActiveSessionId";
@@ -30,12 +32,12 @@ export type SessionHydrationOptions = {
 };
 
 /**
- * Progressive boot restore:
- * 1. List metas (cheap — meta.json only).
- * 2. Shell entries in sidebar immediately.
- * 3. Fully materialize ONLY the active session (snapshot-first).
- * 4. Unblock UI (hydrated=true).
- * 5. Background-fill other sessions from snapshots without events.ndjson.
+ * Progressive boot restore (optimized for perceived launch speed):
+ * 1. UI theme already applied from localStorage (layout boot script + store seed).
+ * 2. List metas + settings in parallel (settings do not gate session shells).
+ * 3. Shell entries + activate last session immediately → unblock UI.
+ * 4. Materialize active session body in background (no splash wait).
+ * 5. Background-fill other sessions from lean snapshots.
  * 6. Trust cwds once per unique path after UI is up.
  */
 export function useSessionHydration(opts: SessionHydrationOptions = {}) {
@@ -57,13 +59,53 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
     started.current = true;
 
     let cancelled = false;
-    // Short deadline — progressive restore should finish active session fast.
+    let uiUnblocked = false;
+    const bootMark = startMark("app_boot");
+
+    // Short deadline — UI must not stay on "Restoring…" even if disk is slow.
     const bootDeadline = window.setTimeout(() => {
-      if (cancelled) return;
+      if (cancelled || uiUnblocked) return;
       console.warn("[spok] hydration deadline — showing UI anyway");
+      uiUnblocked = true;
       setHydrated(true);
       setHydrating(false);
-    }, 4_000);
+      bootMark.end({ reason: "deadline" });
+    }, 2_500);
+
+    const applySettingsBundle = (settings: Awaited<
+      ReturnType<typeof fetchSettings>
+    >) => {
+      const ui = settings.resolved.ui;
+      const desktop = settings.resolved.desktop;
+      setAppPermissionMode(settings.resolved.permissionMode);
+      setUiTheme(ui.theme ?? "professional");
+      setCrtEnabled(ui.crtEnabled);
+      setScanlines(ui.scanlines);
+      setReducedMotion(ui.reducedMotion ?? false);
+      setOsNotifications(
+        ui.osNotifications ?? desktop?.osNotifications ?? true
+      );
+      setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
+      writeCachedUiPrefs({
+        theme: ui.theme ?? "professional",
+        crtEnabled: !!ui.crtEnabled,
+        scanlines: !!ui.scanlines,
+        reducedMotion: !!ui.reducedMotion,
+        permissionMode: settings.resolved.permissionMode,
+        osNotifications:
+          ui.osNotifications ?? desktop?.osNotifications ?? true,
+        nativeFolderPicker: desktop?.nativeFolderPicker ?? true,
+      });
+    };
+
+    const unblockUi = () => {
+      window.clearTimeout(bootDeadline);
+      if (cancelled || uiUnblocked) return;
+      uiUnblocked = true;
+      setHydrated(true);
+      setHydrating(false);
+      bootMark.end({ reason: "shells_ready" });
+    };
 
     (async () => {
       setHydrating(true);
@@ -71,40 +113,39 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
       try {
         let maxRestore = opts.maxSessions ?? 12;
 
-        // Settings + session list in parallel
-        const settingsP = fetchSettings().catch(() => null);
+        // Fire settings + metas independently — never block shells on settings.
+        const settingsP = fetchSettings()
+          .then((s) => {
+            if (cancelled) return null;
+            applySettingsBundle(s);
+            if (opts.maxSessions == null) {
+              maxRestore = Math.min(
+                maxRestore,
+                s.resolved.maxRestoredSessions ?? maxRestore
+              );
+            }
+            return s;
+          })
+          .catch(() => null);
+
         const metasP = listDurableSessions().catch((e) => {
           console.warn("[spok] list sessions failed (LAN?)", e);
           return [] as SessionMetaRecord[];
         });
 
-        const [settings, metas] = await Promise.all([settingsP, metasP]);
+        // Prefer metas first for shells; settings can land whenever.
+        const metas = await metasP;
         if (cancelled) return;
 
-        if (settings) {
-          const ui = settings.resolved.ui;
-          const desktop = settings.resolved.desktop;
-          setAppPermissionMode(settings.resolved.permissionMode);
-          setUiTheme(ui.theme ?? "professional");
-          setCrtEnabled(ui.crtEnabled);
-          setScanlines(ui.scanlines);
-          setReducedMotion(ui.reducedMotion ?? false);
-          setOsNotifications(
-            ui.osNotifications ?? desktop?.osNotifications ?? true
-          );
-          setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
-          if (opts.maxSessions == null) {
-            maxRestore = settings.resolved.maxRestoredSessions ?? 12;
-          }
-        }
+        // If settings already resolved, pick up maxRestore; else don't wait.
+        void settingsP;
 
         maxRestore = Math.min(maxRestore, opts.maxSessions ?? maxRestore);
-        // Hard cap — never block boot on dozens of heavy sessions
         maxRestore = Math.max(1, Math.min(24, maxRestore));
 
         if (metas.length === 0) {
-          setHydrated(true);
-          setHydrating(false);
+          await settingsP.catch(() => null);
+          unblockUi();
           return;
         }
 
@@ -125,7 +166,27 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
           hydrateSession(metaShellSession(meta), { activate: false });
         }
 
-        // 2) Fully materialize active session only (blocks "Restoring…")
+        // 2) Activate last session shell NOW — leave splash, load body async
+        if (activeMeta) {
+          useSpokStore.getState().setActiveSession(activeMeta.id);
+          setViewMode("workspace");
+        }
+
+        // 3) Unblock UI before any multi-MB snapshot parse
+        unblockUi();
+        if (!cancelled && toLoad.length > 0) {
+          // Defer toast so it doesn't fight first paint
+          window.setTimeout(() => {
+            if (cancelled) return;
+            toast.message(
+              toLoad.length === 1
+                ? "Restored session"
+                : `Restored ${toLoad.length} sessions`
+            );
+          }, 400);
+        }
+
+        // 4) Materialize active session body (snapshot-first, background)
         if (activeMeta) {
           try {
             const session = await materializeDurableSessionOnce(
@@ -133,11 +194,16 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
               "full"
             );
             if (cancelled) return;
-            hydrateSession(session, { activate: true });
-            useSpokStore.getState().setActiveSession(session.id);
-            setViewMode("workspace");
-
-            // Trust active cwd ASAP so git/spawn work
+            // Don't clobber if user already navigated away
+            const still =
+              useSpokStore.getState().activeSessionId === activeMeta.id ||
+              useSpokStore.getState().sessions[activeMeta.id]?.hydratePartial;
+            if (still) {
+              hydrateSession(session, {
+                activate:
+                  useSpokStore.getState().activeSessionId === activeMeta.id,
+              });
+            }
             if (session.config.cwd && !trustedCwds.has(session.config.cwd)) {
               trustedCwds.add(session.config.cwd);
               void trustWorkspace(session.config.cwd).catch(() => undefined);
@@ -148,40 +214,26 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
               activeMeta.id,
               e
             );
-            // Still activate shell so user isn't stuck on splash
-            useSpokStore.getState().setActiveSession(activeMeta.id);
-            setViewMode("workspace");
           }
         }
 
-        // 3) Unblock UI NOW — remaining work is background
-        window.clearTimeout(bootDeadline);
-        if (!cancelled) {
-          setHydrated(true);
-          setHydrating(false);
-          toast.message(
-            toLoad.length === 1
-              ? "Restored session"
-              : `Restored ${toLoad.length} sessions`
-          );
-        }
+        // Ensure settings finished (for maxRestore / late apply)
+        await settingsP.catch(() => null);
 
-        // 4) Background: snapshot-fill other sessions (skip events.ndjson)
+        // 5) Background: lean snapshot-fill other sessions
         const rest = toLoad.filter((m) => m.id !== activeMeta?.id);
         for (const meta of rest) {
           if (cancelled) return;
           try {
-            // Yield to paint / input between sessions
             await new Promise<void>((r) => {
               if (typeof requestIdleCallback === "function") {
-                requestIdleCallback(() => r(), { timeout: 400 });
+                requestIdleCallback(() => r(), { timeout: 600 });
               } else {
-                setTimeout(r, 0);
+                setTimeout(r, 16);
               }
             });
             if (cancelled) return;
 
-            // Don't clobber if user already opened this session fully
             const existing = useSpokStore.getState().sessions[meta.id];
             if (existing && !existing.hydratePartial) continue;
 
@@ -190,7 +242,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
               "snapshot"
             );
             if (cancelled) return;
-            if (session.hydratePartial) continue; // still no body; leave shell
+            if (session.hydratePartial) continue;
 
             hydrateSession(session, { activate: false });
 
@@ -202,6 +254,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
             console.warn("[spok] background restore failed", meta.id, e);
           }
         }
+
       } catch (e) {
         console.warn("[spok] session hydration failed", e);
       } finally {
@@ -275,7 +328,6 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
             rawCount: 0,
           };
           const full = await materializeDurableSessionOnce(meta, "full");
-          // Only apply if still the active target / still partial
           const cur = useSpokStore.getState().sessions[id];
           if (!cur) return;
           if (!cur.hydratePartial && Object.keys(cur.nodes).length > 0) return;

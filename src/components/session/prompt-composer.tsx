@@ -148,6 +148,8 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const clearSelectedSkills = useSpokStore((s) => s.clearSelectedSkills);
   const selectedAgentId = useSpokStore((s) => s.selectedAgentId);
   const setSelectedAgentId = useSpokStore((s) => s.setSelectedAgentId);
+  const composerPrefill = useSpokStore((s) => s.composerPrefill);
+  const clearComposerPrefill = useSpokStore((s) => s.clearComposerPrefill);
 
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -176,6 +178,20 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const session = sessionId
     ? useSpokStore.getState().sessions[sessionId] ?? null
     : null;
+
+  // Validation recipes / command palette inject prompts once.
+  useEffect(() => {
+    if (!composerPrefill) return;
+    setValue(composerPrefill);
+    clearComposerPrefill();
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      const len = composerPrefill.length;
+      el.setSelectionRange(len, len);
+    });
+  }, [composerPrefill, clearComposerPrefill]);
 
   const flags = useMemo(
     () => flagsFromSession(grokFlags),

@@ -18,6 +18,8 @@ import {
   FilePlus2,
   Minus,
   Eye,
+  ClipboardCopy,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useSpokStore } from "@/lib/store";
@@ -38,6 +40,10 @@ import { trustWorkspace } from "@/lib/local-api-client";
 import { hunkToUnifiedPatch } from "@/lib/diff-utils";
 import type { GitWorktreeInfo } from "@/lib/git/types";
 import type { FileDiff } from "@/lib/types";
+import { classifyFileRisk } from "@/lib/file-risk";
+import { FileRiskBadge } from "@/components/diff/file-risk-badge";
+import { buildReviewSummary } from "@/lib/review-summary";
+import { buildReviewQueue } from "@/lib/review-queue";
 
 type ConfirmState = {
   title: string;
@@ -101,6 +107,10 @@ export function GitPanel() {
   const staged = files.filter((f) => f.staged);
   const worktreeChanges = files.filter((f) => f.unstaged || f.untracked);
   const readiness = useCommitReadiness();
+  const reviewQueue = useMemo(
+    () => (session ? buildReviewQueue(session) : null),
+    [session]
+  );
 
   const refreshMeta = useCallback(async () => {
     if (!session || !cwd) return;
@@ -572,6 +582,7 @@ export function GitPanel() {
 
   const FileRow = ({ file, zone }: { file: FileDiff; zone: "staged" | "work" }) => {
     const badge = areaBadge(file);
+    const risk = classifyFileRisk(file.path, file);
     const selected = selectedPaths.has(file.path);
     const isActive = session.selectedFileId === file.id;
     return (
@@ -600,6 +611,7 @@ export function GitPanel() {
         <Badge variant={badge.variant} className="text-[9px] px-1 py-0">
           {badge.label}
         </Badge>
+        <FileRiskBadge risk={risk} compact />
         {file.isBinary && (
           <span className="text-[9px] text-phosphor-amber">bin</span>
         )}
@@ -660,6 +672,23 @@ export function GitPanel() {
           Review
         </h2>
         <GitStatusPill summary={summary} cwd={cwd} />
+        {reviewQueue && reviewQueue.summary.total > 0 && (
+          <Badge
+            variant={
+              reviewQueue.summary.needsAttention ? "amber" : "muted"
+            }
+            className="text-[9px]"
+            title={reviewQueue.summary.headline}
+          >
+            {reviewQueue.summary.headline}
+          </Badge>
+        )}
+        {reviewQueue && reviewQueue.issues.length > 0 && (
+          <Badge variant="error" className="text-[9px]">
+            {reviewQueue.issues.length} issue
+            {reviewQueue.issues.length === 1 ? "" : "s"}
+          </Badge>
+        )}
         {session.config.isolationGuard && (
           <Badge variant="magenta" className="text-[9px]">
             isolated
@@ -671,6 +700,19 @@ export function GitPanel() {
           </Badge>
         )}
         <div className="ml-auto flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title="Copy review summary for PR"
+            onClick={async () => {
+              const summary = buildReviewSummary(session);
+              await navigator.clipboard.writeText(summary.clipboard);
+              toast.success("Review summary copied");
+            }}
+          >
+            <ClipboardCopy className="h-3.5 w-3.5" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -920,6 +962,39 @@ export function GitPanel() {
 
             {showPr && (
               <div className="space-y-2 rounded-md border border-phosphor-cyan/25 bg-phosphor-cyan/5 p-2">
+                <div className="flex flex-wrap items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 gap-1 text-[10px]"
+                    title="Fill title and body from the risk-ordered review summary"
+                    onClick={() => {
+                      const summary = buildReviewSummary(session);
+                      setPrTitle(summary.title);
+                      setPrBody(summary.bodyMarkdown);
+                      toast.success("PR draft filled from review summary");
+                    }}
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Fill from review
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 gap-1 text-[10px]"
+                    title="Copy full review summary to clipboard"
+                    onClick={async () => {
+                      const summary = buildReviewSummary(session);
+                      await navigator.clipboard.writeText(summary.clipboard);
+                      toast.success("Review summary copied");
+                    }}
+                  >
+                    <ClipboardCopy className="h-3 w-3" />
+                    Copy summary
+                  </Button>
+                </div>
                 <Input
                   value={prTitle}
                   onChange={(e) => setPrTitle(e.target.value)}
@@ -930,7 +1005,7 @@ export function GitPanel() {
                   value={prBody}
                   onChange={(e) => setPrBody(e.target.value)}
                   placeholder="PR body (optional)"
-                  rows={3}
+                  rows={5}
                   className="w-full resize-none rounded-md border border-phosphor-green/20 bg-black/40 px-2 py-1 font-mono text-xs text-phosphor-green"
                 />
                 <Button size="sm" className="h-7 text-[10px]" onClick={onPr}>

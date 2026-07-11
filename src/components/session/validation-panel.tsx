@@ -25,8 +25,8 @@ import {
   type ValidationKind,
   type ValidationStatus,
 } from "@/lib/validation-lane";
+import { ValidationRecipesBar } from "./validation-recipes-bar";
 import { cn, formatDuration } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 
 /**
  * Always-available validation lane: tools, tests, builds, approvals, policy,
@@ -156,6 +156,8 @@ export function ValidationPanel() {
         </div>
       </div>
 
+      <ValidationRecipesBar />
+
       <div className="min-h-0 flex-1 overflow-auto">
         {visible.length === 0 ? (
           <div className="px-3 py-6 text-center text-[11px] text-phosphor-green/35">
@@ -185,12 +187,21 @@ function ValidationRow({
   item: ValidationItem;
   onSelect: (item: ValidationItem) => void;
 }) {
+  // Use a single interactive element — never nest <button> inside <button>
+  // (hydration / a11y violation when an "Open" control was nested here).
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(item)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(item);
+        }
+      }}
       className={cn(
-        "flex w-full gap-2 rounded px-2 py-1.5 text-left transition",
+        "flex w-full cursor-pointer gap-2 rounded px-2 py-1.5 text-left transition",
         "hover:bg-phosphor-green/8 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-green/40",
         item.severity === "error" && "bg-red-500/5",
         item.severity === "warn" && item.status === "blocked" && "bg-phosphor-amber/5"
@@ -254,23 +265,12 @@ function ValidationRow({
           </div>
         )}
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1 self-center">
-        {item.traceNodeId && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-5 px-1 text-[9px] text-phosphor-green/50"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelect(item);
-            }}
-          >
-            Open
-          </Button>
-        )}
-      </div>
-    </button>
+      {item.traceNodeId && (
+        <span className="shrink-0 self-center font-mono text-[9px] text-phosphor-green/40">
+          Open
+        </span>
+      )}
+    </div>
   );
 }
 
