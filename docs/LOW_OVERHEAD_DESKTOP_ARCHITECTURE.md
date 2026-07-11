@@ -1,791 +1,225 @@
-# High-Efficiency, Low-Overhead Spok Desktop Architecture
+# Spok Runtime And Native Desktop Architecture
 
-| Field | Value |
-|---|---|
-| **Title** | High-efficiency, low-overhead Spok desktop architecture |
-| **Author** | _(TBD)_ |
-| **Date** | 2026-07-10 |
-| **Status** | **Approved — Track A PR1a–1e core done; PR2 loopback runtime available; SPA stream/restore perf shipped** |
-| **Repo** | `C:\dev\spok` |
-| **Related** | `docs/HARNESS_AUDIT_AND_ROADMAP.md`, `docs/UPDATER_AND_DESKTOP.md`, `docs/SECURITY_POSTURE.md` |
-| **Revision** | R7 — progressive session restore + UI stream perf marked done (2026-07-10) |
+Last updated: 2026-07-11
 
----
+Status: the shared Node runtime and supervised contributor dogfood path are operational. The end-user native Windows UI has not started.
 
-## Overview
+This document defines the current runtime boundary and the migration from the React/Tauri dogfood application to a native Windows product. Product priority and sequencing live in `docs/HARNESS_AUDIT_AND_ROADMAP.md`; security controls live in `docs/SECURITY_POSTURE.md`.
 
-Spok is a **privileged local harness** for Grok Build: spawn the CLI, stream thinking traces, visualize repo diffs, persist sessions, enforce permissions, and manage git/automation. Today that product is delivered as **Next.js 15 App Router + React 19 + Zustand + Monaco**, with a **thin Tauri 2 shell** that embeds a WebView and provides OS glue (folder picker, notifications, open/reveal, `get_app_info`, deep-link emit). The expensive privileged work already lives in **Node route handlers** under `src/app/api/**` — not in Rust or the WebView.
+## Binding Decisions
 
-### Product direction (user decisions)
+| Area | Decision |
+| --- | --- |
+| Product platform | Windows first; macOS/Linux later. |
+| End-user UI | Native Windows UI, provisionally WinUI 3/C#. No permanent browser, WebView, Electron, or Tauri product shell. |
+| Privileged runtime | TypeScript on Node 20. Do not rewrite spawn, Git, policy, sessions, stream, or automation domain logic in native code. |
+| Client/runtime transport | Loopback HTTP with an in-memory capability token and versioned JSON/NDJSON contracts. |
+| Current contributor UI | Existing Next/React application. Tauri remains an interim internal shell only. |
+| Pending approvals on runtime restart | Drop them, reconcile affected runs, and show an explicit interruption state. |
+| Diff product quality | Monaco in the current UI; a high-quality accessible native diff is required before native cutover. |
+| Network use | Normal Grok, Git remote, connector, MCP, update, and webhook traffic remains supported. “Native” does not mean offline-only. |
 
-| Decision | Choice |
-|---|---|
-| Shell packaging platforms | **Windows-only first** (macOS/Linux later) |
-| Long-term UI surface | **Native desktop UI, not a web-based app** — no permanent browser/WebView/SPA/Tauri-as-product UI. **Network / internet use continues** (Grok CLI → xAI, git remotes, GitHub/PRs, channels/webhooks, MCP, package/update checks, etc.) |
-| Privileged runtime | **Stay TypeScript (Node)** — do **not** rewrite spawn/git/policy/sessions in C |
-| Pending approvals on runtime restart | **Drop** with UI banner (confirmed) |
-| Diff quality | Intermediate SPA: Monaco default + optional efficiency mode. **Native end state:** high-quality native (or native-hosted) diff visualization — not full browser stack |
-
-This document therefore uses a **dual-horizon** architecture:
-
-1. **Horizon A — Intermediate (ship value now):** Extract a standalone **Node privileged runtime**; keep a **contributor / dogfood** path (Vite SPA or existing Next) that is **not** the permanent product. Optionally a temporary thin shell may supervise the runtime only if needed for packaging experiments — it is **not** the end-state UI.
-2. **Horizon B — End state (product goal):** A **native Windows desktop UI** (provisional stack: **WinUI 3 / C#**) that talks to the same privileged TypeScript runtime over **loopback HTTP** (or equivalent local IPC), with **no WebView** and **no browser as UI**.
-
-The goal is a desktop app that **starts and responds quickly**, preserves harness **functionality and data visualization** (thinking/events, diffs, metrics, live session viz), and **does not regress** the capability-token / origin / workspace-trust / approval model in `docs/SECURITY_POSTURE.md`.
-
-**UI vs network (wording fix, R5):** “Not web-based” means the **product surface** is a **native Windows shell** — not a permanent browser tab, SPA, WebView2 host, or Tauri-as-product UI. It does **not** mean offline-only or “no HTTP anywhere.” Spok and its agents **still interact with the network as expected today**: Grok CLI talking to xAI, git remotes, GitHub/PRs, channels/webhooks, MCP over the network, package/update checks, and loopback HTTP between native UI and the Node runtime.
-
----
-
-## Dual-horizon architecture
+## As-Built Architecture
 
 ```mermaid
-flowchart TB
-  subgraph horizonB [Horizon B - Product end state]
-    NUI[Native Windows UI<br/>WinUI 3 / C# - no WebView]
-    NUI -->|loopback HTTP + capability token| RT
-  end
-
-  subgraph horizonA [Horizon A - Intermediate / dogfood]
-    SPA[Vite or Next SPA<br/>contributor path only]
-    SPA -->|loopback / proxy| RT
-  end
-
-  subgraph runtime [Shared - both horizons]
-    RT[Spok Runtime Node 20<br/>Hono /api/* security sessions git spawn]
-    RT --> GROK[grok CLI]
-    RT --> DISK["~/.spok/*"]
-  end
-
-  SUP[Native host process<br/>supervise runtime + own UI] --> RT
-  SUP --- NUI
+flowchart LR
+  UI["Next/React dogfood UI"] -->|"same origin / strict proxy"| RT["Node privileged runtime"]
+  UI -->|"residual Next API routes"| NX["Next route host"]
+  RT --> LIB["Shared TypeScript domain"]
+  NX --> LIB
+  LIB --> GROK["Grok CLI"]
+  LIB --> GIT["Git"]
+  LIB --> DISK["~/.spok"]
+  NATIVE["Future native Windows UI"] -.->|"loopback + token"| RT
 ```
 
-| Horizon | UI | Who uses it | WebView / browser? |
-|---|---|---|---|
-| **A Intermediate** | Existing Next and/or Vite SPA | Contributors, dogfood, regression of harness APIs | Allowed as **migration tool only** |
-| **B End state** | Native WinUI 3 app | **End users / product** | **Forbidden** as product surface |
+The current UI is feature-complete and remains the design reference while runtime contracts stabilize. `npm run dev:app` dogfoods the standalone runtime behind that UI; `npm run dev` continues to use Next-hosted adapters directly.
 
-**Honest scope note:** Replacing the full React harness UI with native controls is a **large** multi-month track. Horizon A is mandatory so features keep shipping while Horizon B is built. Horizon A must not be mistaken for the destination.
+### Runtime-owned routes
 
----
+The standalone router currently owns:
 
-## Background & Motivation
+- health and token bootstrap;
+- session start/stop stream;
+- session list/read/delete/events;
+- Git status/actions and Git diff;
+- filesystem browse;
+- workspace trust;
+- settings and approvals;
+- diagnostics and Grok CLI status.
 
-### Current architecture (as-built)
+These handlers live under `src/server` with thin `src/app/api` adapters.
 
-```mermaid
-flowchart TB
-  subgraph shell [Tauri WebView shell - interim only]
-    UI[React UI via Next]
-    DESK[src/lib/desktop.ts]
-  end
+### Residual Next-hosted routes
 
-  subgraph next [Next.js process]
-    API["src/app/api/** (22 route.ts)"]
-    SEC[security/*]
-    LIFE[process-lifecycle]
-    FS[session-store-fs]
-  end
+Automation, schedules/channels, extensions/hooks, attachments, secrets, and live-runtime discovery still depend on Next route hosting. They use the same capability token during `dev:app`, but they are not yet standalone-runtime contracts. Extract these before a native client depends on them.
 
-  UI -->|localFetch + token| API
-  API --> SEC
-  API --> LIFE
-  API --> FS
-```
+## Contributor And Dogfood Commands
 
-**Privileged local APIs** (the durable backend contract for both horizons):
+| Command | Purpose |
+| --- | --- |
+| `npm run dev:app` | Preferred standalone-runtime dogfood: supervise runtime, wait for health, start Next UI, proxy extracted routes, and tear down both trees. |
+| `node scripts/dev-app.mjs --check` | End-to-end launcher readiness and clean-shutdown check. |
+| `npm run runtime` | Privileged runtime only, default loopback port 7788 or `SPOK_PORT`; `0` requests an OS-assigned port for supervisors. |
+| `npm run dev` | Direct Next contributor path; useful while residual routes remain. |
+| `npm run desktop` | Interim Tauri/WebView dogfood; not the product target. |
 
-| Surface | Routes |
-|---|---|
-| Health / token | `GET /api/health` |
-| Session spawn/stream | `POST/DELETE /api/session/start` |
-| Git | `/api/session/git`, `/api/session/git-diff` |
-| FS browse | `/api/fs/browse` |
-| Trust | `/api/workspace/trust` |
-| Sessions durable | `/api/sessions`, `/api/sessions/[id]`, `.../events` |
-| Settings / approvals / secrets | `/api/settings`, `/api/approvals`, `/api/secrets` |
-| Extensions / automation | `/api/extensions/*`, `/api/automation/*` |
-| Diagnostics / CLI status | `/api/diagnostics`, `/api/runtime/cli-status` |
+The launcher generates one random capability token, passes it to its child processes through inherited environment, and never prints it, adds it to a URL, or writes it to a launcher-owned file. The runtime announces its OS-held port over parent/child IPC. Next proxies only the extracted route allowlist to an exact `http://127.0.0.1:<port>` origin.
 
-**Security boundary (must not regress on either horizon):**
+## Security Boundary
 
-- Capability token (`x-spok-capability-token`), local Host/Origin (SPA path) or Host + token (native client).
-- Workspace trust, command profiles, permission modes, approval overlay, audit, secret redaction/vault.
-- Process spawn **never** controlled by a web page. Native UI also must not pass arbitrary spawn argv — only call the same policy-gated APIs.
+Spok is a privileged local harness. A native client does not weaken the boundary.
 
-**Process-local state today (restart-sensitive):**
+Required on every privileged runtime path:
 
-| State | On restart |
-|---|---|
-| Capability token | New random unless `SPOK_LOCAL_TOKEN` (lab only) |
-| Trusted roots | **Durable** in `~/.spok/workspace-trust.json` (schema v1) |
-| Process registry | Handles lost; orphans possible |
-| Pending approvals | Dropped (confirmed product choice + banner) |
-| Sessions | **Durable** under `~/.spok/sessions/*`; boot uses **snapshot-first progressive restore** |
+- bind loopback only;
+- validate Host and, for browser dogfood, Origin;
+- require the capability token after bootstrap;
+- canonicalize and contain workspace paths;
+- require durable workspace trust;
+- evaluate command/Git/automation policy and explicit approvals;
+- redact secrets before UI, logs, exports, and diagnostics;
+- record audit events for spawn, Git, browse, trust, approvals, denials, hooks, MCP, and future extension actions;
+- cap file/diff/log payloads and deny secret/binary previews where applicable;
+- avoid shell execution for normal child processes.
 
-### Pain points
+The native host must call the same APIs. It must not gain a general “execute arbitrary argv” bridge.
 
-| Pain | Severity | Status |
-|---|---|---|
-| Dual-stack Tauri + Next cold start / memory | High | Open — motivates Horizon B native UI |
-| WebView/Chromium (or system WebView2) overhead for a local tool | High | Open — native UI end state |
-| Rust toolchain for thin shell that is not the product UI | High for contributors | Open (interim Tauri only) |
-| Privileged logic stuck behind Next App Router | High for native client | **Mostly done** — `src/server/*` + thin Next adapters + `npm run runtime` |
-| Stream → React churn | Medium (Horizon A) | **Done (dogfood):** rAF batch, batch reduce, selective selectors, active-tab mount |
-| Full event-log restore at boot | High | **Done:** progressive snapshot-first hydrate (`session-hydrate.ts`) |
+## Runtime Supervisor Contract
 
-### What we will not do
+The current JavaScript dogfood launcher is a precursor, not the final Windows supervisor. A production native host must:
 
-- Full rewrite of **runtime** (spawn, git, policy, sessions, stream parse) in C/C++/Qt.
-- Treat “open Spok in Chrome” or a permanent Tauri/WebView shell as the **product**.
-- Sacrifice harness visualization quality in the native end state (trace, diffs, metrics remain first-class).
+1. Select an OS-held loopback port and spawn a fixed, bundled runtime entry point with fixed arguments.
+2. Generate a random token and keep it in process memory only.
+3. Wait for a structured ready signal, then verify `/api/health`, runtime PID, version, and API capabilities.
+4. Restart with bounded backoff after unexpected failure and surface interrupted sessions/approvals.
+5. Stop registered Grok child process trees before runtime shutdown.
+6. Use a Windows Job Object or equivalent kill-on-close ownership so runtime and agent processes cannot orphan.
+7. Record non-secret supervisor diagnostics: version, PID, port, timestamps, exit reason, restart count, and token hash only if a diagnostic identity is necessary.
+8. Refuse incompatible client/runtime API versions with a clear update path.
 
----
+## Durable Contract
 
-## Goals & Non-Goals
+The runtime, React client, and future native client share these durable identities:
 
-### Goals
+- workspace/trusted root;
+- automation job;
+- session;
+- process run and prompt turn;
+- worktree and branch;
+- approval request/decision;
+- normalized event and raw provider event;
+- validation run/artifact;
+- Git handoff and terminal outcome.
 
-1. **Fast cold start and low overhead** for the **native** product on Windows.
-2. **Snappy UI** while streaming (virtualized trace, responsive composer/status).
-3. **Preserve harness functionality** per feature-parity matrix (both horizons).
-4. **Preserve visualization quality** — native virtualized tree + high-quality diffs + metrics.
-5. **Incremental delivery** — Horizon A runtime extraction ships first; Horizon B native UI replaces web UI without rewriting the runtime.
-6. **No security regression**; improve restart safety (durable trust, orphan reaping, token re-bootstrap).
-7. **Windows-only** product packaging first.
-8. **Native UI product surface** (not a web-based app): no permanent browser/WebView/SPA/Tauri-as-product UI in the end state.
-9. **Network / agent / web-service interaction continues** as today (Grok CLI → xAI, git remotes, GitHub/PRs, channels, MCP, updates) — Spok is **not** offline-only.
+Session formats remain versioned under `~/.spok/sessions`. Runtime API changes must not require a native client to understand the private filesystem layout. Import/export/replay schemas must preserve unknown provider events.
 
-### Non-Goals
+Before native UI implementation expands, add a capability response containing:
 
-- Full C rewrite of privileged runtime domain logic.
-- Permanent Electron/Tauri/WebView product shell (or marketing “open Spok in Chrome” as the product).
-- **Offline-only / air-gapped-by-default product** — network use by Grok CLI, git, connectors, and related services remains expected.
-- macOS/Linux product packaging in Horizon B v1 (design runtime APIs to stay portable).
-- Multi-tenant remote hosting of privileged APIs.
-- Headless OS schedule daemon (in-app timers only until a later product feature).
-- Named-pipe auth beyond loopback + token for v1 (may revisit for native-only lock-down).
+- runtime semantic/API version;
+- supported route groups and schema versions;
+- stream/event contract version;
+- provider adapter availability;
+- platform capabilities;
+- feature flags required for graceful client fallback.
 
-### Feature-parity matrix (product cutover = Horizon B)
+## Migration Sequence
 
-| Capability | Must (native product) | Should | Later / dogfood-only |
-|---|---|---|---|
-| Open repo / trust / native folder picker | ✓ | | |
-| Launch Grok + NDJSON stream + stop/kill | ✓ | | |
-| Thinking trace virtualized + thinking stream | ✓ | | |
-| Diff panel high-quality + git-diff poll | ✓ | | |
-| Durable sessions restore + export/import v2 | ✓ | | |
-| Capability token + policy/approvals + audit | ✓ | | |
-| Settings (permission mode, grants) | ✓ | | |
-| Samples / import | ✓ | | |
-| Git panel stage/commit/branch basics | | ✓ | |
-| Secrets vault | | ✓ | |
-| Extensions / automation monitor | | ✓ | |
-| Vite/Next SPA daily driver | | | ✓ contributor |
-| CRT theme | | | optional polish |
-| Channels, signed updater, deep-link OS reg | | | ✓ |
+### A1 — Finish the standalone runtime
 
----
+1. Extract automation queue/schedules/channels and notification APIs.
+2. Extract extensions, hooks, skills/MCP discovery, attachments, secrets, and live-runtime APIs.
+3. Add handler parity tests and a versioned capability response for every route group.
+4. Move queue pumping and schedule reconciliation into the supervised runtime.
+
+Exit: `npm run dev:app` can exercise the entire product without a privileged Next route implementation.
+
+### A2 — Make the runtime portable and recoverable
+
+1. Bundle the runtime and its Node dependency without relying on a source checkout.
+2. Add run/process metadata and restart reconciliation for stale sessions/jobs.
+3. Add Windows Job Object supervision in a minimal native host spike.
+4. Add upgrade/rollback compatibility tests for runtime and durable schemas.
+
+Exit: a minimal host can start, health-check, stop, restart, and upgrade the runtime without orphaning agent processes or losing terminal state.
+
+### N0 — Native shell proof
+
+Build a small WinUI host that supervises the packaged runtime and implements repository selection/trust, session inbox, settings bootstrap, keyboard navigation, theming, accessibility, and diagnostics.
+
+This is a quality/architecture proof, not a second feature roadmap. Stop if startup, memory, accessibility, or developer velocity do not justify the native track.
+
+### N1 — Core agent loop
+
+Implement new task launch, policy mode, NDJSON stream, stop, approvals, thinking/events, session restore, and worktree identity. Use virtualized native controls from the start.
+
+### N2 — Review and validation
+
+Implement high-quality unified/split diff, risk/issue markers, causal navigation, validation results/artifacts, inline comments, Git staging/commit/push/PR, and review-ready handoff.
+
+### N3 — Mission control and extensibility
+
+Implement multi-session fleet controls, schedules/notifications, mobile handoff, skills/hooks/MCP management, and remaining settings only after the core loop meets parity.
+
+### N4 — Product cutover
+
+Package, sign, update, migrate, and soak the native product. Keep the React UI available to contributors until the native must-have matrix is green; then demote Tauri and browser product documentation.
+
+## Native Cutover Gates
+
+| Capability | Required |
+| --- | --- |
+| Repository open/trust and policy selection | Yes |
+| Multiple isolated sessions and durable recovery | Yes |
+| Live stream, stop, approval, and error handling | Yes |
+| Virtualized thinking/event views | Yes |
+| High-quality unified/split diff with issue/causal navigation | Yes |
+| Validation evidence and artifacts | Yes |
+| Composer, attachments, slash commands, and usage state | Yes |
+| Git stage/commit/push/PR and safe worktree cleanup | Yes |
+| Settings, diagnostics, redaction, and audit | Yes |
+| Keyboard core loop, AA contrast, reduced motion, screen-reader labels | Yes |
+| No WebView/browser in end-user shell | Yes |
 
 ## Performance Budgets
 
-### Baseline-first (unchanged policy)
-
-Record **B0** (current Next+Tauri) and **B1** (minimal native host + Node runtime hello) before hard ship gates.
-
-### Provisional targets (Horizon B native product)
-
-| Metric | Target | Max | Notes |
-|---|---|---|---|
-| Shell window visible | ≤ 400 ms | ≤ 800 ms | Native WinUI frame |
-| First interactive (runtime health OK + welcome) | ≤ 1.2 s | ≤ 2.5 s | Includes runtime spawn |
-| Idle RSS (UI + runtime, no heavy editor) | ≤ 150 MB | ≤ 280 MB | No WebView/Chromium |
-| Peak live stream 30 min | ≤ 400 MB | ≤ 600 MB | Exclude Grok child |
-| Stream UI throughput | ≥ 100 normalized events/s | ≥ 50/s hard floor | Post-coalesce `StreamEvent`s |
-| Trace 20k nodes scroll | Virtualized, flatten ≤ 16 ms | 20k min | Native ListView/ItemsRepeater |
-| Diff open (warm) | ≤ 200 ms | ≤ 500 ms | Native/AvalonEdit path |
-| Install footprint (excl. WebView2 — not required) | ≤ 150 MB | ≤ 200 MB | Bundled Node + native UI |
-
-### Horizon A (SPA dogfood) provisional
-
-Retain softer WebView-era budgets from R3 only as dogfood gates: architecture floor idle RSS ≤ 280 MB without Monaco; first interactive ≤ 2.5 s. **Not** product success criteria once Horizon B ships.
-
-**Shipped (2026-07-10) toward these budgets:**
-
-- Stream: batch reduce + rAF coalesce + heavy-load frame skip (`session-reduce`, `stream-batch`).
-- UI: virtualized thinking/trace/log; mount-only-active workspace tabs; field-level store selectors.
-- Restore: meta list without NDJSON full scans; snapshot-first active session; background fill; lazy materialize on select.
-- Diff: LCS cell cap + coarse fallback for huge files.
-- Host/git polls pause when `document.hidden`; host sync waits until hydration completes.
-
-**Event definition:** normalized `StreamEvent`s after ingest coalescing. Memory: sum native UI process + runtime Node; exclude Grok/git children.
-
----
-
-## Proposed Design
-
-### Layer split (both horizons)
-
-| Layer | Language | Horizon A | Horizon B |
-|---|---|---|---|
-| Privileged runtime | **TypeScript / Node 20** | Required | Required (unchanged) |
-| HTTP adapter | Hono on Node | Required | Required |
-| Session reduce / stream parse | TypeScript shared | Used by SPA | Used by runtime + optional client-side mirror; native may reimplement thin client materializer calling same APIs |
-| Product UI | — | SPA dogfood | **WinUI 3 C#** |
-| Runtime supervisor | Native or `dev-app.mjs` | Launcher script | **Same native process** as UI (or sibling process with fixed argv) |
-
-### Privileged runtime (TypeScript) — stays
-
-Extract handlers from `src/app/api/**` into `src/server/**`.
-
-- Bind **only** `127.0.0.1`.
-- **Port policy:** dogfood prefer **7788** + fallback via `scripts/dev-app.mjs`; **native prod:** parent (native host) probes ephemeral port, injects `SPOK_PORT`, never exposes token to disk raw.
-- Random capability token per process; SPA/native both use header after `/api/health` (or boot handshake).
-- Diagnostics: `~/.spok/runtime/<pid>.json` + `<pid>-children.json` (token **SHA-256 only**).
-- Shutdown: **process signals / Job Object only** — no unauthenticated HTTP shutdown.
-- Durable trust: `~/.spok/workspace-trust.json` before multi-start dogfood.
-- Pending approvals: **drop on restart + banner** (confirmed).
-
-**Contract stability:** `/api/*` paths, NDJSON session stream, stream schema v1, session disk layout v1 — so native UI is a new client, not a new backend.
-
-### Horizon A — Intermediate SPA / contributor path (not product)
-
-- Keep Next (thin adapters) + optional Tauri dogfood until native UI; purpose: dogfood runtime, tests, contributor velocity.
-- Standalone runtime: `npm run runtime` (`src/server/main.ts` on loopback). `scripts/dev-app.mjs` still open for Vite proxy packaging.
-- Monaco: dynamic import + **mounted only when Changes tab active**; coarse line-diff fallback for huge files (efficiency-mode setting still optional).
-- Pure batch `reduceStreamEvents` shared by store and replay; rAF batching; tight Zustand selectors — **shipped**.
-- Progressive session restore (`session-hydrate.ts`) — **shipped**.
-- **No requirement** to ship Tauri/WebView to end users in Horizon A; browser dogfood is enough for API parity.
-
-### Horizon B — Native Windows UI (product end state)
-
-#### Provisional stack recommendation: **WinUI 3 + C# (.NET 8)**
-
-| Option | Verdict | Notes |
-|---|---|---|
-| **WinUI 3 + C#** | **Recommended provisional** | Windows-first; modern packaging (MSIX); strong ListView/ItemsRepeater virtualization; FileOpenPicker; native notifications; no WebView required; good IDE support |
-| WPF + C# | Acceptable fallback | More mature third-party editors (AvalonEdit); slightly older UI stack; fine if WinUI packaging friction blocks |
-| Qt (C++/QML) | Possible later | Strong widgets; heavier C++ cost; not needed for Windows-only first |
-| egui / iced (Rust) | Not preferred | Immediate-mode friction for large tree+diff IDE layouts |
-| Full C + raw Win32 | Rejected for UI | Functionality velocity too low |
-
-**Rationale:** Functionality-first on **Windows-only**. C# WinUI keeps UI productivity high while the **Node TS runtime** remains the privilege boundary. Avoids Chromium/WebView entirely. Cross-platform later can reconsider Avalonia or Qt without rewriting the runtime.
-
-#### Native process model
-
-```
-Spok.exe (WinUI 3)
-  ├─ owns window, native controls
-  ├─ spawns/supervises Node runtime (bundled) with fixed argv + SPOK_PORT
-  └─ HttpClient → http://127.0.0.1:PORT/api/* + capability token
-```
-
-Supervisor contract mirrors R3 shell contract: fixed allowlisted runtime path; no arbitrary argv from “page”; restart backoff; Job Object kill-on-close; orphan reap via per-pid children files.
-
-#### Native client ↔ runtime auth
-
-| Concern | Approach |
-|---|---|
-| Token | `GET /api/health` after connect; store in memory only; refresh on 401/`invalid_token` and after runtime restart |
-| Origin | Native `HttpClient` often sends **no Origin** — already allowed when Host is local (tooling residual). Prefer always setting Host correctly on loopback |
-| Optional harden (later) | Unix-domain socket / named pipe with ACL; out of scope for first native ship if loopback+token sufficient |
-
-#### Native visualization (native UI — not web-based product surface)
-
-| Surface | Approach |
-|---|---|
-| Trace tree | Virtualizing `ItemsRepeater` / `ListView` over flattened visible nodes; expand/collapse state in C# VM |
-| Thinking stream | Virtualized text blocks; apply server/client stream coalescing equivalent to `trace-text` / `grok-stream` rules (port algorithms to C# or keep a small shared JSON contract of pre-coalesced events from runtime) |
-| Diff quality | **Default high quality:** AvalonEdit (WPF interop or community ports) **or** WinUI custom two-pane with syntax coloring via TextMate grammars / ColorCode-class libraries; hunk navigation; binary/secret gates unchanged via API |
-| Efficiency mode | Plain text hunk list for huge files (>5k lines) — same product idea as SPA `ui.perfMode` |
-| Metrics / status | Native bars bound to metrics DTOs from API/session snapshot |
-| Composer | Native multiline + slash-command list from API/static catalog |
-
-**Do not** embed Monaco via WebView “just for diffs” — that reintroduces web surface. If a richer editor is needed, use **native-capable** components only.
-
-#### Stream materialization in native UI
-
-Options (pick during native track spike):
-
-1. **Preferred:** Runtime continues to emit NDJSON; native client ports a thin `GrokStreamIngestor` + pure reduce **in C#** (or calls a small pure-TS helper only if we ship a separate non-UI node worker — avoid). Mirror tests with golden fixtures from `tests/fixtures/grok/*`.
-2. **Alternative:** Runtime materializes session snapshots over WebSocket/SSE of `StreamEvent`s already normalized — UI only applies pure reduce. Larger server change; better single source of truth.
-
-Session replay/import can reuse disk events via runtime APIs (`/api/sessions/...`) so native UI does not reimplement FS layout.
-
-### Dev launcher (Horizon A) — still required
-
-`scripts/dev-app.mjs` remains the dogfood entry: prefer port 7788, spawn runtime, health wait, Vite proxy. See R3 contract (unchanged intent).
-
-### Runtime lifecycle & failure modes
-
-| Failure | Behavior |
-|---|---|
-| Runtime exit | Signal handlers kill process registry; Job Object; per-pid children reap |
-| Pending approvals | **Dropped** + banner (confirmed) |
-| Token after restart | Client force health; never query/hash token |
-| Durable trust / grants / sessions | Survive on disk |
-| Native UI | Banner + reconnect; re-spawn runtime per supervisor policy |
-| Browser dogfood | “Restart `dev:app`” if proxy/runtime dead; no shell IPC |
-
-### Dual-run / CORS (Horizon A only)
-
-- No Next → standalone cross-origin.
-- Vite proxy or same-origin only.
-- No privileged `Access-Control-Allow-Origin: *`.
-- Origin matrix dogfood test: `Origin: http://127.0.0.1:5173` + `Host: 127.0.0.1:7788`.
-
-Native clients do not use CORS.
-
-### Streaming NDJSON contract
-
-Unchanged: `application/x-ndjson`, cancel → `stopSessionProcess`, integration test start→N lines→stop→process gone. Hono maps abort to socket close.
-
----
-
-## API / Interface Changes
-
-### Preserve
-
-All privileged routes, capability header, stream schema v1, session logs, approval/grant semantics.
-
-### Add
-
-| Item | Purpose |
-|---|---|
-| `src/server/**` + Hono | Shared handlers |
-| `GET /api/health` fields | `runtime`, `pid`, `version` |
-| `scripts/dev-app.mjs` | Horizon A dogfood |
-| Native host env | `SPOK_PORT`, `SPOK_HOME`; optional lab `SPOK_LOCAL_TOKEN` |
-| Optional later | Compact event batch endpoint for native high-rate ingest |
-
-### Deprecate / remove (over time)
-
-| Item | When |
-|---|---|
-| Next as required host | After runtime + dogfood SPA stable |
-| Tauri / WebView product packaging | After Horizon B native UI reaches feature-parity **must** column |
-| “Open in browser” as marketed product | Horizon B GA |
-
----
-
-## Data Model Changes
-
-| Store | Change |
-|---|---|
-| Session logs | Unchanged layout |
-| `~/.spok/runtime/<pid>.json` | Diagnostics; tokenSha256 only |
-| `~/.spok/runtime/<pid>-children.json` | Orphan reap |
-| `~/.spok/workspace-trust.json` | `{ "version": 1, "roots": [{ "path", "trustedAt" }] }` via `canonicalizePath` — **shipped** |
-| Session `snapshot.json` | Lean snapshot (trimmed event/raw tails) for fast boot; full log remains in `events.ndjson` |
-| Settings `ui.perfMode` | SPA intermediate: `balanced` \| `efficiency` (coarse large-file path exists; named setting still optional). Native: mirror as app setting |
-
----
-
-## Security & Privacy Considerations
-
-### Threat model
-
-Single-user desktop; remote attackers in scope (loopback only); local malware in-session out of scope; named-pipe ACL optional later.
-
-### Must preserve
-
-Loopback bind, capability token, workspace trust (durable), command policy, approvals (pending drop OK), no arbitrary spawn from UI layer (web **or** native), secrets vault/redaction.
-
-### Horizon B security upsides
-
-- No WebView XSS surface.
-- No CSP/Origin matrix for product UI.
-- Still treat loopback API as privileged (token required).
-
----
-
-## Observability
-
-Runtime logs, audit.ndjson, diagnostics without secrets. Native UI reports cold-start marks + RSS for UI+runtime. Budget tooling hard-deps intermediate package gates; native product has its own B1/B-native baselines.
-
----
-
-## Alternatives Considered
-
-### A. Stay Tauri + Next forever
-
-Reject as product; temporary dogfood only.
-
-### B. Electron
-
-Worse memory; still web. **Rejected** for end state.
-
-### C. Permanent WebView2 + Vite SPA + Node runtime
-
-Good intermediate engineering path; **rejected as product end state** per **native UI, not web-based app** decision. May appear briefly only if needed for packaging experiments — not marketed product.
-
-### D. Full native rewrite of runtime + UI in C/Qt
-
-**Rejected for runtime.** UI may be native (WinUI); domain logic stays TS.
-
-### E. Browser-only product
-
-**Rejected** as product; OK as contributor path.
-
-### F. Privileged APIs in Rust/Tauri
-
-**Rejected** — duplicates Node domain.
-
-### G. Next standalone custom server
-
-Stopgap only for packaging during extraction.
-
-### H. Native WinUI + Node runtime (**end-state recommendation**)
-
-Matches **native product UI** (not web-based) + TS runtime + Windows-first; network/agent use unchanged. **Primary product target.**
-
-### Comparison
-
-| Path | Product fit | Overhead | Rewrite cost |
-|---|---|---|---|
-| Permanent WebView SPA | Contradicts native-UI product | Medium–high | Medium |
-| Electron | Contradicts native-UI product | Worst | Medium |
-| Native UI + TS runtime | **Best** | **Best** | UI large; runtime low |
-| Full C runtime+UI | Rejected runtime | Best* | Extreme |
-
----
-
-## Rollout Plan
-
-### Stages
-
-| Stage | Horizon | Outcome | Status |
-|---|---|---|---|
-| 1 | A | Handler extraction PR1a–1e; Next still works | **Done** (PR1e residual: extensions/automation extract) |
-| 2 | A | Standalone runtime + durable trust + dev-app dogfood | **Partial** — runtime + durable trust done; `dev-app.mjs` open |
-| 3 | A | Pure reduce + stream/UI perf + progressive restore | **Done** (Vite SPA optional / deferred) |
-| 4 | A | Runtime packaging (bundled Node); **no** product dependency on Tauri | Open |
-| 5 | B | Native UI spike: shell chrome, health, session list, stream one sample | Open |
-| 6 | B | Native parity must-column: trace, diff, composer, approvals, git basics | Open |
-| 7 | B | Windows package (MSIX/zip); **product default = native**; SPA/Next demoted to `dev:web` | Open |
-| 8 | B+ | Remove Tauri; optional remove SPA host later | Open |
-
-### Rollback
-
-- Session formats unchanged.
-- Runtime API stable → native and SPA can coexist during transition.
-- Feature flag: product installer only ships native when parity checklist green.
-
----
-
-## Key Decisions
-
-| # | Decision | Rationale |
-|---|---|---|
-| 1 | **Do not rewrite privileged runtime in C/Qt** | Tested TS domain; security/stream/git stay in Node |
-| 2 | **Dual-horizon: intermediate dogfood UI + native product UI** | Ship value while building native (non-web-based) product UI |
-| 3 | **Vite/React SPA is migration/contributor path only — not permanent product UI** | Native UI end state; SPA is not the product surface |
-| 4 | **Node 20 standalone runtime for v1; Bun post-cutover experiment only** | Lowest risk |
-| 5 | **Extract handlers PR1a–1e before deleting Next** | Incremental |
-| 6 | **Keep `/api/*`, token, stream & session formats** | Native = new client |
-| 7 | **End-state UI process is native Windows host that supervises runtime** — not a thin WebView shell | Native UI product; not web-based app |
-| 8 | **Tauri/WebView is interim at most; not long-term architecture** | User product direction |
-| 9 | **Windows-only first for shell/product packaging** | Confirmed user decision |
-| 10 | **Budgets baseline-first; native product budgets supersede WebView-era targets** | Honest gates |
-| 11 | **Shared pure `reduceSession` (TS) for dogfood; native ports or consumes events** | Replay parity on A; fixtures guide B |
-| 12 | **SPA Monaco default + optional efficiency; native high-quality native editor/diff (no WebView Monaco)** | Quality without web stack |
-| 13 | **Functionality over CRT aesthetic** | Professional default |
-| 14 | **Never expose process spawn to any UI layer** (web or native); only policy-gated APIs | Security |
-| 15 | **Loopback HTTP + capability token** for runtime access | Simple, portable contract |
-| 16 | **No privileged CORS `*`; SPA dogfood uses Vite proxy only** | Horizon A security |
-| 17 | **Port: dogfood stable (prefer 7788); native prod ephemeral** | Proxy vs same-process inject |
-| 18 | **Random token per runtime process + client refresh** | Reconnect safety |
-| 19 | **Desktop product: native UI process + runtime process** | Crash isolation |
-| 20 | **Dogfood system Node; release bundled Node** | Ship reliability |
-| 21 | **Durable workspace trust before multi-start dogfood** | Restart safety |
-| 22 | **Pending approvals drop on restart + banner** | Confirmed |
-| 23 | **Hono on Node for standalone HTTP** | Fetch streaming |
-| 24 | **No OS headless schedule daemon (v1)** | Explicit non-goal |
-| 25 | **Single-user desktop threat model** | Honest residual risk |
-| 26 | **`scripts/dev-app.mjs` for web dogfood only** | Port handoff |
-| 27 | **No unauthenticated HTTP shutdown** | Signals/Job Object |
-| 28 | **Runtime diagnostics namespaced by pid** | Multi-instance |
-| 29 | **Product end state = native UI, not a web-based app** (no permanent browser/WebView/SPA/Tauri-as-product UI). **Not offline-only:** Grok CLI, git remotes, GitHub/PRs, channels/webhooks, MCP, package/update checks, and other network/agent/web-service interaction continue as today | Confirmed user wording (R5) |
-| 30 | **Provisional native stack: WinUI 3 + C# (.NET 8); WPF fallback** | Windows-first, productivity, no WebView product shell |
-| 31 | **Native diff: AvalonEdit-class or WinUI custom high-quality diff — not embedded browser** | Native UI + quality (no WebView Monaco) |
-| 32 | **Product GA = Horizon B must-column parity, not SPA cutover** | Avoid shipping “temporary forever” |
-
----
-
-## Risks
-
-| Risk | Severity | Mitigation |
-|---|---|---|
-| Native UI schedule underestimation | **High** | Horizon A keeps shipping; phased native PRs; parity checklist |
-| Dual UI maintenance (SPA + native) | High | Freeze SPA feature work after runtime stable; native is product focus |
-| C# stream reduce drift vs TS | High | Golden fixtures; shared NDJSON contract tests |
-| Diff quality gap without Monaco | Medium | AvalonEdit / syntax libs; efficiency mode for huge files |
-| WinUI packaging friction | Medium | WPF fallback decision gate |
-| Runtime extraction misses | Medium | PR1 slices; Next green |
-| Orphan processes | Critical | Lifecycle + Job Object + per-pid reap |
-| Timeline | Medium | Do not block runtime extract on native UI |
-
----
-
-## Open Questions
-
-### Resolved (user decisions)
-
-1. ~~Windows-only first?~~ → **Yes** (Decision 9).
-2. ~~Long-term shell / web UI?~~ → **Native product UI, not a web-based app**; network/agent use continues (Decisions 3, 7, 8, 29, 30).
-3. ~~Pending approvals durable?~~ → **Drop + banner** (Decision 22).
-4. ~~Monaco?~~ → SPA intermediate default quality + efficiency option; **native non-WebView high-quality diff** (Decisions 12, 31).
-5. ~~Port / processes / Node bundle / trust timing / no HTTP shutdown~~ → Decisions 17–21, 26–28.
-
-### Remaining (implementation / polish)
-
-1. **WinUI 3 vs WPF** after packaging spike (default WinUI 3).
-2. **Native stream reduce in C# vs thicker runtime push** of normalized events.
-3. **CRT / phosphor theme** in native UI — port subset or drop.
-4. **When to stop SPA feature parity** and freeze Horizon A to bugfix only — stream/restore perf is good enough to prioritize Track B spike after PR2 polish.
-5. **Named pipe ACL** as optional post-GA harden.
-6. **Lightweight diff threshold** — coarse path already uses line/cell caps; named `ui.perfMode` setting still optional.
-7. **macOS/Linux native** stack later (Avalonia?) — out of Horizon B v1.
-8. **Hono + `dev-app.mjs`** — complete PR2 packaging for contributor dogfood without Next.
-
----
-
-## References
-
-- `docs/HARNESS_AUDIT_AND_ROADMAP.md`, `docs/SECURITY_POSTURE.md`, `docs/UPDATER_AND_DESKTOP.md`
-- `src/lib/desktop.ts`, `security/local-api.ts`, `workspace-trust.ts`, `approvals.ts`
-- `src/lib/harness.ts`, `grok-stream.ts`, `store.ts`, `session-replay.ts`, `session-reduce.ts`, `stream-batch.ts`, `session-hydrate.ts`, `perf.ts`
-- `src/lib/session-store-fs.ts`, `process-lifecycle.ts`, `spok-paths.ts`
-- `src/server/**` (shared handlers + `npm run runtime`), `src/app/api/**` (thin adapters), `src-tauri/**` (interim only)
-- WinUI 3 / Windows App SDK documentation (external)
-
----
-
-## PR Plan
-
-Two tracks. **Track A** (runtime + dogfood) can proceed immediately. **Track B** (native UI) starts after runtime is usable (PR2+) and becomes the product path.
-
-**Calendar (indicative):** Track A ~8–10 weeks to solid runtime+dogfood. Track B native MVP chrome ~4–6 weeks after spike; **must-column parity** often **3–6+ months** depending on staffing — do not pretend otherwise.
-
-### Track A — Runtime extraction & contributor dogfood
-
-#### PR1a — Web Response security helpers
-
-- **Status (2026-07-09): Done.**
-- **Title:** `refactor(security): replace NextResponse denials with Web Response`
-- **Files:** `src/lib/security/local-api.ts`, `tests/security/local-api-response.test.ts`
-- **Dependencies:** none
-- **Description:** Foundation for non-Next server and native clients.
-  - `policyDenialResponse` / `denyFromAuthorize` return standard Web `Response` (no `next/server` import).
-  - `cache-control: no-store` on denials; Next route handlers accept `Response` unchanged.
-
-#### PR1b — Session start/stop + stream parity tests
-
-- **Status (2026-07-10): Done.**
-- **Title:** `refactor(server): extract session start/stop streaming handlers`
-- **Files:** `src/server/routes/session-start.ts`, thin Next wrapper, `tests/server/handler-extraction.test.ts`
-- **Dependencies:** PR1a
-- **Description:** NDJSON + abort hard gate.
-
-#### PR1c — Sessions / settings / secrets / approvals
-
-- **Status (2026-07-10): Done** (sessions list/id/events, settings, approvals; secrets route still Next-local if present).
-- **Dependencies:** PR1a  
-- **Description:** Non-streaming privileged CRUD extract.
-
-#### PR1d — Git / fs / trust
-
-- **Status (2026-07-10): Done.**
-- **Dependencies:** PR1a  
-- **Description:** Prepares durable trust.
-
-#### PR1e — Extensions / automation / diagnostics / cli-status
-
-- **Status (2026-07-10): Partial** — diagnostics + cli-status extracted; extensions/automation routes remain Next-hosted (can extract next).
-- **Dependencies:** PR1a  
-- **Description:** Completes 22-route inventory.
-
-#### PR2 — Standalone Hono runtime + dev-app launcher
-
-- **Status (2026-07-10): Partial** — Node `http` loopback server (`src/server/main.ts`, `npm run runtime`) with shared router; not Hono yet; `dev-app.mjs` still open. SPA stream/restore perf no longer blocked on this PR.
-- **Title:** `feat(runtime): Hono loopback server + dev-app.mjs`
-- **Files:** `src/server/main.ts`, `src/server/router.ts`, Origin tests (dogfood), engines
-- **Dependencies:** PR1b (+ ideally PR1e)
-- **Description:** Parent-chosen port prefer 7788; no HTTP shutdown; signals kill registry. **Product path independent of WebView.**
-
-#### PR10 — Durable workspace trust
-
-- **Status (2026-07-09): Done** (ahead of runtime extraction; still valid after PR1d/PR2).
-- **Files:** `src/lib/security/workspace-trust.ts`, `src/app/api/workspace/trust/route.ts` (GET/POST/DELETE), Settings Privacy UI, `tests/security/workspace-trust-durable.test.ts`
-- **Dependencies:** none hard (can run without Hono extraction)
-- **Description:** Multi-start safe. Atomic JSON write; revoke + audit.
-
-#### PR3 — Pure `reduceSession` + batching (TS dogfood)
-
-- **Status (2026-07-09): Partially done.** Live store path uses pure `src/lib/session-reduce.ts` + rAF `stream-batch.ts`; metrics recompute once per batch. `session-replay.ts` still has a parallel reducer (converge later). Selectors/profiling still open.
-- **Files:** `session-reduce.ts`, `stream-batch.ts`, `store.ts`, `harness.ts`, `host-session-sync.ts`, tests
-- **Dependencies:** none hard
-- **Description:** SPA dogfood perf; fixtures become native golden tests later.
-
-#### PR4 — Vite SPA dogfood scaffold (optional contributor path)
-
-- **Title:** `feat(web-dogfood): Vite SPA against runtime (non-product)`
-- **Files:** vite config, proxy from `VITE_API_PROXY_TARGET`, Monaco workers
-- **Dependencies:** PR2
-- **Description:** **Explicitly non-product.** README labels `dev:web` / contributor only.
-
-#### PR5 — Runtime serves static SPA (optional)
-
-- **Dependencies:** PR2, PR4  
-- **Description:** Same-origin dogfood only; not product packaging goal.
-
-#### PR8 — Monaco singleton + efficiency mode (dogfood SPA only)
-
-- **Dependencies:** PR4  
-- **Description:** Default balanced; efficiency optional. Does not define native diff.
-
-#### PR9 — Diagnostics + baselines B0/B1
-
-- **Dependencies:** PR2  
-- **Description:** Include path for future native RSS fields.
-
-#### PR11 — E2E against runtime (+ optional SPA)
-
-- **Dependencies:** PR2, PR10  
-- **Description:** API-level smoke can use fetch without UI; SPA e2e optional.
-
-#### PR7 — Package runtime (bundled Node) for native host consumption
-
-- **Title:** `build(runtime): portable runtime layout for native host`
-- **Files:** packaging scripts, docs
-- **Dependencies:** PR2, PR9  
-- **Description:** Zip of Node + server bundle. **No Tauri required.** Consumed by Horizon B host.
-
-#### PR12 — Contributor defaults to runtime dogfood; demote Next
-
-- **Title:** `chore: runtime+dev-app default for contributors`
-- **Dependencies:** PR2, PR10, PR11  
-- **Description:** Not “product GA.” Product GA is Track B.
-
-#### PR13 — Remove Next (after native or SPA dogfood stable)
-
-- **Dependencies:** PR12 + soak  
-- **Description:** Optional cleanup.
-
-#### PR14 — **Cancelled / not product** (WebView2 host)
-
-- **Status:** **Superseded by Track B.** Do not invest in permanent WebView2 shell. Any temporary Tauri keep-alive is maintenance-only until native ships.
-
-### Track B — Native Windows UI (product)
-
-#### PRN1 — Native host spike (WinUI 3)
-
-- **Title:** `feat(native): WinUI 3 host spawns runtime and calls /api/health`
-- **Files:** new `native/` or `src-windows/` project, packaging stub
-- **Dependencies:** PR2, PR7 preferred
-- **Description:** Window + runtime supervise + token fetch. **No WebView.** Prove Job Object + port inject.
-
-#### PRN2 — Session list + open/trust + sample import via API
-
-- **Dependencies:** PRN1, PR10  
-- **Description:** Native navigation chrome; folder picker; trust POST.
-
-#### PRN3 — Live stream + virtualized thinking/events view
-
-- **Dependencies:** PRN2, PR1b  
-- **Description:** NDJSON client; virtualized thinking/events panes; stop/kill.
-
-#### PRN4 — High-quality native diff + git status
-
-- **Dependencies:** PRN3  
-- **Description:** AvalonEdit-class or custom two-pane; secret/binary gates; efficiency mode for huge files.
-
-#### PRN5 — Composer, approvals banner/overlay, settings
-
-- **Dependencies:** PRN3  
-- **Description:** Pending drop banner; allow once/always/deny; permission mode.
-
-#### PRN6 — Metrics, export, diagnostics, git write basics
-
-- **Dependencies:** PRN4, PRN5  
-- **Description:** Must/should parity push.
-
-#### PRN7 — Windows product package (MSIX/zip) + GA checklist
-
-- **Dependencies:** PRN6, feature-parity **must** column  
-- **Description:** **Product default installer.** Document SPA as contributor-only. Remove Tauri from release train.
-
-#### PRN8 — (Optional) Freeze/delete SPA packaging from product docs
-
-- **Dependencies:** PRN7 soak  
-- **Description:** Keep SPA only if contributors still need it.
-
-### Dependency overview
-
-```mermaid
-flowchart TD
-  PR1a --> PR1b --> PR2
-  PR1a --> PR1c
-  PR1a --> PR1d --> PR10
-  PR1a --> PR1e
-  PR2 --> PR10
-  PR2 --> PR4
-  PR2 --> PR7
-  PR2 --> PR3
-  PR2 --> PRN1
-  PR7 --> PRN1
-  PR10 --> PRN2
-  PRN1 --> PRN2 --> PRN3 --> PRN4
-  PRN3 --> PRN5
-  PRN4 --> PRN6
-  PRN5 --> PRN6 --> PRN7
-  PR2 --> PR12
-```
-
-### Suggested sequencing
-
-| Phase | Work | Outcome |
-|---|---|---|
-| Weeks 1–3 | PR1a–1e, PR2, PR10 | Runtime loopback usable |
-| Weeks 4–6 | PR3, PR7, optional PR4 | Dogfood + portable runtime |
-| Weeks 5–8 | PRN1–PRN2 (parallel once PR2 ready) | Native host real |
-| Weeks 8–16+ | PRN3–PRN7 | Product native GA |
-| Ongoing | Freeze SPA features; contributor `dev:web` only | Native product UI (not web-based) |
-
-**Staffing:** 1 engineer can do Track A then B serially; 2 engineers: A + B spike in parallel after PR2.
-
----
-
-## Success Criteria
-
-### Track A (intermediate)
-
-- [x] Standalone runtime on loopback (`npm run runtime`); handler parity tests in `tests/server`.
-- [x] Durable trust; no unauthenticated HTTP shutdown (signals/Job Object).
-- [ ] Contributors run harness without Next via `dev-app.mjs` (Next thin adapters already work).
-- [x] Session formats unchanged; progressive restore uses same disk layout.
-
-### Track B (product — **definition of done for architecture goal**)
-
-- [ ] **No WebView / browser required** for end-user Spok on Windows (native product UI, not a web-based app).
-- [ ] Network/agent/web-service interaction still works as expected (Grok CLI, git remotes, connectors, etc.) — **not** offline-only.
-- [ ] Native UI cold start and memory meet native provisional budgets (or evidence-based revised budgets).
-- [ ] Feature-parity **must** column green (trace, stream, diff quality, sessions, security, composer).
-- [ ] High-quality diffs without Monaco/WebView.
-- [ ] Runtime remains TypeScript/Node; security posture tests pass.
-- [ ] Windows package ships bundled runtime + native UI.
-- [ ] Product docs do not market web UI as primary.
-
----
-
-## Appendix: Dev launcher & port (Horizon A detail)
-
-Unchanged from R3 intent:
-
-1. Prefer `SPOK_PORT` or **7788**, else free port; hold for launcher lifetime.
-2. Spawn runtime with `SPOK_PORT`.
-3. Health poll.
-4. Vite with `VITE_API_PROXY_TARGET`.
-5. Runtime death: optional same-port restart; else exit and tell user to re-run `dev:app`.
-6. Token never in query/disk raw.
+Measure on a representative release-build Windows laptop.
+
+| Measure | Target | Hard regression ceiling |
+| --- | ---: | ---: |
+| Native cold launch to usable inbox | 1.2 s | 2.5 s |
+| Warm launch | 500 ms | 1.0 s |
+| Idle RSS, native UI + runtime | 150 MB | 280 MB |
+| Recent session first useful content | 300 ms | 500 ms |
+| Stream reducer work per burst | 8 ms | 16 ms |
+| Common diff open/tab switch | 150 ms | 300 ms |
+| 10k-event navigation | No visible dropped interaction frames | No multi-second stall |
+
+Current React budgets remain enforced by `tests/perf` until native cutover.
+
+## Verification Gates
+
+For runtime work:
+
+- focused handler/security/process tests;
+- `npm run test:server`;
+- `node scripts/dev-app.mjs --check` when launcher/proxy behavior changes;
+- `npm test` and `npm run build` before integration;
+- explicit tests for token/origin/host denial, untrusted paths, policy denial, cancellation, child-tree cleanup, and restart recovery.
+
+For native work:
+
+- runtime contract tests shared with the React client;
+- automated accessibility and keyboard traversal;
+- performance traces from release builds;
+- visual review on standard/high-contrast themes and 100–200% scaling;
+- crash/restart/orphan-process tests;
+- signed-package upgrade and rollback rehearsal before external release.
+
+## Explicit Non-Goals
+
+- Rewriting the privileged runtime in C#, C++, Rust, or Qt.
+- Making Tauri/WebView the permanent product shell.
+- Introducing Hono, Vite, or another framework solely to satisfy an obsolete intermediate plan.
+- Starting two independent product designs before shared lifecycle/API contracts stabilize.
+- Sacrificing trace, diff, validation, accessibility, or review quality to claim a native shell is “done.”

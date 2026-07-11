@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { FileDiff } from "@/lib/types";
+import type { LocatedReviewIssue } from "@/lib/review-issue-location";
 import { cn } from "@/lib/utils";
 import { Columns2, Rows2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,9 @@ export function MonacoDiff({
   showLayoutToggle = true,
   /** 0-based hunk index to reveal in the modified editor. */
   revealHunkIndex,
+  revealLineNumber,
+  issues = [],
+  onIssueOpen,
 }: {
   file: FileDiff | null;
   className?: string;
@@ -86,13 +90,35 @@ export function MonacoDiff({
   onLayoutChange?: (layout: DiffLayout) => void;
   showLayoutToggle?: boolean;
   revealHunkIndex?: number;
+  /** 1-based modified-file line to reveal for an actionable issue. */
+  revealLineNumber?: number;
+  /** Persistent, actionable issue locations for the selected file. */
+  issues?: readonly LocatedReviewIssue[];
+  onIssueOpen?: (issue: LocatedReviewIssue) => void;
 }) {
   const [ready, setReady] = useState(false);
+  const [editorVersion, setEditorVersion] = useState(0);
   const [internalLayout, setInternalLayout] = useState<DiffLayout>(layout);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneDiffEditor | null>(
     null
   );
+  const decorationRef = useRef<
+    import("monaco-editor").editor.IEditorDecorationsCollection | null
+  >(null);
+  const mouseDisposableRef = useRef<import("monaco-editor").IDisposable | null>(
+    null
+  );
+  const issuesByLineRef = useRef(new Map<number, LocatedReviewIssue[]>());
+  const issuesRef = useRef(issues);
+  const onIssueOpenRef = useRef(onIssueOpen);
+  issuesRef.current = issues;
+  const issueFingerprint = issues
+    .map(
+      ({ issue, lineNumber }) =>
+        `${issue.id}:${issue.severity}:${lineNumber}:${issue.title}:${issue.detail}`
+    )
+    .join("|");
 
   useEffect(() => {
     setReady(true);
@@ -101,6 +127,10 @@ export function MonacoDiff({
   useEffect(() => {
     setInternalLayout(layout);
   }, [layout]);
+
+  useEffect(() => {
+    onIssueOpenRef.current = onIssueOpen;
+  }, [onIssueOpen]);
 
   const view = onLayoutChange ? layout : internalLayout;
   const setView = (next: DiffLayout) => {
@@ -119,7 +149,15 @@ export function MonacoDiff({
 
   // Keyboard / hunk-nav: scroll modified pane to the selected hunk
   useEffect(() => {
-    if (revealHunkIndex == null || !file) return;
+    if (revealLineNumber == null) return;
+    const modified = editorRef.current?.getModifiedEditor();
+    if (!modified) return;
+    modified.revealLineInCenter(revealLineNumber);
+    modified.setPosition({ lineNumber: revealLineNumber, column: 1 });
+  }, [revealLineNumber, file?.id]);
+
+  useEffect(() => {
+    if (revealLineNumber != null || revealHunkIndex == null || !file) return;
     const hunk = file.hunks[revealHunkIndex];
     if (!hunk) return;
     const ed = editorRef.current;
@@ -128,7 +166,65 @@ export function MonacoDiff({
     const line = Math.max(1, hunk.newStart || 1);
     modified.revealLineInCenter(line);
     modified.setPosition({ lineNumber: line, column: 1 });
-  }, [revealHunkIndex, file]);
+  }, [revealHunkIndex, revealLineNumber, file]);
+
+  // Decorations update only when the selected file's issue set changes. Monaco
+  // owns their rendering, so no React work occurs while scrolling or streaming.
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const editor = editorRef.current?.getModifiedEditor();
+    if (!monaco || !editor) return;
+
+    const byLine = new Map<number, LocatedReviewIssue[]>();
+    for (const located of issuesRef.current) {
+      const list = byLine.get(located.lineNumber) ?? [];
+      list.push(located);
+      byLine.set(located.lineNumber, list);
+    }
+    issuesByLineRef.current = byLine;
+
+    const decorations = [...byLine.entries()].map(([lineNumber, entries]) => {
+      const highest = entries.some((entry) => entry.issue.severity === "error")
+        ? "error"
+        : "warn";
+      const hover = entries
+        .map(
+          (entry) =>
+            `**${entry.issue.title.replace(/[*_`]/g, "")}**  \n${entry.issue.detail.replace(/[*_`]/g, "")}`
+        )
+        .join("\n\n");
+      return {
+        range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+        options: {
+          isWholeLine: true,
+          stickiness:
+            monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          glyphMarginClassName: `spok-issue-glyph spok-issue-glyph-${highest}`,
+          glyphMarginHoverMessage: { value: hover },
+          linesDecorationsClassName: `spok-issue-line spok-issue-line-${highest}`,
+          overviewRuler: {
+            color: highest === "error" ? "#fb7185" : "#fbbf24",
+            position: monaco.editor.OverviewRulerLane.Right,
+          },
+        },
+      };
+    });
+
+    decorationRef.current?.clear();
+    decorationRef.current = editor.createDecorationsCollection(decorations);
+    return () => {
+      decorationRef.current?.clear();
+      decorationRef.current = null;
+    };
+  }, [issueFingerprint, file?.id, editorVersion]);
+
+  useEffect(
+    () => () => {
+      mouseDisposableRef.current?.dispose();
+      decorationRef.current?.clear();
+    },
+    []
+  );
 
   if (!file) {
     return (
@@ -271,8 +367,24 @@ export function MonacoDiff({
               }}
               onMount={(editor) => {
                 editorRef.current = editor;
+                setEditorVersion((version) => version + 1);
                 editor.updateOptions({
                   renderSideBySide: view === "split",
+                });
+                const modified = editor.getModifiedEditor();
+                mouseDisposableRef.current?.dispose();
+                mouseDisposableRef.current = modified.onMouseDown((event) => {
+                  const monaco = monacoRef.current;
+                  const line = event.target.position?.lineNumber;
+                  if (!monaco || line == null) return;
+                  const markerTarget =
+                    event.target.type ===
+                      monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+                    event.target.type ===
+                      monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS;
+                  if (!markerTarget) return;
+                  const located = issuesByLineRef.current.get(line)?.[0];
+                  if (located) onIssueOpenRef.current?.(located);
                 });
               }}
               options={{
@@ -296,7 +408,7 @@ export function MonacoDiff({
                 fontSize: 12,
                 fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
                 lineNumbers: "on",
-                glyphMargin: false,
+                glyphMargin: issues.length > 0,
                 folding: true,
                 automaticLayout: true,
                 wordWrap: "off",
@@ -314,6 +426,32 @@ export function MonacoDiff({
           )}
         </div>
       )}
+      <style jsx global>{`
+        .monaco-editor .spok-issue-glyph {
+          cursor: pointer;
+          border-radius: 999px;
+          background-position: center;
+          background-repeat: no-repeat;
+          background-size: 8px 8px;
+        }
+        .monaco-editor .spok-issue-glyph-error {
+          background-image: radial-gradient(circle, #fb7185 0 48%, transparent 54%);
+        }
+        .monaco-editor .spok-issue-glyph-warn {
+          background-image: radial-gradient(circle, #fbbf24 0 48%, transparent 54%);
+        }
+        .monaco-editor .spok-issue-line {
+          width: 3px !important;
+          margin-left: 2px;
+          border-radius: 2px;
+        }
+        .monaco-editor .spok-issue-line-error {
+          background: #fb7185;
+        }
+        .monaco-editor .spok-issue-line-warn {
+          background: #fbbf24;
+        }
+      `}</style>
     </div>
   );
 }

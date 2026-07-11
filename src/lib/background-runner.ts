@@ -23,9 +23,14 @@ import {
 import type { AutomationJob } from "./automation/types";
 import { AUTOMATION_DEFAULTS } from "./automation/types";
 import { toast } from "sonner";
-import { trustWorkspace } from "./local-api-client";
+import { fetchGitStatus, gitAction } from "./git/client";
+import {
+  establishIsolatedWorkspace,
+  type IsolatedWorkspace,
+} from "./automation/worktree-isolation";
 
 const aborts = new Map<string, AbortController>();
+const startingJobs = new Set<string>();
 let pumping = false;
 let scheduleTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -122,60 +127,124 @@ async function pumpQueue(): Promise<void> {
 }
 
 async function runJob(jobId: string): Promise<void> {
+  if (startingJobs.has(jobId)) return;
+  startingJobs.add(jobId);
+
   const store = useSpokStore.getState();
   const job = store.automationJobs.find((j) => j.id === jobId);
-  if (!job || job.status !== "queued") return;
+  if (!job || job.status !== "queued") {
+    startingJobs.delete(jobId);
+    return;
+  }
 
-  // Policy gate
-  const policy = await checkAutomationPolicy({
-    cwd: job.cwd,
-    requireTrusted: true,
-    isolate: job.isolate,
-    mainCheckout: job.mainCheckout,
-  });
+  const ac = new AbortController();
+  aborts.set(jobId, ac);
 
-  if (!policy.ok) {
-    // Try to re-trust if path was trusted before server restart
-    try {
-      await trustWorkspace(job.cwd);
-    } catch {
-      /* ignore */
+  let isolatedWorkspace: IsolatedWorkspace | undefined;
+  let executionCwd = job.cwd;
+  let mainCheckout = job.mainCheckout;
+  let worktreePath = job.worktreePath;
+  let branch = job.branch;
+
+  try {
+    if (job.isolate) {
+      isolatedWorkspace = await establishIsolatedWorkspace(
+        {
+          jobId: job.id,
+          cwd: job.cwd,
+          worktreePath: job.worktreePath,
+          branch: job.branch,
+          mainCheckout: job.mainCheckout,
+        },
+        {
+          checkPolicy: checkAutomationPolicy,
+          getStatus: (cwd) => fetchGitStatus(cwd),
+          createWorktree: async (opts) =>
+            gitAction({
+              action: "worktree_add",
+              cwd: opts.cwd,
+              worktreePath: opts.worktreePath,
+              branch: opts.branch,
+              confirm: true,
+              trustWorktree: true,
+            }),
+          onCreated: (created) => {
+            // Keep the review handoff discoverable even if verification fails.
+            useSpokStore.getState().patchJob(jobId, {
+              worktreePath: created.worktreePath,
+              branch: created.branch,
+              mainCheckout: created.mainCheckout,
+            });
+          },
+        }
+      );
+      executionCwd = isolatedWorkspace.worktreePath;
+      worktreePath = isolatedWorkspace.worktreePath;
+      branch = isolatedWorkspace.branch;
+      mainCheckout = isolatedWorkspace.mainCheckout;
+      useSpokStore.getState().patchJob(jobId, {
+        worktreePath,
+        branch,
+        mainCheckout,
+      });
+    } else {
+      const policy = await checkAutomationPolicy({
+        cwd: job.cwd,
+        requireTrusted: true,
+        isolate: false,
+      });
+      if (!policy.ok) {
+        throw new Error(policy.reason || "Automation policy denied the job");
+      }
     }
-    const retry = await checkAutomationPolicy({
-      cwd: job.cwd,
-      requireTrusted: true,
-      isolate: false, // worktree creation is optional enhancement
-    });
-    if (!retry.ok) {
+  } catch (e) {
+    if (!ac.signal.aborted) {
+      const reason = e instanceof Error ? e.message : "Job preparation failed";
+      const status = job.isolate ? "failed" : "skipped";
       store.patchJob(jobId, {
-        status: "skipped",
+        status,
         finishedAt: Date.now(),
-        error: retry.reason,
+        error: reason,
         summary: summarizeJobResult({
-          status: "skipped",
-          error: retry.reason,
+          status,
+          error: reason,
         }),
       });
       store.pushNotification(
         createNotification({
-          kind: "schedule_skipped",
-          title: "Job skipped",
-          body: `${job.title}: ${retry.reason}`,
+          kind: job.isolate ? "run_failed" : "schedule_skipped",
+          title: job.isolate
+            ? "Background isolation failed"
+            : "Job skipped",
+          body: `${job.title}: ${reason}`,
           jobId,
           action: "open_monitor",
         })
       );
-      toast.message("Background job skipped", { description: retry.reason });
+      if (job.isolate) {
+        toast.error("Background isolation failed", { description: reason });
+      } else {
+        toast.message("Background job skipped", { description: reason });
+      }
       if (job.scheduleId) {
         void markScheduleRun({
           id: job.scheduleId,
           lastJobId: jobId,
-          lastStatus: "skipped",
+          lastStatus: status,
         });
       }
-      void pumpQueue();
-      return;
     }
+    aborts.delete(jobId);
+    startingJobs.delete(jobId);
+    void pumpQueue();
+    return;
+  }
+
+  if (ac.signal.aborted) {
+    aborts.delete(jobId);
+    startingJobs.delete(jobId);
+    void pumpQueue();
+    return;
   }
 
   // Create session without stealing focus
@@ -186,15 +255,33 @@ async function runJob(jobId: string): Promise<void> {
       status: "ready",
       backgroundJob: true,
       config: {
-        cwd: job.worktreePath || job.cwd,
+        cwd: executionCwd,
         command: "grok",
         args: [],
         autoScroll: true,
         playbackSpeed: 1,
         isolationGuard: job.isolate,
-        mainCheckout: job.mainCheckout || job.cwd,
-        worktreePath: job.worktreePath,
+        mainCheckout,
+        worktreePath,
       },
+      gitSummary: isolatedWorkspace
+        ? {
+            branch: isolatedWorkspace.status.branch.current || branch || null,
+            upstream: isolatedWorkspace.status.branch.upstream,
+            ahead: isolatedWorkspace.status.branch.ahead,
+            behind: isolatedWorkspace.status.branch.behind,
+            stagedCount: isolatedWorkspace.status.stagedCount,
+            unstagedCount: isolatedWorkspace.status.unstagedCount,
+            untrackedCount: isolatedWorkspace.status.untrackedCount,
+            conflictCount: isolatedWorkspace.status.conflictCount,
+            clean: isolatedWorkspace.status.clean,
+            isWorktree: true,
+            mainWorktreePath: mainCheckout || null,
+            repoRoot: executionCwd,
+            headOid: isolatedWorkspace.status.branch.headOid,
+            updatedAt: isolatedWorkspace.status.timestamp,
+          }
+        : undefined,
     },
     { activate: false }
   );
@@ -206,8 +293,10 @@ async function runJob(jobId: string): Promise<void> {
     content: [
       `Title: ${job.title}`,
       `Kind: ${job.kind}`,
-      `cwd: ${job.worktreePath || job.cwd}`,
-      job.isolate ? "Isolation: preferred" : "Isolation: off",
+      `cwd: ${executionCwd}`,
+      job.isolate
+        ? `Isolation: active${branch ? ` · ${branch}` : ""}`
+        : "Isolation: off",
       "",
       job.prompt.slice(0, 2000),
     ].join("\n"),
@@ -222,16 +311,13 @@ async function runJob(jobId: string): Promise<void> {
     sessionId,
   });
 
-  const ac = new AbortController();
-  aborts.set(jobId, ac);
-
   const flags = defaultGrokFlags();
   const args = [...baseFlagsArgs(flags), "-p", job.prompt];
 
   try {
     const result = await runHarness({
       sessionId,
-      cwd: job.worktreePath || job.cwd,
+      cwd: executionCwd,
       command: "grok",
       args,
       label: job.title,
@@ -357,6 +443,7 @@ async function runJob(jobId: string): Promise<void> {
     }
   } finally {
     aborts.delete(jobId);
+    startingJobs.delete(jobId);
     void pumpQueue();
   }
 }

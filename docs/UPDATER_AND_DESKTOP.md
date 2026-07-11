@@ -8,17 +8,19 @@ This document describes the current desktop glue and the updater plan. It should
 
 | Command | What it does |
 | --- | --- |
+| `npm run dev:app` | Preferred contributor dogfood: supervised standalone runtime + Next UI with strict loopback proxying |
 | `npm run desktop` / `npm run tauri:dev` | Next + Tauri WebView shell (interim daily driver) |
 | `npm run tauri:build` | Packaged desktop binary (internal / unsigned unless signed) |
 | `npm run dev` | Browser-only Next UI |
 | `npm run runtime` | Standalone Node privileged API on loopback |
+| `node scripts/dev-app.mjs --check` | Verify runtime/UI readiness and clean supervisor teardown |
 | `npm run rust:path` | Ensure Rust/cargo on PATH (Windows) |
 
 ## What Runs Where Today
 
 | Concern | Current implementation |
 | --- | --- |
-| Process spawn, Git, filesystem, policy, sessions | Next.js local API and shared library code. |
+| Process spawn, Git, filesystem, policy, sessions | Shared Node runtime/domain code; core routes run standalone or through thin Next adapters. |
 | UI | Next.js React app in browser or Tauri WebView. |
 | Native folder picker | Tauri command `pick_folder`. |
 | OS notifications | Tauri notification plugin plus `show_notification`. |

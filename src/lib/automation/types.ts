@@ -23,10 +23,13 @@ export interface AutomationJob {
   title: string;
   prompt: string;
   cwd: string;
-  /** Prefer isolated worktree for the run */
+  /** Require an isolated worktree for the run when true. */
   isolate: boolean;
   /** Optional Spok-managed worktree path once created */
   worktreePath?: string;
+  /** Spok-managed branch linked to worktreePath. */
+  branch?: string;
+  /** Canonical primary checkout that owns the linked worktree. */
   mainCheckout?: string;
   status: QueueItemStatus;
   priority: number;

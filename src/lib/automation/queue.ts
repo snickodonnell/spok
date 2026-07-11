@@ -16,6 +16,7 @@ export function createJob(partial: {
   channelId?: string;
   agentId?: string;
   worktreePath?: string;
+  branch?: string;
   mainCheckout?: string;
 }): AutomationJob {
   const now = Date.now();
@@ -27,6 +28,7 @@ export function createJob(partial: {
     cwd: partial.cwd.trim(),
     isolate: partial.isolate !== false,
     worktreePath: partial.worktreePath,
+    branch: partial.branch,
     mainCheckout: partial.mainCheckout,
     status: "queued",
     priority: partial.priority ?? 0,

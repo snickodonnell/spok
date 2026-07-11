@@ -1,257 +1,193 @@
-# Spok Harness Competitive Development Plan
+# Spok Product Roadmap
 
-Last updated: 2026-07-11 (fast boot: UI prefs cache + non-blocking restore + lean snapshots)
+Last updated: 2026-07-11
 
-This is the current product and engineering source of truth for making Spok a world-class Grok Build harness. Older audit snapshots and completed UI milestone trackers have been removed so planning stays focused on the next product leap.
+This is the product and engineering source of truth for Spok. It describes what is true now, what is being built next, and the order in which larger capabilities should land. Completed implementation detail belongs in code, tests, and Git history—not in a permanent checklist of crossed-out tasks.
 
-## Product Goal
+## Product Thesis
 
-Spok should feel like the control room for Grok Build: fast to launch, reliable under long agent runs, safe around local privileges, and more legible than a terminal when an agent edits, tests, retries, or gets stuck.
+Spok should be the best control room for Grok Build: a fast, local-first desktop harness where a developer can launch several coding tasks safely, understand what each agent did, validate the result, and hand good work to Git without reconstructing intent from terminal output.
 
-The product target is not "a prettier log viewer." It is a harness that competes with Cursor and Claude Code by combining agent execution, trace understanding, review, workspace safety, and multi-session orchestration in one focused desktop experience.
+The critical workflow is:
 
-## Competitive Baseline
+1. Open and trust a repository.
+2. Describe a task and choose an execution policy.
+3. Run the task in an isolated worktree by default.
+4. Monitor progress, approvals, failures, and resource use across sessions.
+5. Review trace-linked changes and validation evidence.
+6. Continue, retry, commit, push, open a PR, or discard with confidence.
+7. Archive the session and clean up its worktree intentionally.
 
-The 2026 competitive bar is agent-first, multi-surface, and policy-aware.
+Features that make this loop faster, safer, or easier to understand outrank broad platform work.
 
-- Cursor is positioning around agent-first coding, cloud agents, rules, MCP, skills/CLI, background review, and multiple concurrent agents.
-- Claude Code spans terminal, IDE, desktop, web, GitHub, cloud/background sessions, visual diffs, scheduled tasks, MCP, hooks, skills, subagents, and fine-grained permissions.
-- Both products are moving away from "single prompt, single transcript" and toward managed fleets of coding agents with review, policy, and workflow integration.
+## Product Principles
 
-Spok's advantage can be narrower and sharper: Grok Build-specific execution, best-in-class trace causality, review ergonomics, mobile/LAN continuity, and a local-first security model.
+- **Review is the center of gravity.** A successful process exit is not the same as a successful task.
+- **Isolation is the default.** Concurrent or unattended work must not modify the user's main checkout.
+- **State is durable and replayable.** Session, job, approval, validation, and handoff state must survive a restart or explicitly explain why it cannot.
+- **Policy is visible.** The UI must show what the agent can do, what it is waiting for, and why an action was denied.
+- **The interface stays quiet under load.** Streaming must not cause shell churn, layout shifts, or hidden background work.
+- **Provider details stay behind adapters.** Grok Build is the first-class provider; core session and review contracts should not encode accidental CLI quirks.
+- **No speculative platform surface.** Add hooks, MCP, skills, plugins, connectors, and remote runners only behind a real user workflow and explicit permissions.
 
-Sources checked on 2026-07-10:
+## Current Baseline
 
-- Cursor docs: https://cursor.com/docs
-- Cursor cloud agents: https://cursor.com/docs/cloud-agent
-- Cursor 3 coverage: https://www.wired.com/story/cusor-launches-coding-agent-openai-anthropic
-- Claude Code overview: https://code.claude.com/docs/en/overview
-- Claude Code permissions: https://code.claude.com/docs/en/permissions
-- Claude Code MCP: https://code.claude.com/docs/en/mcp
-- Claude Code hooks: https://code.claude.com/docs/en/hooks
-- Claude Code subagents: https://code.claude.com/docs/en/sub-agents
+The repository already has a strong product spine:
 
-## Current Strengths
+- A focused Run workspace with thinking/events, changes, review, validation, raw log, health, Git, attachments, and a policy-aware composer.
+- Durable sessions with snapshot-first progressive restore, replay/import/export, raw event preservation, and parser fixtures.
+- Responsive stream handling through batched reduction, selective store subscriptions, virtualized high-volume views, and lazy heavy panels.
+- A review workbench with risk ordering, file labels, unified/split diffs, keyboard navigation, hunk causality, review summaries, validation recipes, and issue derivation.
+- An operational session inbox with attention, running, queued, failed, ready-for-review, and idle lanes on desktop and mobile.
+- A shared privileged Node runtime with thin Next adapters for core routes, loopback/token/origin checks, durable workspace trust, approvals, audit events, path controls, and secret redaction.
+- Git status/write operations plus managed-worktree primitives and isolation guards.
+- Strict background isolation that creates, trusts, verifies, and binds a managed worktree before launching an unattended agent.
+- Persistent review issue navigation through queue counts, a keyboard issue rail, and Monaco gutter/line/overview markers.
+- A supervised `npm run dev:app` path that dogfoods extracted routes through the standalone runtime.
+- Background jobs, schedules, channels, notifications, hooks, skills, MCP discovery foundations, mobile/LAN viewing, and an interim Tauri shell.
 
-Spok already has the right product spine:
+## Gaps Found In This Audit
 
-- A focused session shell for Grok Build with transcript, thinking, events, changes, review, validation, and Git surfaces.
-- Durable session state with progressive snapshot-first restore, imported traces, live sessions, replay fixtures, slash command catalog checks, and test coverage around parser/stream/perf behavior.
-- Shared privileged runtime under `src/server` with thin Next adapters and standalone `npm run runtime`.
-- A local API security posture with loopback-only checks, bearer token auth, Origin validation, no-store JSON responses, **durable** workspace trust, and policy denial helpers.
-- Stream/UI responsiveness work: rAF batching, virtualized lists, selective store subscriptions, active-tab mount for heavy panels.
-- Mobile/LAN support with host session sync, mobile sessions, split panes, timeline, trace, diff, and artifact views.
-- Product modes that let the UI shift between Harness, Inbox, Workspaces, Automations, and Extensions.
-- A low-overhead desktop architecture plan that separates the Grok runtime from Next.js and targets native Windows UI for the final product.
+These remaining gaps weaken the core workflow:
 
-## Immediate Corrections
+1. Worktree creation, task launch, session linkage, review handoff, archive, and cleanup are still separate UI actions rather than one lifecycle.
+2. Job/session recovery after app or runtime restart is not yet a durable orchestration contract.
+3. Validation recipes prefill prompts; they are not yet a structured, cancellable validation runner with durable artifacts.
+4. Automation timers are app-lifetime helpers, not a supervised scheduler with restart recovery and missed-run policy.
+5. Several automation, extension, attachment, secret, and live-runtime routes are still Next-hosted rather than shared standalone-runtime contracts.
+6. The final native Windows UI is a major separate product track; starting a full rewrite before the agent lifecycle stabilizes would create two moving UI targets.
 
-These are the next corrections I would make before expanding scope.
+## Ordered Delivery Plan
 
-### P0: Make Performance Measurable
+### Now — Mission-Control Vertical Slice
 
-- ~~Add a small performance telemetry layer~~ **Done (2026-07-10):** `src/lib/perf.ts` — boot, stream ingest burst, reduce, tab switch, memory heap samples; budgets in `PERF_BUDGETS`.
-- ~~Add CI checks for fixture replay speed and stream ingestion throughput.~~ **Done:** `tests/perf/perf-budgets.test.ts` + `npm run test:perf`.
-- ~~Ship a real responsiveness pass~~ **Done (2026-07-10):** batch reduce, selective Zustand selectors, mount-only-active workspace tabs, timeline marker cap, coarse large-file diffs, host/git poll pause when hidden — see Horizon 1 notes below.
-- ~~Progressive session restore~~ **Done (2026-07-10):** snapshot-first materialize of last active session only; meta shells for the rest; lazy full load on select (`src/lib/session-hydrate.ts`, `use-session-hydration`).
-- Budgets (enforced/soft in tests + product targets):
-  - Cold launch to usable shell: under 2 seconds on a target Windows laptop.
-  - Reopen recent session: under 500 ms to first useful content (**snapshot-first path**).
-  - Stream ingest: under 16 ms main-thread work per burst after batching.
-  - Large trace navigation: no visible frame drops for 10k event fixtures.
-  - Diff tab switch: under 300 ms for common repo diffs.
+Goal: a user can launch two or more Grok tasks, leave them running safely, and return to reviewable results without touching the main checkout.
 
-### P0: Finish Runtime Extraction
+Current implementation pass:
 
-Continue Track A from `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`.
+- [x] **Completed 2026-07-11:** isolated background jobs create, trust, verify, and bind a managed sibling worktree before process launch. They never silently fall back to the main checkout.
+- [x] **Completed 2026-07-11:** the job/session relationship retains worktree path, branch, main checkout, session ID, and job ID; the session runs with the worktree as its cwd.
+- [x] **Completed 2026-07-11:** isolation setup failures become actionable failed jobs/notifications and launch no agent process. Worktrees are never auto-removed.
+- [x] **Completed 2026-07-11:** review issues remain visible in the queue, a compact keyboard-accessible issue rail, and Monaco gutter/line/overview markers; navigation preserves file, hunk/line, and causal trace context when available.
+- [x] **Completed 2026-07-11:** `npm run dev:app` supervises the standalone runtime and existing Next UI, proxies extracted routes over strict loopback, keeps the shared capability token in memory, verifies readiness, and cleans up both process trees.
+- [x] **Completed 2026-07-11:** focused and full tests, TypeScript, lint, performance budgets, standalone launcher smoke, and production build pass; roadmap, desktop architecture, README, security/release docs, and architecture skill match the shipped behavior.
 
-- ~~Complete the `src/server` extraction~~ **Done (2026-07-10) PR1b–1e core:** handlers under `src/server/routes/*`; Next routes are thin adapters.
-- ~~Parity tests~~ **Done:** `tests/server/handler-extraction.test.ts` exercises shared handlers + `dispatchRequest`.
-- ~~Standalone Node sidecar precursor~~ **Done:** `src/server/main.ts` + `src/server/router.ts` (`npm run runtime`, port `SPOK_PORT`/`7788`, loopback only). Remaining: full dogfood `dev-app.mjs` + SPA proxy (PR2 polish).
+Exit criteria:
 
-### P0: Stabilize The Review Loop
+- Two isolated jobs can run concurrently against one repository.
+- Neither job can mutate the main checkout through Spok's Git or process path.
+- Each result appears in the inbox with branch/worktree identity and a clear next action.
+- Failure to create or trust a worktree runs no agent process.
+- Focused tests and the full unit suite pass; production build passes for route/UI contract changes.
 
-- ~~Keep the Changes and Review surfaces permanently visible as first-class work areas~~ **Done:** workspace right tabs (Changes / Review / Validation / Events / Health) with stable chrome + test ids.
-- ~~Add a validation lane that shows tests, builds, command results, failures, retries, and approvals in time order.~~ **Done (2026-07-09):** workspace **Validation** tab + pure `buildValidationLane` (`src/lib/validation-lane.ts`, `src/components/session/validation-panel.tsx`). Filters, badge counts, jump-to-trace/file.
-- ~~Link validation failures back to the event, file, command, and model message that caused them.~~ **Done** for trace nodes and file links; deeper hunk/prompt causal links remain Horizon 2.
-- Preserve raw stream events beside normalized UI state so parser regressions remain diagnosable. (Raw Log tab virtualized; durable `eventLog` retained.)
+### Next — Complete The Agent Lifecycle
 
-### P0: Reduce UI Jank
+Goal: turn the vertical slice into the default daily workflow.
 
-- ~~Batch stream updates before React state commits.~~ **Done (2026-07-09 / tightened 2026-07-10):** pure batch `reduceStreamEvents` (single clone + mutate + freeze), rAF `stream-batch` with heavy-load frame skip (`src/lib/session-reduce.ts`, `src/lib/stream-batch.ts`).
-- ~~Make trace/event lists fully virtualized~~ **Done (2026-07-10):** event graph tree + **thinking stream** + **raw log** virtualized (`@tanstack/react-virtual`).
-- ~~Lazy-load Monaco and large diff renderers only when their tabs are opened.~~ **Done (2026-07-10):** workspace mounts **only the active right tab** (Changes/Review/Validation/Events/Health); Monaco remains dynamic-imported.
-- ~~Stop full-session re-renders of shell chrome during stream.~~ **Done (2026-07-10):** field-level Zustand selectors on desktop shell, sidebar, metrics, status, timeline, composer, run card, usage meter.
-- ~~Cap in-memory raw/event tails; timeline DOM markers.~~ **Done:** raw log 4k; restore event tail 80; timeline max 200 markers.
-- ~~Add skeletons and stable dimensions for panels~~ **Done:** `PanelSkeleton` + fixed-height workspace tab chrome.
-- ~~Audit mobile panels~~ **Done (pass):** mobile tab bar `min-h-14`, primary actions `min-h-11/12`, scroll ownership on main/run panes.
+Build in this order:
 
-### P1: Make Security Durable
+1. **New task flow:** one compact launcher for repository, task, branch prefix, permission profile, and local/background execution. Isolation defaults on for parallel/background work.
+2. **Durable orchestration:** versioned run records linking job, session, PID/runtime run, worktree, branch, policy, timestamps, and terminal outcome. Reconcile stale `starting`/`running` records after restart.
+3. **Fleet controls:** stop, retry, continue, duplicate, reprioritize, and concurrency limits from the inbox. Show queued reason and runtime/resource pressure.
+4. **Approval inbox:** group pending approvals across sessions, show command/path/risk/policy, and support allow-once, scoped durable grant, or deny without losing context.
+5. **Handoff:** review readiness gate, commit, push, PR creation, open in IDE, and copy summary from one consistent completion panel.
+6. **Archive and cleanup:** distinguish archive session, keep branch/worktree, remove clean worktree, and force cleanup. Never remove dirty or unpushed work by default.
+7. **Run templates:** implement issue, fix CI, review branch, update dependencies, reproduce bug, and validate touched packages as editable presets—not hard-coded workflows.
 
-- ~~Persist trusted workspace roots intentionally instead of relying on process-local trust.~~ **Done (2026-07-09):** `~/.spok/workspace-trust.json` schema v1 via `src/lib/security/workspace-trust.ts`.
-- ~~Store trust decisions with revocation UI and clear scope labels.~~ **Done:** Settings → Privacy trusted roots list + revoke; API `DELETE /api/workspace/trust`.
-- Keep the local API loopback-only and token-gated.
-- Audit logging: workspace trust grant/revoke write `workspace_trust` audit events; policy denials and spawn paths already audited.
+UX acceptance:
 
-## Development Plan
+- A new user can launch an isolated task in under 30 seconds without understanding Git worktree internals.
+- Every session row answers: what is it doing, where is it running, what needs attention, and what can I do next?
+- Keyboard navigation covers create, session cycling, stop, review, validation, and handoff.
+- Destructive cleanup always previews affected session, worktree, branch, and dirty/unpushed state.
 
-### Horizon 1: Fast, Stable Local Harness
+### Then — Review And Validation As Evidence
 
-Target: 2-4 weeks · **Status: core outcomes met (2026-07-10)** — remaining work is polish and dogfood packaging.
+Goal: make Spok better than an editor-plus-terminal for deciding whether agent work is correct.
 
-Outcome: Spok feels fast and dependable on real Grok Build sessions.
+1. Add a structured validation runner with command recipes, cancellation, retry, timeout, exit code, logs, and durable artifacts.
+2. Infer touched packages and recommend the smallest useful tests/builds; show what was not checked.
+3. Attach validation outcomes and policy denials to files, hunks, causal trace nodes, and prompt turns.
+4. Add an artifact browser for screenshots, test reports, coverage, build output, preview URLs, and generated documents.
+5. Add inline review comments with open/resolved state and a “send findings back to agent” continuation flow.
+6. Add session compare for alternative attempts: plan, duration, tool use, changed files, validation, and diff.
+7. Add agent checkpoints or equivalent safe restore points for agent-authored changes without pretending they replace Git.
 
-- ~~Finish Track A PR1b-PR1e runtime extraction~~ **Done (2026-07-10)** for session start, sessions, settings, approvals, git, git-diff, fs browse, trust, diagnostics, cli-status, health + standalone `npm run runtime`. Extensions/automation still Next-hosted (PR1e residual).
-- ~~Add performance instrumentation and replay benchmarks.~~ **Done** (`src/lib/perf.ts`, `tests/perf`).
-- ~~Introduce event ingestion batching~~ + ~~reducer profiling / perf telemetry~~ **Done** (batch reduce + stream batch marks).
-- ~~Virtualize high-volume thinking stream and raw log panes~~ **Done**.
-- ~~Make Monaco and heavy diff views lazy by default~~ **Done** (active-tab mount + dynamic Monaco).
-- ~~Progressive / snapshot-first session restore~~ **Done:** last active full-materialize; sidebar shells; background snapshot fill; `listSessionMetas` no longer scans NDJSON; lean snapshots on disk.
-- ~~Fast relaunch (2026-07-11):~~ **UI prefs** (`spok.uiPrefs` localStorage + layout boot script) apply CRT/theme before `/api/settings`. Boot **unblocks on meta shells** (no wait for multi-MB snapshot parse); active body loads in background with status “loading…”. **Lean compact snapshots** (no pretty-print; tiny eventLog tail; truncated node text; rewrite fat legacy snapshots on first read).
-- ~~Add an always-visible validation lane with command status, exit code, duration, and linked artifacts.~~ **Done** (Validation tab).
-- ~~Prompt composer file attachments (images / PDFs / documents) with session-scoped storage and Grok ACP `--prompt-file` integration.~~ **Done (2026-07-10):** paperclip + drag/drop/paste; files under `~/.spok/sessions/<id>/attachments/`; vision via inline image blocks; docs via embedded text or `resource_link`.
-- ~~Update E2E coverage~~ **Done (partial):** Playwright smoke covers workspace tabs + composer attach control after sample load.
-- **Still open (Horizon 1 polish):** Hono + `dev-app.mjs` dogfood launcher (Track A PR2); optional efficiency diff mode setting; broader Playwright coverage for restore/stream.
+Quality budgets:
 
-### Horizon 2: Review Workbench
+- Common diff tab switch: under 300 ms.
+- Review queue remains interactive for 1,000 changed files and 10,000 trace events.
+- No full-session React rerender per stream event.
+- Validation output can grow without unbounded DOM or in-memory tails.
 
-Target: 1-2 months · **Status: foundations shipped (2026-07-11)** — queue, risk labels, keyboard flow, recipes, summaries, issue markers.
+### After That — Reliable Unattended Work
 
-Outcome: Spok becomes better than a terminal for understanding and accepting agent work.
+Goal: scheduled and event-triggered work behaves like a dependable local service.
 
-- ~~Build a review queue that groups changes by intent, file, command, and risk.~~ **Done:** `buildReviewQueue` + Changes sidebar **Queue** mode (`src/lib/review-queue.ts`, `review-queue-panel.tsx`) — groups security / config / binary / large / source / generated / test / docs with intent lines from causal steps.
-- ~~Add side-by-side and inline diff modes with keyboard review flow.~~ **Done (modes existed):** unified/split + keyboard **j/k** files, **n/p** hunks, **w** why, **u** layout, **s** stage when Changes tab active.
-- ~~Show "why this changed" by linking each hunk to trace nodes, tool calls, and prompts.~~ **Done (2026-07-11):** `getCausalStepsForHunk` + `buildFileChangeLinks` on reduce; Why rail scopes to active hunk (`n`/`p`); mini-rail chips prefer hunk-scoped steps.
-- ~~Add file risk labels: generated, config, security-sensitive, test-only, unknown binary, large file.~~ **Done:** `classifyFileRisk` + badges on queue, tree (high-risk), Changes header, Review file rows (`src/lib/file-risk.ts`).
-- ~~Add one-click validation recipes: test touched packages, run last failed command, run slash catalog check, build current workspace.~~ **Done:** Validation recipes bar prefills composer (`src/lib/validation-recipes.ts`, `validation-recipes-bar.tsx`).
-- ~~Add review summaries that can be copied into PR descriptions.~~ **Done:** `buildReviewSummary` + Changes **Summary** + Review PR **Fill from review** / copy (`src/lib/review-summary.ts`).
-- ~~Add persistent issue markers for failed tests, policy denials, incomplete tool calls, and parser warnings.~~ **Done:** `buildReviewIssueMarkers` surfaces in queue issues strip + summary; deeper sticky gutter markers still open.
-- ~~Dogfood review queue via sample playback.~~ **Done:** auth sample expanded (config/docs/env + multi-file); `focusReviewWorkbench` opens Changes + top-risk file + Why rail after sample complete.
-- **Still open (Horizon 2 polish):** sticky issue gutter in Monaco; deeper validation artifact browser.
-- **Hydration / HTML:** nested `<button>` in Validation lane fixed (row is `role=button` div); notification backdrop no longer uses self-closing `<button />`.
+1. Move scheduling and queue pumping behind the supervised runtime with restart recovery, missed-run policy, deduplication, jitter, and concurrency control.
+2. Make notification delivery durable across in-app, Windows, mobile/LAN, and optional external channels.
+3. Add GitHub/GitLab issue, PR, check-run, review-comment, and CI-log workflows behind least-privilege credentials.
+4. Promote hooks, skills, project rules, and custom agents into a visible scope/order/conflict model.
+5. Add MCP management with trust prompts, per-server/tool permissions, health, invocation logs, and secret-safe configuration.
+6. Add extension packaging only after permission declarations, compatibility checks, disable/recovery, and audit behavior are defined.
 
-### Horizon 3: Agent Mission Control
+### Parallel Platform Track — Runtime And Native Windows UI
 
-Target: 2-3 months · **Status: foundation started (2026-07-11)** — session inbox lanes ship.
+The shared Node runtime continues now; the full native UI starts after the agent lifecycle and runtime API contracts are stable enough to avoid duplicating churn.
 
-Outcome: Spok can manage many coding efforts at once.
+Near-term runtime work:
 
-- ~~Add a session inbox with queued, running, waiting-for-approval, failed, and ready-for-review states.~~ **Done (2026-07-11):** pure `buildSessionInbox` (`src/lib/session-inbox.ts`) classifies sessions into waiting / running / queued / failed / ready_review / idle from session status, git dirtiness, conflicts, and linked automation jobs. Sidebar **Inbox** groups by lane with operational reasons; topbar attention chip; mobile Sessions tab uses the same lanes. Collapses Idle when other work exists. Fingerprints avoid stream-tick re-renders.
-- Support multiple concurrent Grok Build agents, each isolated by worktree and policy profile.
-- Add worktree creation, branch naming, cleanup, and PR handoff flows.
-- Add routine/scheduled runs for recurring maintenance tasks.
-- Add run templates for common tasks such as fix CI, review branch, update dependencies, and implement issue.
-- Add notification and remote-control channels for mobile/LAN handoff.
-- Add session compare and replay so two agent attempts can be inspected side by side.
+1. Extract the remaining automation, extension, attachment, secret, and live-runtime routes from Next.
+2. Publish a versioned API/schema capability response and compatibility tests.
+3. Add runtime supervision metadata, orphan-process reconciliation, graceful shutdown, and portable packaging.
+4. Run browser/Tauri dogfood against the standalone runtime so native-client behavior is exercised continuously.
 
-### Horizon 4: Extensible Workflow Platform
+Native track gates:
 
-Target: 3-6 months
+- A WinUI host can supervise the bundled runtime, bootstrap a token in memory, and render a session inbox.
+- Native trace, diff, composer, approval, validation, settings, and accessibility prototypes meet quality budgets before product cutover.
+- No WebView/browser is required in the end-user shell.
+- The React UI remains the only feature-complete surface until native parity is real; do not maintain two independently evolving product designs.
 
-Outcome: Spok competes with Cursor/Claude Code on extensibility while staying Grok-first.
+See `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md` for the current boundary and cutover plan.
 
-- Add MCP server management with trust prompts, health checks, per-server permissions, and live invocation logs.
-- Add hooks for lifecycle events: session start, user submit, tool call, command complete, file changed, pre-commit, review ready.
-- Add skills and project rules with visible scope, ordering, and conflict resolution.
-- Add plugin packaging, install/update/remove UI, compatibility checks, and permission declarations.
-- Add GitHub/GitLab integration for issues, PRs, check runs, review comments, and CI logs.
-- Add IDE companion support for opening files, applying selections, and syncing diagnostics.
-- Add enterprise policy profiles for allowed commands, network access, workspace trust, and secret redaction.
+## Explicitly Deferred
 
-### Horizon 5: Native Product And Cloud-Ready Runners
+- Multi-provider support before Grok Build execution, parsing, review, and recovery are excellent.
+- Cloud runners before local run records, policy, replay, and handoff contracts are portable.
+- Team collaboration before single-user archive/review ownership is durable.
+- A broad plugin marketplace before permissions, compatibility, recovery, and audit are enforceable.
+- A native rewrite of privileged TypeScript domain logic.
 
-Target: 6+ months
+## Measures Of Product Quality
 
-Outcome: Spok becomes a polished desktop product with optional off-machine execution.
+| Area | Target |
+| --- | --- |
+| Cold shell | Usable in under 2 seconds on the target Windows laptop |
+| Recent session | First useful content in under 500 ms |
+| Stream ingest | Under 16 ms main-thread work per burst after batching |
+| Reliability | No silent loss of session/job terminal state after restart |
+| Isolation | No concurrent/background run writes to the main checkout by default |
+| Review | Every changed file has risk, cause when known, validation state, and next action |
+| Accessibility | Full core loop by keyboard; visible focus; reduced motion; AA contrast |
+| Security | Every privileged action is trusted, policy-checked, approval-gated when required, and audited |
 
-- Complete the native Windows UI track from `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`.
-- Remove WebView from the end-user shell.
-- Run the shared Node harness runtime as a supervised sidecar.
-- Add cloud or remote runners with the same trace, policy, review, and replay contracts as local runs.
-- Add team collaboration: shared sessions, review assignment, run history, policy templates, and audit export.
-- Add provider adapters beyond Grok Build only after Grok Build support is excellent.
+## Competitive Context
 
-## UI/UX Priorities
+Official product documentation checked on 2026-07-11 shows the desktop bar now includes parallel sessions with automatic worktree isolation, visual diff review, approvals, phone dispatch, schedules, connectors, and PR monitoring; Cursor also emphasizes background agents, multitasking/worktrees, review, and checkpoints. Spok should match the safety and lifecycle fundamentals while differentiating through Grok-native trace causality, review evidence, local-first control, and a fast operational UI.
 
-The product should feel quiet, dense, and operational. It should not feel like a landing page, a decorative dashboard, or a generic chat wrapper.
+- https://code.claude.com/docs/en/desktop
+- https://code.claude.com/docs/en/worktrees
+- https://code.claude.com/docs/en/scheduled-tasks
+- https://cursor.com/changelog/04-24-26
+- https://docs.cursor.com/en/agent/chat/checkpoints
 
-### Shell
+## Documentation Ownership
 
-- Keep primary navigation predictable: Inbox, Workspaces, Harness, Automations, Extensions.
-- ~~Session list is an operational inbox~~ **Done (2026-07-11):** sidebar Inbox groups by lane (Needs attention → Running → Queued → Failed → Ready for review → Idle) with one-line reasons; topbar chip surfaces attention/live/review counts.
-- Treat transcript, thinking, events, changes, review, validation, and artifacts as work surfaces with stable tabs.
-- Maintain a clear session status model: idle, starting, running, waiting, blocked, validating, ready for review, failed, complete.
-- Make mobile a real control surface, not a compressed desktop clone.
+- This file: current product priorities, sequence, and acceptance criteria.
+- `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`: runtime/native boundary and migration plan.
+- `docs/SECURITY_POSTURE.md`: active threat model and controls.
+- `docs/RELEASE_CHECKLIST.md`: shippable verification gates.
+- `docs/UPDATER_AND_DESKTOP.md`: current desktop glue, notifications, signing, and updater notes.
 
-### Trace And Causality
-
-- Make every visible change explainable.
-- Let users travel from diff hunk to event to command to prompt to raw event.
-- Preserve raw events for debugging while keeping the default view human-readable.
-- Use compact labels, timestamps, durations, and status icons instead of verbose prose.
-
-### Review
-
-- Review should be the product's center of gravity.
-- The user should be able to inspect, validate, approve, commit, or discard agent work without hunting through a transcript.
-- Risk should be visible before the user opens a file.
-- Validation failures should be grouped by actionable cause.
-
-### Performance UX
-
-- ~~Long sessions must stay responsive while data streams in.~~ **In place:** rAF batch + selective re-renders + virtualized lists (ongoing dogfood).
-- Panels should not resize unexpectedly when new content arrives.
-- Loading states should be local to the affected panel.
-- ~~Heavy editors and diff viewers should appear only when needed.~~ **Done:** active right-tab mount.
-- ~~Session reopen must not block on replaying every durable log.~~ **Done:** progressive snapshot-first restore.
-- The UI should expose when the runtime is busy, blocked, or waiting for permission.
-
-## Architecture Priorities
-
-### Runtime
-
-- ~~Shared runtime logic belongs in `src/server`.~~ **Done** for core privileged routes; extensions/automation extract residual.
-- ~~Next routes should become adapters.~~ **Done** for extracted handlers.
-- The desktop product should eventually run a native UI plus a local Node sidecar (Horizon 5 / Track B).
-- The runtime must preserve raw stream contracts and normalized store contracts.
-
-### Stream Contracts
-
-- Parser fixtures should cover every supported Grok Build event shape.
-- Unknown events should remain inspectable instead of disappearing.
-- Diff linkage must remain causality-preserving.
-- Replay/import/export should use versioned schemas.
-
-### Security
-
-- Default to least privilege.
-- Make trust visible and revocable.
-- Keep policy decisions explainable.
-- Redact secrets before logs, telemetry, exports, and UI surfaces.
-- Treat MCP, hooks, plugins, and remote runners as privileged extension points with explicit permissions.
-
-## Competitive Feature Checklist
-
-Spok should reach these capabilities before being called competitive:
-
-- ~~Fast desktop launch and session reopen.~~ **Strong (2026-07-11):** instant cached theme; shell-first unblock; lean snapshots; residual: cold Next compile + first fat-snapshot rewrite once.
-- ~~Multi-session inbox with concurrent agents.~~ **Partial / strong:** operational inbox lanes + attention chrome ship; concurrent worktree-isolated agents still open.
-- Worktree and branch orchestration. *(Git panel + worktree helpers exist; full orchestration UX still open.)*
-- ~~First-class review workbench with trace-linked diffs.~~ **Partial / strong:** risk-ordered queue, labels, keyboard flow, summaries, recipes ship; per-hunk causality still open.
-- ~~Validation lane with commands, tests, failures, and artifacts.~~ **Partial:** Validation tab + one-click recipes ship; artifact browser still open.
-- MCP management with permissioned invocation logs. *(MCP registry + trust basics ship; full management UI still open.)*
-- Hooks, skills, and project rules. *(Discovery, attach, hooks run ship; conflict/ordering UI still open.)*
-- ~~Mobile/LAN continuity.~~ **Done for dogfood:** host sync, mobile shell, `dev:lan`.
-- GitHub/GitLab PR and CI integration.
-- Native desktop shell without WebView for the end-user product. *(Horizon 5 / Track B.)*
-- ~~Performance budgets and automated replay benchmarks.~~ **Done:** `perf.ts` + `tests/perf`.
-- ~~Durable workspace trust and audit logs.~~ **Partial:** durable trust + revoke + trust audit events done; broader denial/mode audit coverage continues.
-- Optional remote/cloud runners using the same local contracts.
-
-## Documentation Policy
-
-- This file is the current product roadmap.
-- `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md` is the runtime/native desktop architecture plan.
-- `docs/SECURITY_POSTURE.md` is the current security posture.
-- `docs/RELEASE_CHECKLIST.md` is the release checklist.
-- Historical handoff snapshots and completed UI milestone trackers should not be kept as active docs.
+Historical handoffs, completed milestone trackers, and duplicate audit snapshots should not remain active documentation.

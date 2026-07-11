@@ -7,6 +7,7 @@ import { FileRiskBadge } from "./file-risk-badge";
 import { DiffStatChip, MonacoDiff, type DiffLayout } from "./monaco-diff";
 import { HunkNav } from "./hunk-nav";
 import { CausalRail, CausalMiniRail } from "./causal-rail";
+import { ReviewIssueRail } from "./review-issue-rail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,10 @@ import {
   reviewQueueIndex,
 } from "@/lib/review-queue";
 import { buildReviewSummary } from "@/lib/review-summary";
+import {
+  locateReviewIssuesForFile,
+  type LocatedReviewIssue,
+} from "@/lib/review-issue-location";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { refreshGitDiff } from "@/lib/harness";
@@ -67,6 +72,8 @@ export function DiffPanel() {
   const setCausalOpen = useSpokStore((s) => s.setCausalDrawerOpen);
   const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
   const selectFile = useSpokStore((s) => s.selectFile);
+  const selectTrace = useSpokStore((s) => s.selectTrace);
+  const setLeftTraceMode = useSpokStore((s) => s.setLeftTraceMode);
   const workspaceRightTab = useSpokStore((s) => s.workspaceRightTab);
 
   const file = session?.selectedFileId
@@ -80,6 +87,7 @@ export function DiffPanel() {
   const [layout, setLayout] = useState<DiffLayout>("unified");
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("queue");
   const [hunkIdx, setHunkIdx] = useState(0);
+  const [activeIssueId, setActiveIssueId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -94,6 +102,7 @@ export function DiffPanel() {
 
   useEffect(() => {
     setHunkIdx(0);
+    setActiveIssueId(null);
   }, [file?.id]);
 
   const onLayoutChange = (next: DiffLayout) => {
@@ -128,6 +137,29 @@ export function DiffPanel() {
   );
 
   const queuePos = queue ? reviewQueueIndex(queue, file?.id) : -1;
+
+  const locatedIssues = useMemo(
+    () =>
+      session && file && queue
+        ? locateReviewIssuesForFile(session, file, queue.issues)
+        : [],
+    [session, file, queue]
+  );
+
+  const openIssue = useCallback(
+    (located: LocatedReviewIssue) => {
+      setActiveIssueId(located.issue.id);
+      setHunkIdx(located.hunkIndex);
+      if (located.issue.fileId && located.issue.fileId !== file?.id) {
+        selectFile(located.issue.fileId);
+      }
+      if (located.issue.traceNodeId) {
+        selectTrace(located.issue.traceNodeId);
+        setLeftTraceMode("events");
+      }
+    },
+    [file?.id, selectFile, selectTrace, setLeftTraceMode]
+  );
 
   const copyDiff = async () => {
     if (!file) return;
@@ -233,6 +265,7 @@ export function DiffPanel() {
   const goHunk = useCallback(
     (delta: 1 | -1) => {
       if (!file || file.hunks.length === 0) return;
+      setActiveIssueId(null);
       setHunkIdx((i) => {
         const next = Math.max(0, Math.min(file.hunks.length - 1, i + delta));
         return next;
@@ -380,7 +413,14 @@ export function DiffPanel() {
               additions={file.additions}
               deletions={file.deletions}
             />
-            <HunkNav file={file} index={hunkIdx} onJump={setHunkIdx} />
+            <HunkNav
+              file={file}
+              index={hunkIdx}
+              onJump={(index) => {
+                setActiveIssueId(null);
+                setHunkIdx(index);
+              }}
+            />
             <Button
               variant={causalOpen ? "secondary" : "ghost"}
               size="sm"
@@ -533,39 +573,53 @@ export function DiffPanel() {
             {sidebarMode === "queue" ? <ReviewQueuePanel /> : <FileTree />}
           </div>
         </div>
-        <div className="min-w-0 flex-1">
-          {!file && queue && queue.flat.length > 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <FileText className="h-8 w-8 text-phosphor-green/25" />
-              <p className="font-mono text-[10px] uppercase tracking-widest text-phosphor-green/45">
-                Ready to review
-              </p>
-              <p className="max-w-sm text-[11px] text-phosphor-green/40">
-                {queue.summary.headline}. Select a file from the risk-ordered
-                queue, or press{" "}
-                <kbd className="rounded border border-phosphor-green/25 px-1 font-mono text-[10px]">
-                  j
-                </kbd>{" "}
-                to start.
-              </p>
-              <Button
-                size="sm"
-                variant="secondary"
-                className="h-7 text-[10px]"
-                onClick={() => selectFile(queue.flat[0].fileId)}
-              >
-                Review first file
-              </Button>
-            </div>
-          ) : (
-            <MonacoDiff
-              file={file}
-              className="h-full"
-              layout={layout}
-              onLayoutChange={onLayoutChange}
-              revealHunkIndex={hunkIdx}
-            />
-          )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ReviewIssueRail
+            issues={locatedIssues}
+            activeIssueId={activeIssueId}
+            onOpen={openIssue}
+          />
+          <div className="min-h-0 flex-1">
+            {!file && queue && queue.flat.length > 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                <FileText className="h-8 w-8 text-phosphor-green/25" />
+                <p className="font-mono text-[10px] uppercase tracking-widest text-phosphor-green/45">
+                  Ready to review
+                </p>
+                <p className="max-w-sm text-[11px] text-phosphor-green/40">
+                  {queue.summary.headline}. Select a file from the risk-ordered
+                  queue, or press{" "}
+                  <kbd className="rounded border border-phosphor-green/25 px-1 font-mono text-[10px]">
+                    j
+                  </kbd>{" "}
+                  to start.
+                </p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 text-[10px]"
+                  onClick={() => selectFile(queue.flat[0].fileId)}
+                >
+                  Review first file
+                </Button>
+              </div>
+            ) : (
+              <MonacoDiff
+                file={file}
+                className="h-full"
+                layout={layout}
+                onLayoutChange={onLayoutChange}
+                revealHunkIndex={hunkIdx}
+                revealLineNumber={
+                  locatedIssues.find(
+                    (entry) => entry.issue.id === activeIssueId
+                  )?.lineNumber
+                }
+                issues={locatedIssues}
+                onIssueOpen={openIssue}
+              />
+            )}
+          </div>
         </div>
         <CausalRail hunkIndex={hunkIdx} />
       </div>

@@ -12,7 +12,7 @@ The product goal is a world-class Grok Build control room that can compete with 
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
-**Horizon 1 (fast stable local harness) core is shipped:** stream batching, virtualized traces, progressive snapshot-first session restore, validation tab, durable trust, shared Node runtime (`npm run runtime`). Next product leap is Horizon 2 review workbench and Track B native Windows UI.
+The fast local harness and Review Workbench foundations are shipped: batched/virtualized streams, snapshot-first restore, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, and an operational session inbox. The current product milestone is a complete isolated-agent lifecycle: launch, monitor, approve, review, hand off, archive, and clean up without touching the main checkout.
 
 ## Why Spok
 
@@ -35,14 +35,16 @@ Requirements:
 - Grok CLI / Grok Build tooling available on your path
 - For desktop shell: Rust toolchain (used by Tauri interim packaging)
 
-### Browser (Next)
+### Preferred contributor dogfood
 
 ```powershell
 npm install
-npm run dev
+npm run dev:app
 ```
 
-Then open the local URL printed by Next.js, usually `http://localhost:3000`.
+This supervises the standalone privileged runtime and existing Next UI, proxies extracted APIs over loopback, and shuts down both process trees together. Open the local URL printed by the launcher, usually `http://127.0.0.1:3000`.
+
+Use `npm run dev` when working directly on residual Next-hosted APIs.
 
 ### Desktop (Tauri interim shell)
 
@@ -71,8 +73,10 @@ Listens on loopback (`SPOK_PORT` or `7788`). Used by the architecture plan as th
 
 ```powershell
 npm test
+npm run test:server
 npm run test:perf
 npm run build
+node scripts/dev-app.mjs --check
 npm run verify:slash-catalog
 npm run dev:lan
 npm run lan:urls
@@ -84,7 +88,7 @@ Use `npm run dev:lan` when testing from a phone or another device on the same ne
 
 ## Product Surfaces
 
-- Inbox: session queue, status, mobile entry points, and future multi-agent control.
+- Inbox: attention/running/queued/failed/review-ready lanes for foreground and isolated background work.
 - Workspaces: trusted roots, workspace navigation, Git context, and project-oriented workflows.
 - Harness: live Grok Build session control with transcript, thinking, events, changes, review, validation, and artifacts.
 - Automations: recurring or scheduled harness work (monitor + schedules).
@@ -92,7 +96,7 @@ Use `npm run dev:lan` when testing from a phone or another device on the same ne
 
 ## Architecture
 
-The current dogfood app is **Next.js + React** with a local API (thin adapters over `src/server`) and optional **Tauri** WebView shell. Privileged logic lives in TypeScript under `src/server` and `src/lib`. The long-term product is a **native Windows UI** talking to the same Node runtime over loopback HTTP — not a permanent WebView app.
+The current dogfood app is **Next.js + React** backed by a standalone Node runtime for extracted APIs and residual Next adapters, with an optional **Tauri** WebView shell. Privileged logic lives in TypeScript under `src/server` and `src/lib`. The long-term product is a **native Windows UI** talking to the same Node runtime over loopback HTTP—not a permanent WebView app.
 
 Key areas:
 
@@ -115,7 +119,7 @@ Security documentation lives in [docs/SECURITY_POSTURE.md](docs/SECURITY_POSTURE
 
 Tauri remains useful for internal packaging and updater experiments, but it is not the end-user performance target. The product direction is native Windows UI plus a shared local runtime. See [docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md](docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md) for the staged plan.
 
-Daily driver commands today: `npm run desktop` (Tauri + Next) or `npm run dev` (browser).
+Daily driver commands today: `npm run dev:app` (standalone runtime + browser UI), `npm run desktop` (interim Tauri + Next), or `npm run dev` for direct Next work.
 
 ## Documentation Policy
 

@@ -99,10 +99,12 @@ function IssueRow({
 
 function QueueFileRow({
   item,
+  issueCount,
   selected,
   onSelect,
 }: {
   item: ReviewQueueItem;
+  issueCount: number;
   selected: boolean;
   onSelect: (fileId: string) => void;
 }) {
@@ -141,6 +143,16 @@ function QueueFileRow({
       {item.staged && (
         <span className="text-[8px] font-bold text-phosphor-green" title="Staged">
           S
+        </span>
+      )}
+      {issueCount > 0 && (
+        <span
+          className="flex shrink-0 items-center gap-0.5 font-mono text-[9px] text-phosphor-amber"
+          title={`${issueCount} open review issue${issueCount === 1 ? "" : "s"}`}
+          aria-label={`${issueCount} open review issue${issueCount === 1 ? "" : "s"}`}
+        >
+          <AlertTriangle className="h-2.5 w-2.5" />
+          {issueCount}
         </span>
       )}
       <FileRiskBadge risk={item.risk} compact />
@@ -196,6 +208,23 @@ export function ReviewQueuePanel({
       .filter((g) => g.items.length > 0);
   }, [queue, search]);
 
+  const issueCountByFile = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!queue) return counts;
+    const fileIdByPath = new Map(
+      queue.flat.map((item) => [item.path.replace(/\\/g, "/"), item.fileId])
+    );
+    for (const issue of queue.issues) {
+      const fileId =
+        issue.fileId ??
+        (issue.path
+          ? fileIdByPath.get(issue.path.replace(/\\/g, "/"))
+          : undefined);
+      if (fileId) counts.set(fileId, (counts.get(fileId) ?? 0) + 1);
+    }
+    return counts;
+  }, [queue]);
+
   if (!session || !queue) return null;
 
   const toggleGroup = (id: ReviewGroupId) => {
@@ -208,13 +237,22 @@ export function ReviewQueuePanel({
   };
 
   const onIssue = (issue: ReviewIssueMarker) => {
-    if (issue.fileId) {
-      selectFile(issue.fileId);
-      return;
+    const normalizedPath = issue.path?.replace(/\\/g, "/");
+    const targetFileId =
+      issue.fileId ??
+      (normalizedPath
+        ? Object.values(session.files).find(
+            (file) => file.path.replace(/\\/g, "/") === normalizedPath
+          )?.id
+        : undefined);
+    if (targetFileId) {
+      selectFile(targetFileId);
     }
     if (issue.traceNodeId) {
       selectTrace(issue.traceNodeId);
       setLeftTraceMode("events");
+    }
+    if (!targetFileId && issue.traceNodeId) {
       setWorkspaceRightTab("validation");
     }
   };
@@ -321,6 +359,7 @@ export function ReviewQueuePanel({
                     <QueueFileRow
                       key={item.fileId}
                       item={item}
+                      issueCount={issueCountByFile.get(item.fileId) ?? 0}
                       selected={session.selectedFileId === item.fileId}
                       onSelect={selectFile}
                     />

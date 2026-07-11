@@ -173,6 +173,19 @@ export function stopSessionProcess(
   return { ok: result.ok, found: true, method: result.method, error: result.error };
 }
 
+/** Stop every registered harness process during runtime supervisor shutdown. */
+export function stopAllProcesses(): number {
+  let stopped = 0;
+  for (const [sessionId, entry] of registry) {
+    if (entry.child.exitCode == null && !entry.killed) {
+      killProcessTree(entry.child, { force: true });
+      stopped++;
+    }
+    registry.delete(sessionId);
+  }
+  return stopped;
+}
+
 /** Remove stale entries (process exited but not cleaned). */
 export function pruneStaleProcesses(): number {
   let n = 0;

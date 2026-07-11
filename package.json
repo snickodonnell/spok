@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
+    "dev:app": "node scripts/dev-app.mjs",
     "dev:lan": "node scripts/dev-lan.mjs prod",
     "dev:lan:hot": "node scripts/dev-lan.mjs hot",
     "build": "next build",

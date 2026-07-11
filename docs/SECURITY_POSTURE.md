@@ -1,10 +1,10 @@
 # Spok Security Posture
 
-Date: 2026-07-10
+Date: 2026-07-11
 
 Spok is a privileged local harness for Grok Build. It can browse workspaces, run Git, start agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary.
 
-**Runtime extraction status:** shared privileged handlers live under `src/server/routes/*`. Next `src/app/api/**` routes are thin adapters. Standalone dogfood entry: `npm run runtime` (loopback). Token, origin, workspace trust, policy, and audit expectations are unchanged for both Next adapters and the standalone server.
+**Runtime extraction status:** shared privileged handlers live under `src/server/routes/*`. Core Next `src/app/api/**` routes are thin adapters; automation/extensions/attachments/secrets still have residual Next-hosted routes. `npm run dev:app` supervises the standalone loopback runtime and proxies extracted routes through the existing UI. Token, origin, workspace trust, policy, and audit expectations are unchanged for both hosts.
 
 ## Trust Model
 
@@ -14,6 +14,7 @@ Spok is a privileged local harness for Grok Build. It can browse workspaces, run
 | Capability | Privileged routes require `x-spok-capability-token` from `GET /api/health`. |
 | Origin | Browser-originated calls must come from allowed local or private LAN origins. |
 | Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. Trust is **durable** in `~/.spok/workspace-trust.json` (schema v1) and survives process restart. |
+| Background isolation | Concurrent/unattended jobs that request isolation must create, trust, and verify a Spok-managed linked worktree before process launch. Failure runs no agent process and never falls back to the main checkout. |
 | Commands | Default command profiles are restricted. Custom or high-risk profiles require approval unless policy explicitly allows them. |
 | Secrets | Secrets are stored locally, redacted from exports/logs where possible, and treated as sensitive even after redaction. |
 | Desktop | Tauri is an interim shell. It must not gain arbitrary process spawn permissions. The long-term product is native UI plus the shared local runtime. |
@@ -42,7 +43,7 @@ The privileged API surface must call the shared authorization helpers:
 
 | Mode | How | Who can reach privileged APIs |
 | --- | --- | --- |
-| Default | `npm run dev` | This machine only through loopback hosts. |
+| Default | `npm run dev:app` or `npm run dev` | This machine only through loopback hosts. |
 | LAN | `npm run dev:lan` or `npm run start:lan` | Devices on the same private network that know the URL and can obtain a valid token. |
 | Pin one host | `SPOK_ALLOWED_HOSTS=192.168.1.10` | That Host value plus loopback. |
 
@@ -121,12 +122,14 @@ Focused checks:
 4. Set permission mode to `plan` and confirm agent spawn is blocked.
 5. Export diagnostics and confirm no raw capability token or stored secret value appears.
 6. Confirm Tauri config does not grant arbitrary process spawn.
+7. Queue an isolated job and confirm worktree-creation/policy failure launches no process and never uses the main checkout.
 
 ## Residual Risks
 
 - A dev server on a shared machine remains a local privilege surface.
 - LAN mode is only as safe as the local network and token handling.
-- Trusted workspace persistence is still being formalized in the runtime extraction plan.
+- Runtime/job reconciliation after an unexpected supervisor or app restart is incomplete.
+- Managed worktrees are preserved by default; intentional dirty/unpushed cleanup UX is still required.
 - Redaction can miss novel secret formats.
 - Windows file permissions are best-effort.
 - Future MCP, hooks, plugins, and remote runners increase attack surface unless each permission boundary is explicit and tested.

@@ -32,7 +32,7 @@ export function evaluateAutomationCwdPolicy(opts: {
 
   // Isolation guard: if isolate is requested and we have a main checkout path,
   // refuse to run when cwd equals main checkout (job should use worktree).
-  // Actual worktree creation is client-side; server only checks trust here.
+  // The runner must establish the linked worktree before requesting this gate.
   if (
     opts.isolate &&
     opts.mainCheckout &&

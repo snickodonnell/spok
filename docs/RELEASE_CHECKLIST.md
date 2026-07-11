@@ -18,6 +18,7 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Version bumped in relevant package metadata.
 - [ ] `npm test` green.
 - [ ] `npm run build` green.
+- [ ] `npm run test:server` green and `node scripts/dev-app.mjs --check` confirms runtime/UI readiness plus clean teardown.
 - [ ] Playwright smoke green when UI behavior changed.
 - [ ] Slash catalog verification green when slash command docs or catalog code changed.
 - [ ] Diagnostics bundle downloaded and scanned for secrets.
@@ -26,6 +27,7 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Tauri CSP present for internal builds.
 - [ ] No Tauri `shell:allow-spawn` or `shell:allow-execute`.
 - [ ] Trusted workspace and policy regressions covered by tests.
+- [ ] Isolated background jobs create/verify a managed worktree and fail closed before process launch if isolation cannot be established.
 - [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log) and live stream responsiveness.
 
 ## Internal Tauri Build

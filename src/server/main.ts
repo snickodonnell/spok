@@ -9,10 +9,16 @@
  */
 
 import http from "http";
+import { stopAllProcesses } from "@/lib/process-lifecycle";
 import { dispatchRequest } from "./router";
 
 const HOST = "127.0.0.1";
-const PORT = Number(process.env.SPOK_PORT || 7788) || 7788;
+const rawPort = process.env.SPOK_PORT?.trim();
+const parsedPort = rawPort === undefined || rawPort === "" ? 7788 : Number(rawPort);
+if (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65_535) {
+  throw new Error("SPOK_PORT must be an integer from 0 to 65535");
+}
+const PORT = parsedPort;
 
 function nodeToWebRequest(
   req: http.IncomingMessage,
@@ -97,16 +103,33 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[spok-runtime] listening on http://${HOST}:${PORT}`);
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : PORT;
+  console.log(`[spok-runtime] listening on http://${HOST}:${port}`);
+  if (process.send) {
+    process.send({ type: "spok-runtime-ready", host: HOST, port, pid: process.pid });
+  }
 });
 
+let shuttingDown = false;
 function shutdown(signal: string) {
-  // eslint-disable-next-line no-console
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`[spok-runtime] ${signal} — closing`);
+  stopAllProcesses();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("message", (message) => {
+  if (
+    message &&
+    typeof message === "object" &&
+    "type" in message &&
+    message.type === "spok-runtime-shutdown"
+  ) {
+    shutdown("supervisor request");
+  }
+});
