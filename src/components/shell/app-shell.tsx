@@ -58,7 +58,13 @@ export function AppShell() {
   useEffect(() => {
     let stop: (() => void) | undefined;
     let cancelled = false;
-    void import("@/lib/background-runner").then((m) => {
+    void import("@/lib/background-runner").then(async (m) => {
+      try {
+        await m.initializeAutomationJobs();
+      } catch {
+        // The runner surfaces a durable-recovery notification and stays paused.
+        return;
+      }
       if (cancelled) return;
       stop = m.startScheduleTicker();
       m.ensureQueuePump();

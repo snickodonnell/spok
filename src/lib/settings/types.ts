@@ -93,6 +93,8 @@ export interface SpokSettings {
   auditPrivilegedActions: boolean;
   /** Soft max concurrent durable sessions restored at boot */
   maxRestoredSessions: number;
+  /** Global background-agent slots. Lowering this never cancels active work. */
+  maxConcurrentBackground: number;
   ui: {
     /**
      * Appearance theme. Professional is the daily-driver default;

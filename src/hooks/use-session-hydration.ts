@@ -53,6 +53,9 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
   const setReducedMotion = useSpokStore((s) => s.setReducedMotion);
   const setOsNotifications = useSpokStore((s) => s.setOsNotifications);
   const setNativeFolderPicker = useSpokStore((s) => s.setNativeFolderPicker);
+  const setAutomationMaxConcurrent = useSpokStore(
+    (s) => s.setAutomationMaxConcurrent
+  );
 
   useEffect(() => {
     if (started.current) return;
@@ -86,6 +89,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
         ui.osNotifications ?? desktop?.osNotifications ?? true
       );
       setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
+      setAutomationMaxConcurrent(settings.resolved.maxConcurrentBackground);
       writeCachedUiPrefs({
         theme: ui.theme ?? "professional",
         crtEnabled: !!ui.crtEnabled,
@@ -282,6 +286,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
     setReducedMotion,
     setOsNotifications,
     setNativeFolderPicker,
+    setAutomationMaxConcurrent,
     opts.maxSessions,
     opts.preferSnapshot,
   ]);

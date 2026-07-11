@@ -90,49 +90,102 @@ export function fallbackSettings(): SpokSettings {
   return defaultSettings();
 }
 
-/** Global approval waiter used by harness when server returns approval_required. */
+/** Pending client waiter used when a harness run returns approval_required. */
 type ApprovalWaiter = {
   request: ApprovalRequest;
   resolve: (result: { decision: ApprovalDecision; onceToken?: string }) => void;
   reject: (err: Error) => void;
   settled: boolean;
+  abortCleanup?: () => void;
 };
 
-let waiter: ApprovalWaiter | null = null;
+export type ApprovalQueueSnapshot = {
+  requests: ApprovalRequest[];
+  activeRequestId: string | null;
+};
+
+const waiters: ApprovalWaiter[] = [];
 const listeners = new Set<(w: ApprovalWaiter | null) => void>();
+const queueListeners = new Set<(snapshot: ApprovalQueueSnapshot) => void>();
+
+function activeWaiter(): ApprovalWaiter | null {
+  return waiters.find((candidate) => !candidate.settled) ?? null;
+}
+
+function queueSnapshot(): ApprovalQueueSnapshot {
+  const requests = waiters
+    .filter((candidate) => !candidate.settled)
+    .map((candidate) => candidate.request);
+  return {
+    requests,
+    activeRequestId: requests[0]?.id ?? null,
+  };
+}
 
 export function subscribeApprovalWaiter(
   fn: (w: ApprovalWaiter | null) => void
 ): () => void {
   listeners.add(fn);
-  fn(waiter);
+  fn(activeWaiter());
   return () => listeners.delete(fn);
 }
 
-function emitWaiter() {
-  for (const fn of listeners) fn(waiter);
+/** Subscribe to every in-process approval currently blocking a harness run. */
+export function subscribeApprovalQueue(
+  fn: (snapshot: ApprovalQueueSnapshot) => void
+): () => void {
+  queueListeners.add(fn);
+  fn(queueSnapshot());
+  return () => queueListeners.delete(fn);
+}
+
+function emitApprovalState() {
+  const active = activeWaiter();
+  for (const fn of listeners) fn(active);
+  const snapshot = queueSnapshot();
+  for (const fn of queueListeners) fn(snapshot);
 }
 
 /**
- * Show approval overlay and wait for user decision.
- * Only one pending approval at a time.
+ * Queue an approval and wait for the matching user decision.
+ * Concurrent sessions remain independent; a later request never supersedes an
+ * earlier waiter or inherits its decision/token.
  */
 export function requestUserApproval(
-  request: ApprovalRequest
+  request: ApprovalRequest,
+  signal?: AbortSignal
 ): Promise<{ decision: ApprovalDecision; onceToken?: string }> {
-  if (waiter && !waiter.settled) {
-    waiter.settled = true;
-    waiter.reject(new Error("Superseded by another approval request"));
-    waiter = null;
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("Approval interrupted", "AbortError"));
   }
+  const existing = waiters.find(
+    (candidate) => !candidate.settled && candidate.request.id === request.id
+  );
+  if (existing) {
+    return Promise.reject(
+      new Error(`Approval request ${request.id} is already waiting`)
+    );
+  }
+
   return new Promise((resolve, reject) => {
-    waiter = {
+    const next: ApprovalWaiter = {
       request,
       resolve,
       reject,
       settled: false,
     };
-    emitWaiter();
+    if (signal) {
+      const onAbort = () => {
+        const current = takeWaiter(request.id);
+        if (!current) return;
+        void submitApprovalDecision(request.id, "deny").catch(() => undefined);
+        current.reject(new DOMException("Approval interrupted", "AbortError"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      next.abortCleanup = () => signal.removeEventListener("abort", onAbort);
+    }
+    waiters.push(next);
+    emitApprovalState();
     // Phase 5: surface approval in notification center (lazy store import avoids cycles)
     void import("./store")
       .then(({ useSpokStore }) => {
@@ -150,19 +203,26 @@ export function requestUserApproval(
   });
 }
 
-function takeWaiter(): ApprovalWaiter | null {
-  const current = waiter;
-  if (!current || current.settled) return null;
+function takeWaiter(requestId?: string): ApprovalWaiter | null {
+  const index = requestId
+    ? waiters.findIndex(
+        (candidate) =>
+          !candidate.settled && candidate.request.id === requestId
+      )
+    : waiters.findIndex((candidate) => !candidate.settled);
+  if (index < 0) return null;
+  const [current] = waiters.splice(index, 1);
   current.settled = true;
-  waiter = null;
-  emitWaiter();
+  current.abortCleanup?.();
+  emitApprovalState();
   return current;
 }
 
 export async function completeUserApproval(
-  decision: ApprovalDecision
+  decision: ApprovalDecision,
+  requestId?: string
 ): Promise<void> {
-  const current = takeWaiter();
+  const current = takeWaiter(requestId);
   if (!current) return;
 
   try {
@@ -190,13 +250,17 @@ export async function completeUserApproval(
   }
 }
 
-export function cancelUserApproval(): void {
-  const current = takeWaiter();
+export function cancelUserApproval(requestId?: string): void {
+  const current = takeWaiter(requestId);
   if (!current) return;
   void submitApprovalDecision(current.request.id, "deny").catch(() => undefined);
   current.resolve({ decision: "deny" });
 }
 
 export function getApprovalWaiter(): ApprovalWaiter | null {
-  return waiter;
+  return activeWaiter();
+}
+
+export function getApprovalQueue(): ApprovalRequest[] {
+  return queueSnapshot().requests;
 }

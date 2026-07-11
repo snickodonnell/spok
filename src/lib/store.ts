@@ -31,6 +31,10 @@ import {
   readCachedUiPrefs,
   writeCachedUiPrefs,
 } from "./ui-prefs-cache";
+import {
+  AUTOMATION_DEFAULTS,
+  clampAutomationConcurrency,
+} from "./automation/types";
 
 /** Seed appearance from localStorage so CRT/theme don't wait on /api/settings. */
 const cachedUi = readCachedUiPrefs();
@@ -113,10 +117,6 @@ function createSession(partial?: Partial<Session>): Session {
 
 function recomputeMetrics(session: Session): SessionMetrics {
   return recomputeSessionMetrics(session);
-}
-
-function normalizeRepoPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\.?\//, "");
 }
 
 interface SpokState {
@@ -270,6 +270,7 @@ interface SpokState {
   setNotificationsOpen: (open: boolean) => void;
   automationJobs: import("./automation/types").AutomationJob[];
   automationMaxConcurrent: number;
+  setAutomationMaxConcurrent: (value: number) => void;
   enqueueJob: (job: import("./automation/types").AutomationJob) => void;
   patchJob: (
     id: string,
@@ -313,7 +314,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   monitorOpen: false,
   notificationsOpen: false,
   automationJobs: [],
-  automationMaxConcurrent: 2,
+  automationMaxConcurrent: AUTOMATION_DEFAULTS.maxConcurrentBackground,
   notifications: [],
   compareSessionIds: null,
   selectedSubagentLaneId: null,
@@ -952,6 +953,8 @@ export const useSpokStore = create<SpokState>((set, get) => ({
 
   setMonitorOpen: (open) => set({ monitorOpen: open }),
   setNotificationsOpen: (open) => set({ notificationsOpen: open }),
+  setAutomationMaxConcurrent: (value) =>
+    set({ automationMaxConcurrent: clampAutomationConcurrency(value) }),
 
   enqueueJob: (job) =>
     set((s) => ({
@@ -968,7 +971,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   clearFinishedJobs: () =>
     set((s) => ({
       automationJobs: s.automationJobs.filter((j) =>
-        ["queued", "running", "waiting_approval"].includes(j.status)
+        ["queued", "starting", "running", "waiting_approval"].includes(j.status)
       ),
     })),
 

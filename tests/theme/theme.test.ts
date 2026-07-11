@@ -96,4 +96,17 @@ describe("settings ui merge", () => {
     assert.equal(bundle.resolved.ui.reducedMotion, true);
     assert.equal(bundle.resolved.desktop.nativeFolderPicker, false);
   });
+
+  it("sanitizes and merges the global background concurrency limit", () => {
+    assert.equal(
+      sanitizePartialSettings({ maxConcurrentBackground: 99 })
+        .maxConcurrentBackground,
+      8
+    );
+    assert.equal(
+      mergeLayeredSettings({ user: { maxConcurrentBackground: 4 } }).resolved
+        .maxConcurrentBackground,
+      4
+    );
+  });
 });

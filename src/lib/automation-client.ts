@@ -26,6 +26,55 @@ export type AutomationBundleResponse = {
   };
 };
 
+export type AutomationJobsResponse = {
+  version: 1;
+  jobs: AutomationJob[];
+  reconciled: number;
+  discarded: number;
+  corrupt: boolean;
+};
+
+async function automationJobError(res: Response, fallback: string): Promise<Error> {
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+  };
+  return new Error(body.error || `${fallback} (${res.status})`);
+}
+
+/** Boot-only durable ledger load. The server performs restart reconciliation. */
+export async function fetchAutomationJobs(): Promise<AutomationJobsResponse> {
+  const res = await localFetch("/api/automation/jobs", { cache: "no-store" });
+  if (!res.ok) throw await automationJobError(res, "Failed to load automation jobs");
+  return (await res.json()) as AutomationJobsResponse;
+}
+
+/** Persist one newly queued job before it becomes eligible to execute. */
+export async function saveAutomationJob(job: AutomationJob): Promise<AutomationJob> {
+  const res = await localFetch("/api/automation/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job }),
+  });
+  if (!res.ok) throw await automationJobError(res, "Failed to persist automation job");
+  const body = (await res.json()) as { job: AutomationJob };
+  return body.job;
+}
+
+/** Debounced ledger snapshot for transitions, linkage changes, and removals. */
+export async function replaceAutomationJobs(
+  jobs: AutomationJob[]
+): Promise<AutomationJob[]> {
+  const res = await localFetch("/api/automation/jobs", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jobs }),
+  });
+  if (!res.ok) throw await automationJobError(res, "Failed to persist job ledger");
+  const body = (await res.json()) as { jobs: AutomationJob[] };
+  return body.jobs;
+}
+
 export async function fetchAutomationBundle(): Promise<AutomationBundleResponse> {
   const res = await localFetch("/api/automation");
   if (!res.ok) throw new Error(`Failed to load automation (${res.status})`);

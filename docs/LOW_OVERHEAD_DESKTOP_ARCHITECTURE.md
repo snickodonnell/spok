@@ -46,13 +46,14 @@ The standalone router currently owns:
 - filesystem browse;
 - workspace trust;
 - settings and approvals;
+- durable automation job ledger and restart reconciliation;
 - diagnostics and Grok CLI status.
 
 These handlers live under `src/server` with thin `src/app/api` adapters.
 
 ### Residual Next-hosted routes
 
-Automation, schedules/channels, extensions/hooks, attachments, secrets, and live-runtime discovery still depend on Next route hosting. They use the same capability token during `dev:app`, but they are not yet standalone-runtime contracts. Extract these before a native client depends on them.
+Automation schedules/channels, extensions/hooks, attachments, secrets, and live-runtime discovery still depend on Next route hosting. The job ledger already runs through the standalone runtime. Residual routes use the same capability token during `dev:app`, but they are not yet standalone-runtime contracts. Extract them before a native client depends on them.
 
 ## Contributor And Dogfood Commands
 
@@ -127,7 +128,7 @@ Before native UI implementation expands, add a capability response containing:
 
 ### A1 — Finish the standalone runtime
 
-1. Extract automation queue/schedules/channels and notification APIs.
+1. Extract automation schedules/channels and notification APIs; the durable job ledger is already standalone-runtime owned.
 2. Extract extensions, hooks, skills/MCP discovery, attachments, secrets, and live-runtime APIs.
 3. Add handler parity tests and a versioned capability response for every route group.
 4. Move queue pumping and schedule reconciliation into the supervised runtime.

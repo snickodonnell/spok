@@ -28,6 +28,9 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] No Tauri `shell:allow-spawn` or `shell:allow-execute`.
 - [ ] Trusted workspace and policy regressions covered by tests.
 - [ ] Isolated background jobs create/verify a managed worktree and fail closed before process launch if isolation cannot be established.
+- [ ] Durable automation ledger roundtrip, overwrite, redaction, trust denial, corrupt input, and interrupted-run reconciliation tests pass.
+- [ ] Fleet capacity persists across restart; lowering it does not cancel active work, and queued rows explain capacity plus priority/FIFO position.
+- [ ] Cancelling a run while it waits for approval removes that exact request and cannot later launch the process.
 - [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log) and live stream responsiveness.
 
 ## Internal Tauri Build

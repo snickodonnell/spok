@@ -101,7 +101,7 @@ export async function runHarness(opts: {
         onceToken?: string;
       };
       try {
-        userDecision = await requestUserApproval(approval);
+        userDecision = await requestUserApproval(approval, opts.signal);
       } catch (e) {
         const message =
           e instanceof Error ? e.message : "Approval flow failed";

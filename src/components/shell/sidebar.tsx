@@ -35,6 +35,7 @@ import {
   inboxSessionFingerprint,
 } from "@/lib/session-inbox";
 import { SessionInboxPanel } from "./session-inbox";
+import { performInboxJobAction } from "@/lib/inbox-actions";
 
 /** Secondary layout views — primary product modes live in the topbar. */
 const VIEWS: { mode: ViewMode; icon: typeof Brain; label: string }[] = [
@@ -59,13 +60,19 @@ export function Sidebar() {
       .join("|")
   );
   const jobsKey = useSpokStore((s) => inboxJobsFingerprint(s.automationJobs));
+  const maxConcurrentBackground = useSpokStore(
+    (s) => s.automationMaxConcurrent
+  );
 
   const inbox = useMemo(() => {
     void sessionListKey;
     void jobsKey;
     const state = useSpokStore.getState();
-    return buildSessionInbox(state.sessions, { jobs: state.automationJobs });
-  }, [sessionListKey, jobsKey]);
+    return buildSessionInbox(state.sessions, {
+      jobs: state.automationJobs,
+      maxConcurrentBackground,
+    });
+  }, [sessionListKey, jobsKey, maxConcurrentBackground]);
 
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
   const setActiveSession = useSpokStore((s) => s.setActiveSession);
@@ -80,7 +87,7 @@ export function Sidebar() {
   const activeJobs = useSpokStore(
     (s) =>
       s.automationJobs.filter((j) =>
-        ["queued", "running", "waiting_approval"].includes(j.status)
+        ["queued", "starting", "running", "waiting_approval"].includes(j.status)
       ).length
   );
   const unreadNotes = useSpokStore(
@@ -276,6 +283,11 @@ export function Sidebar() {
             setViewMode("workspace");
           }}
           onDelete={(id) => deleteSession(id)}
+          onJobAction={(jobId, action) => {
+            const result = performInboxJobAction(jobId, action);
+            if (result.ok) toast.message(result.message);
+            else toast.error(result.message);
+          }}
         />
       </div>
 

@@ -7,7 +7,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -15,9 +14,6 @@ const fixturePath = join(
   root,
   "tests/fixtures/grok/slash-commands.fixture.json"
 );
-
-// Load compiled-free TS via tsx if available, else expect JSON-only path
-const require = createRequire(import.meta.url);
 
 async function main() {
   const write = process.argv.includes("--write");

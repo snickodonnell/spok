@@ -30,7 +30,9 @@ export type IsolationSetupDependencies = {
     branch: string;
   }) => Promise<WorktreeCreateResult>;
   /** Persist the privileged result before the verification request. */
-  onCreated?: (workspace: Omit<IsolatedWorkspace, "status">) => void;
+  onCreated?: (
+    workspace: Omit<IsolatedWorkspace, "status">
+  ) => unknown | Promise<unknown>;
 };
 
 export class IsolationSetupError extends Error {
@@ -215,7 +217,7 @@ export async function establishIsolatedWorkspace(
     branch: created.createdWorktree.branch,
     mainCheckout,
   };
-  deps.onCreated?.(linked);
+  await deps.onCreated?.(linked);
 
   const status = requireStatus(
     await deps.getStatus(linked.worktreePath),

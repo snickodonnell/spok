@@ -12,7 +12,7 @@ The product goal is a world-class Grok Build control room that can compete with 
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
-The fast local harness and Review Workbench foundations are shipped: batched/virtualized streams, snapshot-first restore, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, and an operational session inbox. The current product milestone is a complete isolated-agent lifecycle: launch, monitor, approve, review, hand off, archive, and clean up without touching the main checkout.
+The fast local harness and Review Workbench foundations are shipped: batched/virtualized streams, snapshot-first restore, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, and an operational session inbox. Spok now also has a compact New Task flow, strict isolated background launch, a durable/recoverable job ledger, concurrent approval queue, inbox fleet controls, and durable user-tunable runner capacity with explicit queue reasons. The current product milestone is completing review handoff, archive, and safe worktree cleanup without touching the main checkout.
 
 ## Why Spok
 
@@ -22,7 +22,7 @@ The fast local harness and Review Workbench foundations are shipped: batched/vir
 | Thinking and events | Human-readable thinking plus raw event inspection for trace debugging and parser regression work. |
 | Changes and review | Diff, review, and Git surfaces built into the harness instead of left to a terminal scrollback. |
 | Validation | First-class **Validation** tab: tools, tests, builds, run outcomes, approvals, and policy denials in time order with jump-to-event/file. |
-| Safety | Loopback-only local API checks, bearer token auth, Origin validation, **durable** workspace trust (with revoke UI), policy denials, audit log, and no-store JSON responses. |
+| Safety | Loopback-only local API checks, bearer token auth, Origin validation, **durable** workspace trust and job recovery, worktree isolation, concurrent approval queue, policy denials, audit log, and no-store JSON responses. |
 | Mobile/LAN | Host session discovery and phone-friendly session views for inbox, timeline, trace, diffs, and artifacts. |
 | Extensibility | Skills, hooks, MCP registry foundations; roadmap covers full MCP management, plugins, GitHub/GitLab, and IDE companion flows. |
 
@@ -88,7 +88,7 @@ Use `npm run dev:lan` when testing from a phone or another device on the same ne
 
 ## Product Surfaces
 
-- Inbox: attention/running/queued/failed/review-ready lanes for foreground and isolated background work.
+- Inbox: attention/running/queued/failed/review-ready lanes for foreground and isolated background work, including priority-aware queue position and capacity waits.
 - Workspaces: trusted roots, workspace navigation, Git context, and project-oriented workflows.
 - Harness: live Grok Build session control with transcript, thinking, events, changes, review, validation, and artifacts.
 - Automations: recurring or scheduled harness work (monitor + schedules).

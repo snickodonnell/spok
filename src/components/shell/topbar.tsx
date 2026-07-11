@@ -45,12 +45,15 @@ export function Topbar() {
   const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
   const notifications = useSpokStore((s) => s.notifications);
   const automationJobs = useSpokStore((s) => s.automationJobs);
+  const maxConcurrentBackground = useSpokStore(
+    (s) => s.automationMaxConcurrent
+  );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
   const productMode = useSpokStore((s) => s.productMode);
   const setProductMode = useSpokStore((s) => s.setProductMode);
   const unread = unreadCount(notifications);
   const activeJobs = automationJobs.filter((j) =>
-    ["queued", "running", "waiting_approval"].includes(j.status)
+    ["queued", "starting", "running", "waiting_approval"].includes(j.status)
   ).length;
   // Lightweight inbox attention badge (same fingerprints as sidebar).
   const sessionListKey = useSpokStore((s) =>
@@ -64,6 +67,7 @@ export function Topbar() {
   void jobsKey;
   const inboxSummary = buildSessionInbox(useSpokStore.getState().sessions, {
     jobs: useSpokStore.getState().automationJobs,
+    maxConcurrentBackground,
   }).summary;
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
   const setCrtEnabled = useSpokStore((s) => s.setCrtEnabled);

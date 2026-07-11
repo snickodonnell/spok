@@ -69,6 +69,8 @@ export function Workspace() {
   const updateSession = useSpokStore((s) => s.updateSession);
 
   const validationBadge = useMemo(() => {
+    // Selector fingerprint intentionally gates this heavier derived scan.
+    void validationKey;
     if (!sessionId) return 0;
     const session = useSpokStore.getState().sessions[sessionId];
     if (!session) return 0;
@@ -76,6 +78,9 @@ export function Workspace() {
   }, [sessionId, validationKey]);
 
   const reviewAttention = useMemo(() => {
+    // These lightweight selectors intentionally gate the review queue scan.
+    void filesChanged;
+    void validationKey;
     if (!sessionId) return 0;
     const session = useSpokStore.getState().sessions[sessionId];
     if (!session) return 0;

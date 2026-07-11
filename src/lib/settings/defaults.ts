@@ -1,4 +1,5 @@
 import type { CommandProfile, SpokSettings } from "./types";
+import { AUTOMATION_DEFAULTS } from "../automation/types";
 
 export const DEFAULT_COMMAND_PROFILES: CommandProfile[] = [
   {
@@ -102,6 +103,7 @@ export function defaultSettings(): SpokSettings {
     showHiddenFolders: false,
     auditPrivilegedActions: true,
     maxRestoredSessions: 12,
+    maxConcurrentBackground: AUTOMATION_DEFAULTS.maxConcurrentBackground,
     ui: {
       // Professional is the daily-driver default (Phase 6); CRT remains one click away.
       theme: "professional",

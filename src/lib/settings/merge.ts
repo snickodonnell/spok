@@ -1,5 +1,6 @@
 import { defaultSettings } from "./defaults";
 import { isUiTheme } from "../theme";
+import { clampAutomationConcurrency } from "../automation/types";
 import type {
   LayeredSettingsBundle,
   PermissionRule,
@@ -84,6 +85,10 @@ export function mergeLayeredSettings(layers: {
     if (partial.maxRestoredSessions !== undefined) {
       resolved.maxRestoredSessions = partial.maxRestoredSessions;
       provenance.maxRestoredSessions = layer;
+    }
+    if (partial.maxConcurrentBackground !== undefined) {
+      resolved.maxConcurrentBackground = partial.maxConcurrentBackground;
+      provenance.maxConcurrentBackground = layer;
     }
     if (partial.version !== undefined) {
       resolved.version = partial.version;
@@ -192,6 +197,14 @@ export function sanitizePartialSettings(
     out.maxRestoredSessions = Math.max(
       1,
       Math.min(100, Math.floor(input.maxRestoredSessions))
+    );
+  }
+  if (
+    typeof input.maxConcurrentBackground === "number" &&
+    Number.isFinite(input.maxConcurrentBackground)
+  ) {
+    out.maxConcurrentBackground = clampAutomationConcurrency(
+      input.maxConcurrentBackground
     );
   }
   if (isObject(input.ui)) {

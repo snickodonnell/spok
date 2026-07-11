@@ -241,6 +241,65 @@ describe("buildSessionInbox", () => {
     assert.equal(inbox.entries[0].lane, "waiting");
     assert.equal(inbox.summary.attentionCount, 1);
     assert.match(inbox.summary.headline, /attention/i);
+    assert.equal(inbox.entries[0].jobId, "j1");
+    assert.equal(inbox.entries[0].jobActions?.cancel, true);
+  });
+
+  it("includes pre-session queued jobs as stable actionable rows", () => {
+    const jobs = [
+      job({
+        id: "j-queued",
+        title: "queued work",
+        status: "queued",
+        priority: 3,
+      }),
+    ];
+    const inbox = buildSessionInbox([], { jobs });
+
+    assert.equal(inbox.summary.total, 1);
+    assert.equal(inbox.summary.byLane.queued, 1);
+    assert.equal(inbox.entries[0].entryId, "job:j-queued");
+    assert.equal(inbox.entries[0].sessionId, "");
+    assert.equal(inbox.entries[0].jobId, "j-queued");
+    assert.equal(inbox.entries[0].jobPriority, 3);
+    assert.equal(inbox.entries[0].jobActions?.priority_up, true);
+    assert.match(inbox.entries[0].reason, /next to start/i);
+  });
+
+  it("explains queued rows when all fleet slots are occupied", () => {
+    const jobs = [
+      job({ id: "j-running", status: "running" }),
+      job({ id: "j-waiting", status: "queued" }),
+    ];
+    const inbox = buildSessionInbox([], {
+      jobs,
+      maxConcurrentBackground: 1,
+    });
+    const waiting = inbox.entries.find((entry) => entry.jobId === "j-waiting");
+
+    assert.match(waiting?.reason ?? "", /waiting for capacity/i);
+    assert.match(waiting?.reason ?? "", /1\/1 slots in use/i);
+  });
+
+  it("keeps pre-session worktree preparation visible and cancellable", () => {
+    const inbox = buildSessionInbox([], {
+      jobs: [job({ id: "j-starting", status: "starting" })],
+    });
+
+    assert.equal(inbox.entries[0].lane, "running");
+    assert.equal(inbox.entries[0].status, "starting");
+    assert.match(inbox.entries[0].reason, /preparing/i);
+    assert.equal(inbox.entries[0].jobActions?.cancel, true);
+  });
+
+  it("does not duplicate a job once its linked session exists", () => {
+    const sessions = [baseSession({ id: "s-linked" })];
+    const jobs = [job({ id: "j-linked", sessionId: "s-linked" })];
+    const inbox = buildSessionInbox(sessions, { jobs });
+
+    assert.equal(inbox.entries.length, 1);
+    assert.equal(inbox.entries[0].entryId, "session:s-linked");
+    assert.equal(inbox.entries[0].jobId, "j-linked");
   });
 
   it("sorts newer sessions first within a lane", () => {

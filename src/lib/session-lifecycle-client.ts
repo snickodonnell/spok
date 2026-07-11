@@ -5,7 +5,6 @@
 import {
   getCachedCapabilityToken,
   getCapabilityToken,
-  localFetch,
 } from "./local-api-client";
 import { CAPABILITY_HEADER } from "./security/local-api-shared";
 import { useSpokStore } from "./store";
@@ -129,8 +128,11 @@ export async function stopAllLiveHarnesses(opts?: {
  * so an "active session" never blocks folder changes (mobile requirement).
  */
 export async function stopPreviousSessionForWorkspaceChange(
-  _nextCwd: string
+  nextCwd: string
 ): Promise<void> {
+  // Kept in the contract for callers and future same-workspace optimization;
+  // current policy deliberately tears down every live process on context switch.
+  void nextCwd;
   // Always clear live processes — user is intentionally changing context
   await stopAllLiveHarnesses();
 

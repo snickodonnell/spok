@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it, before, after } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createJob,
+  mergeRecoveredJobs,
   pickNextJobs,
   countRunning,
+  describeJobQueueStatus,
   patchJob,
   summarizeJobResult,
   trimJobHistory,
@@ -81,6 +83,51 @@ describe("background queue", () => {
     assert.equal(countRunning(jobs), 1);
   });
 
+  it("explains capacity waits using runner priority order", () => {
+    const running = createJob({
+      kind: "background",
+      title: "running",
+      prompt: "p",
+      cwd: "/a",
+    });
+    running.status = "running";
+    const low = createJob({
+      kind: "background",
+      title: "low",
+      prompt: "p",
+      cwd: "/a",
+      priority: 0,
+    });
+    const high = createJob({
+      kind: "background",
+      title: "high",
+      prompt: "p",
+      cwd: "/a",
+      priority: 5,
+    });
+    const jobs = [low, running, high];
+
+    const highStatus = describeJobQueueStatus(jobs, high.id, 1);
+    const lowStatus = describeJobQueueStatus(jobs, low.id, 1);
+    assert.equal(highStatus?.position, 1);
+    assert.equal(lowStatus?.position, 2);
+    assert.match(highStatus?.reason ?? "", /1\/1 slots in use/i);
+    assert.match(lowStatus?.reason ?? "", /#2 of 2/i);
+  });
+
+  it("describes the next durable job when capacity is available", () => {
+    const next = createJob({
+      kind: "background",
+      title: "next",
+      prompt: "p",
+      cwd: "/a",
+    });
+    assert.match(
+      describeJobQueueStatus([next], next.id, 2)?.reason ?? "",
+      /next to start/i
+    );
+  });
+
   it("summarizes job results", () => {
     assert.match(
       summarizeJobResult({
@@ -118,6 +165,30 @@ describe("background queue", () => {
     const trimmed = trimJobHistory([active, ...done], 5);
     assert.ok(trimmed.some((j) => j.id === active.id));
     assert.ok(trimmed.length <= 5);
+  });
+
+  it("prefers jobs created while boot recovery was in flight", () => {
+    const recovered = createJob({
+      kind: "background",
+      title: "stale disk copy",
+      prompt: "old",
+      cwd: "/a",
+    });
+    recovered.id = "job-race";
+    const current = { ...recovered, title: "fresh in-memory copy", prompt: "new" };
+    const anotherRecovered = createJob({
+      kind: "background",
+      title: "disk only",
+      prompt: "restore",
+      cwd: "/a",
+    });
+
+    const merged = mergeRecoveredJobs(
+      [current],
+      [recovered, anotherRecovered]
+    );
+    assert.equal(merged.find((job) => job.id === "job-race")?.title, "fresh in-memory copy");
+    assert.ok(merged.some((job) => job.id === anotherRecovered.id));
   });
 });
 

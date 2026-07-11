@@ -9,6 +9,11 @@
  */
 
 import type { AutomationJob } from "./automation/types";
+import {
+  getJobActionAvailability,
+  type JobActionAvailability,
+} from "./automation/job-actions";
+import { describeJobQueueStatus } from "./automation/queue";
 import type { Session, SessionStatus } from "./types";
 
 /** Operational inbox lane (UI-derived; not a durable SessionStatus). */
@@ -85,6 +90,9 @@ export const INBOX_LANE_ORDER: InboxLane[] = [
 ];
 
 export type InboxEntry = {
+  /** Stable row identity for session-backed and pre-session job rows. */
+  entryId: string;
+  /** Empty until a queued background job creates its session. */
   sessionId: string;
   name: string;
   lane: InboxLane;
@@ -92,7 +100,7 @@ export type InboxEntry = {
   reason: string;
   status: SessionStatus;
   cwd: string;
-  source: Session["source"];
+  source: Session["source"] | "job";
   updatedAt: number;
   durable: boolean;
   eventCount: number;
@@ -105,6 +113,9 @@ export type InboxEntry = {
   hydratePartial: boolean;
   /** Linked automation job status when present. */
   jobStatus?: AutomationJob["status"];
+  jobId?: string;
+  jobPriority?: number;
+  jobActions?: JobActionAvailability;
   /** Sort within lane: lower first (more urgent / newer). */
   sortKey: number;
 };
@@ -129,6 +140,8 @@ export type SessionInbox = {
 export type ClassifyInboxOptions = {
   /** Automation jobs that may link to sessions via sessionId. */
   jobs?: AutomationJob[];
+  /** Global runner slots used to explain queue position and capacity waits. */
+  maxConcurrentBackground?: number;
 };
 
 function jobBySessionId(
@@ -142,6 +155,8 @@ function jobBySessionId(
       case "waiting_approval":
         return 0;
       case "running":
+        return 1;
+      case "starting":
         return 1;
       case "queued":
         return 2;
@@ -235,6 +250,10 @@ export function classifySessionLane(
     return { lane: "running", reason: "Background job running" };
   }
 
+  if (job?.status === "starting") {
+    return { lane: "running", reason: "Preparing isolated workspace" };
+  }
+
   if (job?.status === "queued") {
     return { lane: "queued", reason: "Queued background job" };
   }
@@ -276,6 +295,19 @@ export function classifySessionLane(
     return { lane: "ready_review", reason: "Ready for review" };
   }
 
+  if (job?.status === "cancelled") {
+    return { lane: "idle", reason: "Background job cancelled" };
+  }
+  if (job?.status === "skipped") {
+    return {
+      lane: "idle",
+      reason: job.error?.trim().slice(0, 48) || "Background job skipped",
+    };
+  }
+  if (job?.status === "completed") {
+    return { lane: "idle", reason: "Background job completed" };
+  }
+
   if (status === "completed") {
     return { lane: "idle", reason: "Completed" };
   }
@@ -301,6 +333,7 @@ export function toInboxEntry(
       : 0;
 
   return {
+    entryId: `session:${session.id}`,
     sessionId: session.id,
     name: session.name,
     lane,
@@ -319,7 +352,85 @@ export function toInboxEntry(
     backgroundJob: !!session.backgroundJob || !!job,
     hydratePartial: !!session.hydratePartial,
     jobStatus: job?.status,
+    jobId: job?.id,
+    jobPriority: job?.priority,
+    jobActions: job ? getJobActionAvailability(job.status) : undefined,
     sortKey: laneRank * 1e15 - urgencyBoost - session.updatedAt,
+  };
+}
+
+function jobLane(job: AutomationJob): { lane: InboxLane; reason: string } {
+  switch (job.status) {
+    case "waiting_approval":
+      return { lane: "waiting", reason: "Waiting for approval" };
+    case "running":
+      return { lane: "running", reason: "Background job running" };
+    case "starting":
+      return { lane: "running", reason: "Preparing isolated workspace" };
+    case "queued":
+      return {
+        lane: "queued",
+        reason:
+          job.priority === 0
+            ? "Queued background job"
+            : `Queued · priority ${job.priority}`,
+      };
+    case "failed":
+      return {
+        lane: "failed",
+        reason: job.error?.trim().slice(0, 48) || "Background job failed",
+      };
+    case "cancelled":
+      return { lane: "idle", reason: "Background job cancelled" };
+    case "skipped":
+      return {
+        lane: "idle",
+        reason: job.error?.trim().slice(0, 48) || "Background job skipped",
+      };
+    default:
+      return { lane: "idle", reason: "Background job completed" };
+  }
+}
+
+/** Queue/history entry used before a background job has created a session. */
+export function jobToInboxEntry(job: AutomationJob): InboxEntry {
+  const { lane, reason } = jobLane(job);
+  const updatedAt = job.finishedAt ?? job.startedAt ?? job.createdAt;
+  return {
+    entryId: `job:${job.id}`,
+    sessionId: "",
+    name: job.title,
+    lane,
+    reason,
+    status:
+      job.status === "running"
+        ? "running"
+        : job.status === "starting"
+          ? "starting"
+        : job.status === "failed"
+          ? "error"
+          : job.status === "completed"
+            ? "completed"
+            : job.status === "cancelled"
+              ? "stopped"
+              : "ready",
+    cwd: job.cwd,
+    source: "job",
+    updatedAt,
+    durable: false,
+    eventCount: 0,
+    filesChanged: 0,
+    errorCount: job.status === "failed" ? 1 : 0,
+    conflictCount: 0,
+    branch: job.branch ?? null,
+    isWorktree: !!job.worktreePath,
+    backgroundJob: true,
+    hydratePartial: false,
+    jobStatus: job.status,
+    jobId: job.id,
+    jobPriority: job.priority,
+    jobActions: getJobActionAvailability(job.status),
+    sortKey: INBOX_LANE_META[lane].rank * 1e15 - updatedAt,
   };
 }
 
@@ -328,10 +439,25 @@ export function buildSessionInbox(
   opts: ClassifyInboxOptions = {}
 ): SessionInbox {
   const list = Array.isArray(sessions) ? sessions : Object.values(sessions);
-  const jobMap = jobBySessionId(opts.jobs);
+  const jobs = opts.jobs ?? [];
+  const jobMap = jobBySessionId(jobs);
+  const sessionIds = new Set(list.map((session) => session.id));
 
-  const entries = list
-    .map((s) => toInboxEntry(s, jobMap.get(s.id) ?? null))
+  const entries = [
+    ...list.map((s) => toInboxEntry(s, jobMap.get(s.id) ?? null)),
+    ...jobs
+      .filter((job) => !job.sessionId || !sessionIds.has(job.sessionId))
+      .map(jobToInboxEntry),
+  ]
+    .map((entry) => {
+      if (entry.jobStatus !== "queued" || !entry.jobId) return entry;
+      const queue = describeJobQueueStatus(
+        jobs,
+        entry.jobId,
+        opts.maxConcurrentBackground
+      );
+      return queue ? { ...entry, reason: queue.reason } : entry;
+    })
     .sort((a, b) => a.sortKey - b.sortKey || b.updatedAt - a.updatedAt);
 
   const byLane: Record<InboxLane, number> = {
@@ -432,7 +558,10 @@ export function inboxSessionFingerprint(session: Session): string {
 
 export function inboxJobsFingerprint(jobs: AutomationJob[]): string {
   return jobs
-    .map((j) => `${j.id}:${j.sessionId ?? ""}:${j.status}`)
+    .map(
+      (j) =>
+        `${j.id}:${j.sessionId ?? ""}:${j.status}:${j.priority}:${j.branch ?? ""}:${j.worktreePath ?? ""}`
+    )
     .sort()
     .join("|");
 }

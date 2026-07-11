@@ -37,3 +37,8 @@ export {
 } from "./routes/approvals";
 export { handleDiagnosticsGet } from "./routes/diagnostics";
 export { handleCliStatusGet } from "./routes/cli-status";
+export {
+  handleAutomationJobsGet,
+  handleAutomationJobsPost,
+  handleAutomationJobsPut,
+} from "./routes/automation-jobs";

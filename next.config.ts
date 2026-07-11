@@ -14,6 +14,7 @@ const RUNTIME_ROUTE_SOURCES = [
   "/api/approvals",
   "/api/diagnostics",
   "/api/runtime/cli-status",
+  "/api/automation/jobs",
 ];
 
 function getLoopbackRuntimeOrigin(): string | null {

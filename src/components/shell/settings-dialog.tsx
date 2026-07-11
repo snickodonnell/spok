@@ -70,6 +70,9 @@ export function SettingsDialog() {
   const setReducedMotion = useSpokStore((s) => s.setReducedMotion);
   const setOsNotifications = useSpokStore((s) => s.setOsNotifications);
   const setNativeFolderPicker = useSpokStore((s) => s.setNativeFolderPicker);
+  const setAutomationMaxConcurrent = useSpokStore(
+    (s) => s.setAutomationMaxConcurrent
+  );
   const setDiagnosticsOpen = useSpokStore((s) => s.setDiagnosticsOpen);
   const setKeyboardHelpOpen = useSpokStore((s) => s.setKeyboardHelpOpen);
   const setAppPermissionMode = useSpokStore((s) => s.setAppPermissionMode);
@@ -105,13 +108,19 @@ export function SettingsDialog() {
       setDraft({ ...res.resolved });
       setGrants(res.grants ?? []);
       setAppPermissionMode(res.resolved.permissionMode);
+      setAutomationMaxConcurrent(res.resolved.maxConcurrentBackground);
       await loadTrusted();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load settings");
     } finally {
       setLoading(false);
     }
-  }, [cwd, setAppPermissionMode, loadTrusted]);
+  }, [
+    cwd,
+    setAppPermissionMode,
+    setAutomationMaxConcurrent,
+    loadTrusted,
+  ]);
 
   useEffect(() => {
     if (open) void load();
@@ -193,6 +202,7 @@ export function SettingsDialog() {
       resolved.ui.osNotifications ?? resolved.desktop.osNotifications
     );
     setNativeFolderPicker(resolved.desktop.nativeFolderPicker);
+    setAutomationMaxConcurrent(resolved.maxConcurrentBackground);
   };
 
   const setTheme = (theme: UiTheme) => {

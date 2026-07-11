@@ -27,8 +27,13 @@ import {
   enqueueBackgroundJob,
   cancelBackgroundJob,
   tickSchedules,
+  applyAutomationConcurrency,
 } from "@/lib/background-runner";
-import { jobStatusLabel } from "@/lib/automation/queue";
+import {
+  countRunning,
+  describeJobQueueStatus,
+  jobStatusLabel,
+} from "@/lib/automation/queue";
 import {
   extractSubagentLanes,
   mergeSubagentSummaries,
@@ -38,6 +43,8 @@ import type {
   ScheduleDefinition,
   ScheduleIntervalUnit,
 } from "@/lib/automation/types";
+import { AUTOMATION_CONCURRENCY_RANGE } from "@/lib/automation/types";
+import { saveSettings } from "@/lib/settings-client";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -69,7 +76,7 @@ function JobStatusBadge({ status }: { status: AutomationJob["status"] }) {
       ? ("cyan" as const)
       : status === "failed"
         ? ("error" as const)
-        : status === "running"
+        : status === "starting" || status === "running"
           ? ("amber" as const)
           : status === "waiting_approval"
             ? ("amber" as const)
@@ -87,6 +94,9 @@ export function MonitorPanel() {
   const open = useSpokStore((s) => s.monitorOpen);
   const setOpen = useSpokStore((s) => s.setMonitorOpen);
   const jobs = useSpokStore((s) => s.automationJobs);
+  const maxConcurrentBackground = useSpokStore(
+    (s) => s.automationMaxConcurrent
+  );
   const sessions = useSpokStore((s) => s.sessions);
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
   const setActiveSession = useSpokStore((s) => s.setActiveSession);
@@ -105,6 +115,7 @@ export function MonitorPanel() {
   const [tab, setTab] = useState<TabId>("queue");
   const [loading, setLoading] = useState(false);
   const [bundle, setBundle] = useState<AutomationBundleResponse | null>(null);
+  const [capacitySaving, setCapacitySaving] = useState(false);
 
   // Quick queue form
   const [bgTitle, setBgTitle] = useState("");
@@ -145,14 +156,22 @@ export function MonitorPanel() {
   const activeJobs = useMemo(
     () =>
       jobs.filter((j) =>
-        ["queued", "running", "waiting_approval"].includes(j.status)
+        ["queued", "starting", "running", "waiting_approval"].includes(j.status)
       ),
+    [jobs]
+  );
+  const runningCount = useMemo(() => countRunning(jobs), [jobs]);
+  const queuedCount = useMemo(
+    () => jobs.filter((job) => job.status === "queued").length,
     [jobs]
   );
   const historyJobs = useMemo(
     () =>
       jobs.filter(
-        (j) => !["queued", "running", "waiting_approval"].includes(j.status)
+        (j) =>
+          !["queued", "starting", "running", "waiting_approval"].includes(
+            j.status
+          )
       ),
     [jobs]
   );
@@ -196,6 +215,32 @@ export function MonitorPanel() {
     setBgTitle("");
     toast.success("Queued in background — stay in your current session");
     setTab("queue");
+  };
+
+  const updateCapacity = async (next: number) => {
+    if (next === maxConcurrentBackground || capacitySaving) return;
+    setCapacitySaving(true);
+    try {
+      const response = await saveSettings({
+        layer: "user",
+        settings: { maxConcurrentBackground: next },
+      });
+      const applied = applyAutomationConcurrency(
+        response.resolved.maxConcurrentBackground
+      );
+      toast.success(`Fleet capacity set to ${applied}`, {
+        description:
+          applied < runningCount
+            ? "Active runs will finish; new work waits for an open slot."
+            : "Queued work can start as slots become available.",
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not save fleet capacity"
+      );
+    } finally {
+      setCapacitySaving(false);
+    }
   };
 
   const addSchedule = async () => {
@@ -277,9 +322,14 @@ export function MonitorPanel() {
             </DialogDescription>
           </DialogHeader>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {activeJobs.length > 0 && (
+            {runningCount > 0 && (
               <Badge variant="amber" className="text-[9px]">
-                {activeJobs.length} active
+                {runningCount}/{maxConcurrentBackground} slots used
+              </Badge>
+            )}
+            {queuedCount > 0 && (
+              <Badge variant="muted" className="text-[9px]">
+                {queuedCount} queued
               </Badge>
             )}
             <Button
@@ -329,7 +379,7 @@ export function MonitorPanel() {
           <TabsList className="mx-4 mt-2 h-9 w-auto justify-start self-start">
             <TabsTrigger value="queue" className="gap-1 text-[10px]">
               <Play className="h-3 w-3" />
-              Foreground queue
+              Fleet
               {activeJobs.length > 0 && (
                 <span className="text-phosphor-amber">{activeJobs.length}</span>
               )}
@@ -362,6 +412,65 @@ export function MonitorPanel() {
 
           <ScrollArea className="min-h-0 flex-1 px-4 pb-4">
             <TabsContent value="queue" className="mt-3 space-y-3">
+              <section
+                className="rounded-lg border border-phosphor-cyan/20 bg-phosphor-cyan/5 p-3"
+                aria-labelledby="fleet-capacity-title"
+                data-testid="fleet-capacity"
+              >
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <h3
+                      id="fleet-capacity-title"
+                      className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-phosphor-cyan/75"
+                    >
+                      <Layers className="h-3 w-3" />
+                      Fleet capacity
+                    </h3>
+                    <p className="mt-1 text-[11px] leading-relaxed text-phosphor-green/50">
+                      {runningCount} of {maxConcurrentBackground} runner slots in
+                      use
+                      {queuedCount > 0
+                        ? ` · ${queuedCount} ${queuedCount === 1 ? "job" : "jobs"} waiting`
+                        : " · no queued work"}
+                      . Lowering capacity never stops an active run.
+                      Higher limits use more CPU and memory.
+                    </p>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 text-[10px] text-phosphor-green/55">
+                    Slots
+                    <select
+                      aria-label="Maximum concurrent background jobs"
+                      value={maxConcurrentBackground}
+                      disabled={capacitySaving}
+                      onChange={(event) =>
+                        void updateCapacity(Number(event.target.value))
+                      }
+                      className="h-8 rounded-md border border-phosphor-cyan/30 bg-black/50 px-2 font-mono text-xs text-phosphor-green outline-none focus:border-phosphor-cyan/60 disabled:opacity-50"
+                    >
+                      {Array.from(
+                        {
+                          length:
+                            AUTOMATION_CONCURRENCY_RANGE.max -
+                            AUTOMATION_CONCURRENCY_RANGE.min +
+                            1,
+                        },
+                        (_, index) => index + AUTOMATION_CONCURRENCY_RANGE.min
+                      ).map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                    {capacitySaving && (
+                      <Loader2
+                        className="h-3.5 w-3.5 animate-spin text-phosphor-cyan"
+                        aria-label="Saving fleet capacity"
+                      />
+                    )}
+                  </label>
+                </div>
+              </section>
+
               <div className="rounded-lg border border-phosphor-green/15 bg-black/25 p-3">
                 <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-widest text-phosphor-green/40">
                   <Play className="h-3 w-3" />
@@ -409,7 +518,7 @@ export function MonitorPanel() {
               {activeJobs.length > 0 && (
                 <section>
                   <h3 className="mb-2 text-[10px] uppercase tracking-widest text-phosphor-green/40">
-                    Active
+                    In progress and queued
                   </h3>
                   <div className="space-y-2">
                     {activeJobs.map((job) => (
@@ -422,6 +531,13 @@ export function MonitorPanel() {
                             : undefined
                         }
                         onCancel={() => cancelBackgroundJob(job.id)}
+                        queueReason={
+                          describeJobQueueStatus(
+                            jobs,
+                            job.id,
+                            maxConcurrentBackground
+                          )?.reason
+                        }
                       />
                     ))}
                   </div>
@@ -844,10 +960,12 @@ function JobCard({
   job,
   onOpen,
   onCancel,
+  queueReason,
 }: {
   job: AutomationJob;
   onOpen?: () => void;
   onCancel?: () => void;
+  queueReason?: string;
 }) {
   return (
     <div className="rounded-lg border border-phosphor-green/15 bg-black/30 p-3">
@@ -870,6 +988,12 @@ function JobCard({
           <p className="mt-1 line-clamp-2 text-[11px] text-phosphor-green/50">
             {job.summary || job.prompt}
           </p>
+          {queueReason && (
+            <p className="mt-1 flex items-center gap-1 text-[10px] text-phosphor-cyan/70">
+              <Pause className="h-3 w-3 shrink-0" />
+              {queueReason}
+            </p>
+          )}
           <p className="mt-1 font-mono text-[9px] text-phosphor-green/30">
             {job.cwd}
             {job.startedAt

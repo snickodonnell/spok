@@ -11,14 +11,18 @@ import { runHarness } from "./harness";
 import { defaultGrokFlags, baseFlagsArgs } from "./grok-commands";
 import {
   createJob,
+  mergeRecoveredJobs,
   pickNextJobs,
   summarizeJobResult,
 } from "./automation/queue";
 import { createNotification } from "./automation/notifications";
 import {
   checkAutomationPolicy,
+  fetchAutomationJobs,
   fetchDueSchedules,
   markScheduleRun,
+  replaceAutomationJobs,
+  saveAutomationJob,
 } from "./automation-client";
 import type { AutomationJob } from "./automation/types";
 import { AUTOMATION_DEFAULTS } from "./automation/types";
@@ -31,8 +35,187 @@ import {
 
 const aborts = new Map<string, AbortController>();
 const startingJobs = new Set<string>();
+const durableJobIds = new Set<string>();
 let pumping = false;
+let pumpPending = false;
 let scheduleTimer: ReturnType<typeof setInterval> | null = null;
+let ledgerSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let ledgerInitialized = false;
+let ledgerInitialization: Promise<void> | null = null;
+let ledgerWriteChain: Promise<void> = Promise.resolve();
+let lastLedgerFingerprint = "";
+let ledgerFailureNotified = false;
+
+function ledgerFingerprint(jobs: AutomationJob[]): string {
+  return JSON.stringify(jobs);
+}
+
+function queueLedgerWrite(task: () => Promise<void>): Promise<void> {
+  const next = ledgerWriteChain.catch(() => undefined).then(task);
+  ledgerWriteChain = next.catch(() => undefined);
+  return next;
+}
+
+function scheduleLedgerSync(delayMs = 250): void {
+  if (!ledgerInitialized) return;
+  if (ledgerSyncTimer) clearTimeout(ledgerSyncTimer);
+  ledgerSyncTimer = setTimeout(() => {
+    ledgerSyncTimer = null;
+    const jobs = useSpokStore.getState().automationJobs;
+    const fingerprint = ledgerFingerprint(jobs);
+    if (fingerprint === lastLedgerFingerprint) return;
+    void queueLedgerWrite(async () => {
+      const current = useSpokStore.getState().automationJobs;
+      const currentFingerprint = ledgerFingerprint(current);
+      if (currentFingerprint === lastLedgerFingerprint) return;
+      try {
+        await replaceAutomationJobs(current);
+        lastLedgerFingerprint = currentFingerprint;
+        ledgerFailureNotified = false;
+      } catch (error) {
+        if (!ledgerFailureNotified) {
+          ledgerFailureNotified = true;
+          useSpokStore.getState().pushNotification(
+            createNotification({
+              kind: "run_failed",
+              title: "Job recovery state could not be saved",
+              body: error instanceof Error ? error.message : "Durable job write failed",
+              action: "open_monitor",
+            })
+          );
+        }
+        scheduleLedgerSync(2_000);
+      }
+    });
+  }, delayMs);
+}
+
+function patchJobState(jobId: string, patch: Partial<AutomationJob>): void {
+  useSpokStore.getState().patchJob(jobId, {
+    ...patch,
+    updatedAt: Date.now(),
+  });
+}
+
+async function persistNewJobBeforeRun(jobId: string): Promise<void> {
+  try {
+    await queueLedgerWrite(async () => {
+      const job = useSpokStore.getState().automationJobs.find((item) => item.id === jobId);
+      if (!job || job.status !== "queued") return;
+      const saved = await saveAutomationJob(job);
+      durableJobIds.add(jobId);
+      if (saved.cwd !== job.cwd || saved.title !== job.title) {
+        patchJobState(jobId, { cwd: saved.cwd, title: saved.title });
+      }
+    });
+    void pumpQueue();
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : "Job could not be saved safely";
+    const now = Date.now();
+    patchJobState(jobId, {
+      status: "failed",
+      finishedAt: now,
+      error: reason,
+      summary: "Job was not started because durable recovery failed",
+      outcome: {
+        kind: "failed",
+        at: now,
+        reason,
+        summary: "Durable recovery failed before launch",
+      },
+    });
+    useSpokStore.getState().pushNotification(
+      createNotification({
+        kind: "run_failed",
+        title: "Background job not started",
+        body: reason,
+        jobId,
+        action: "open_monitor",
+      })
+    );
+  }
+}
+
+async function persistCurrentJobNow(jobId: string): Promise<void> {
+  await queueLedgerWrite(async () => {
+    const job = useSpokStore
+      .getState()
+      .automationJobs.find((item) => item.id === jobId);
+    if (!job) return;
+    await saveAutomationJob(job);
+  });
+}
+
+/** Load and reconcile the durable ledger once before any queue work can run. */
+export function initializeAutomationJobs(): Promise<void> {
+  if (ledgerInitialization) return ledgerInitialization;
+  ledgerInitialization = (async () => {
+    const recovered = await fetchAutomationJobs();
+    const currentJobs = useSpokStore.getState().automationJobs;
+    const mergedJobs = mergeRecoveredJobs(currentJobs, recovered.jobs);
+    useSpokStore.setState({ automationJobs: mergedJobs });
+    for (const job of recovered.jobs) {
+      if (job.status === "queued") durableJobIds.add(job.id);
+    }
+    lastLedgerFingerprint = ledgerFingerprint(recovered.jobs);
+    ledgerInitialized = true;
+    useSpokStore.subscribe((state, previous) => {
+      if (state.automationJobs !== previous.automationJobs) scheduleLedgerSync();
+    });
+    if (ledgerFingerprint(mergedJobs) !== lastLedgerFingerprint) {
+      scheduleLedgerSync(0);
+    }
+
+    if (recovered.reconciled > 0) {
+      useSpokStore.getState().pushNotification(
+        createNotification({
+          kind: "run_failed",
+          title: "Interrupted jobs recovered",
+          body: `${recovered.reconciled} stale job${recovered.reconciled === 1 ? " was" : "s were"} marked interrupted after restart.`,
+          action: "open_monitor",
+        })
+      );
+    }
+    if (recovered.corrupt || recovered.discarded > 0) {
+      useSpokStore.getState().pushNotification(
+        createNotification({
+          kind: "run_failed",
+          title: "Unsafe job records were not restored",
+          body: recovered.corrupt
+            ? "The durable job ledger is corrupt or has an unsupported version."
+            : `${recovered.discarded} malformed job record${recovered.discarded === 1 ? " was" : "s were"} discarded.`,
+          action: "open_monitor",
+        })
+      );
+    }
+    void pumpQueue();
+  })().catch((error) => {
+    ledgerInitialization = null;
+    useSpokStore.getState().pushNotification(
+      createNotification({
+        kind: "run_failed",
+        title: "Background jobs are paused",
+        body:
+          error instanceof Error
+            ? error.message
+            : "Durable job recovery could not be loaded",
+        action: "open_monitor",
+      })
+    );
+    throw error;
+  });
+  return ledgerInitialization;
+}
+
+/** Apply a fleet limit immediately. Existing runs continue; newly free slots wake. */
+export function applyAutomationConcurrency(value: number): number {
+  const store = useSpokStore.getState();
+  store.setAutomationMaxConcurrent(value);
+  const applied = useSpokStore.getState().automationMaxConcurrent;
+  void pumpQueue();
+  return applied;
+}
 
 /** Enqueue a background job and kick the pump. */
 export function enqueueBackgroundJob(opts: {
@@ -72,7 +255,7 @@ export function enqueueBackgroundJob(opts: {
     })
   );
 
-  void pumpQueue();
+  void persistNewJobBeforeRun(job.id);
   return job.id;
 }
 
@@ -86,17 +269,31 @@ export function cancelBackgroundJob(jobId: string): void {
   const job = store.automationJobs.find((j) => j.id === jobId);
   if (!job) return;
   if (job.status === "queued") {
-    store.patchJob(jobId, {
+    const now = Date.now();
+    patchJobState(jobId, {
       status: "cancelled",
-      finishedAt: Date.now(),
+      finishedAt: now,
       summary: "Cancelled while queued",
+      outcome: {
+        kind: "cancelled",
+        at: now,
+        summary: "Cancelled while queued",
+      },
     });
-  } else if (job.status === "running" || job.status === "waiting_approval") {
-    store.patchJob(jobId, {
+    void persistCurrentJobNow(jobId);
+  } else if (
+    job.status === "starting" ||
+    job.status === "running" ||
+    job.status === "waiting_approval"
+  ) {
+    const now = Date.now();
+    patchJobState(jobId, {
       status: "cancelled",
-      finishedAt: Date.now(),
+      finishedAt: now,
       summary: "Cancelled",
+      outcome: { kind: "cancelled", at: now, summary: "Cancelled" },
     });
+    void persistCurrentJobNow(jobId);
     if (job.sessionId) {
       void import("./local-api-client").then(({ localFetch }) =>
         localFetch(
@@ -110,7 +307,11 @@ export function cancelBackgroundJob(jobId: string): void {
 }
 
 async function pumpQueue(): Promise<void> {
-  if (pumping) return;
+  if (!ledgerInitialized) return;
+  if (pumping) {
+    pumpPending = true;
+    return;
+  }
   pumping = true;
   try {
     const store = useSpokStore.getState();
@@ -123,11 +324,15 @@ async function pumpQueue(): Promise<void> {
     }
   } finally {
     pumping = false;
+    if (pumpPending) {
+      pumpPending = false;
+      void pumpQueue();
+    }
   }
 }
 
 async function runJob(jobId: string): Promise<void> {
-  if (startingJobs.has(jobId)) return;
+  if (startingJobs.has(jobId) || !durableJobIds.has(jobId)) return;
   startingJobs.add(jobId);
 
   const store = useSpokStore.getState();
@@ -139,6 +344,47 @@ async function runJob(jobId: string): Promise<void> {
 
   const ac = new AbortController();
   aborts.set(jobId, ac);
+
+  patchJobState(jobId, {
+    status: "starting",
+    preparingAt: Date.now(),
+  });
+  try {
+    // Establish the durable starting marker before any privileged preparation.
+    await persistCurrentJobNow(jobId);
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : "Could not persist starting state";
+    const finishedAt = Date.now();
+    patchJobState(jobId, {
+      status: "failed",
+      finishedAt,
+      error: reason,
+      summary: "Job was not started because recovery state could not be saved",
+      outcome: {
+        kind: "failed",
+        at: finishedAt,
+        reason,
+        summary: "Durable starting transition failed",
+      },
+    });
+    aborts.delete(jobId);
+    startingJobs.delete(jobId);
+    void persistCurrentJobNow(jobId);
+    void pumpQueue();
+    return;
+  }
+
+  if (
+    ac.signal.aborted ||
+    useSpokStore.getState().automationJobs.find((item) => item.id === jobId)
+      ?.status === "cancelled"
+  ) {
+    aborts.delete(jobId);
+    startingJobs.delete(jobId);
+    void pumpQueue();
+    return;
+  }
 
   let isolatedWorkspace: IsolatedWorkspace | undefined;
   let executionCwd = job.cwd;
@@ -168,13 +414,14 @@ async function runJob(jobId: string): Promise<void> {
               confirm: true,
               trustWorktree: true,
             }),
-          onCreated: (created) => {
+          onCreated: async (created) => {
             // Keep the review handoff discoverable even if verification fails.
-            useSpokStore.getState().patchJob(jobId, {
+            patchJobState(jobId, {
               worktreePath: created.worktreePath,
               branch: created.branch,
               mainCheckout: created.mainCheckout,
             });
+            await persistCurrentJobNow(jobId);
           },
         }
       );
@@ -182,7 +429,7 @@ async function runJob(jobId: string): Promise<void> {
       worktreePath = isolatedWorkspace.worktreePath;
       branch = isolatedWorkspace.branch;
       mainCheckout = isolatedWorkspace.mainCheckout;
-      useSpokStore.getState().patchJob(jobId, {
+      patchJobState(jobId, {
         worktreePath,
         branch,
         mainCheckout,
@@ -201,15 +448,23 @@ async function runJob(jobId: string): Promise<void> {
     if (!ac.signal.aborted) {
       const reason = e instanceof Error ? e.message : "Job preparation failed";
       const status = job.isolate ? "failed" : "skipped";
-      store.patchJob(jobId, {
+      const finishedAt = Date.now();
+      patchJobState(jobId, {
         status,
-        finishedAt: Date.now(),
+        finishedAt,
         error: reason,
         summary: summarizeJobResult({
           status,
           error: reason,
         }),
+        outcome: {
+          kind: status,
+          at: finishedAt,
+          reason,
+          summary: summarizeJobResult({ status, error: reason }),
+        },
       });
+      await persistCurrentJobNow(jobId).catch(() => undefined);
       store.pushNotification(
         createNotification({
           kind: job.isolate ? "run_failed" : "schedule_skipped",
@@ -240,7 +495,11 @@ async function runJob(jobId: string): Promise<void> {
     return;
   }
 
-  if (ac.signal.aborted) {
+  if (
+    ac.signal.aborted ||
+    useSpokStore.getState().automationJobs.find((item) => item.id === jobId)
+      ?.status === "cancelled"
+  ) {
     aborts.delete(jobId);
     startingJobs.delete(jobId);
     void pumpQueue();
@@ -305,11 +564,48 @@ async function runJob(jobId: string): Promise<void> {
     meta: { backgroundJob: true, jobId },
   });
 
-  store.patchJob(jobId, {
+  patchJobState(jobId, {
     status: "running",
     startedAt: Date.now(),
     sessionId,
   });
+
+  try {
+    // Do not launch a process until job/session/worktree linkage is durable.
+    await persistCurrentJobNow(jobId);
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : "Could not persist runtime linkage";
+    const finishedAt = Date.now();
+    patchJobState(jobId, {
+      status: "failed",
+      finishedAt,
+      error: reason,
+      summary: "Agent was not launched because recovery state could not be saved",
+      outcome: {
+        kind: "failed",
+        at: finishedAt,
+        reason,
+        summary: "Durable runtime linkage failed",
+      },
+    });
+    aborts.delete(jobId);
+    startingJobs.delete(jobId);
+    void persistCurrentJobNow(jobId);
+    void pumpQueue();
+    return;
+  }
+
+  if (
+    ac.signal.aborted ||
+    useSpokStore.getState().automationJobs.find((item) => item.id === jobId)
+      ?.status === "cancelled"
+  ) {
+    aborts.delete(jobId);
+    startingJobs.delete(jobId);
+    void pumpQueue();
+    return;
+  }
 
   const flags = defaultGrokFlags();
   const args = [...baseFlagsArgs(flags), "-p", job.prompt];
@@ -344,13 +640,22 @@ async function runJob(jobId: string): Promise<void> {
       toolCalls: session?.metrics.toolCallCount,
     });
 
-    useSpokStore.getState().patchJob(jobId, {
+    const finishedAt = Date.now();
+    patchJobState(jobId, {
       status,
-      finishedAt: Date.now(),
+      finishedAt,
       exitCode: result.code,
       summary,
       error: failed ? session?.error : undefined,
+      outcome: {
+        kind: status,
+        at: finishedAt,
+        exitCode: result.code,
+        summary,
+        reason: failed ? session?.error : undefined,
+      },
     });
+    await persistCurrentJobNow(jobId).catch(() => undefined);
 
     // Merge subagent summary into session if lanes exist
     if (session) {
@@ -409,19 +714,30 @@ async function runJob(jobId: string): Promise<void> {
     }
   } catch (e) {
     if (ac.signal.aborted) {
-      useSpokStore.getState().patchJob(jobId, {
+      const finishedAt = Date.now();
+      patchJobState(jobId, {
         status: "cancelled",
-        finishedAt: Date.now(),
+        finishedAt,
         summary: "Cancelled",
+        outcome: { kind: "cancelled", at: finishedAt, summary: "Cancelled" },
       });
+      await persistCurrentJobNow(jobId).catch(() => undefined);
     } else {
       const message = e instanceof Error ? e.message : "Job failed";
-      useSpokStore.getState().patchJob(jobId, {
+      const finishedAt = Date.now();
+      patchJobState(jobId, {
         status: "failed",
-        finishedAt: Date.now(),
+        finishedAt,
         error: message,
         summary: message,
+        outcome: {
+          kind: "failed",
+          at: finishedAt,
+          reason: message,
+          summary: message,
+        },
       });
+      await persistCurrentJobNow(jobId).catch(() => undefined);
       useSpokStore.getState().pushNotification(
         createNotification({
           kind: "run_failed",

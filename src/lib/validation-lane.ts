@@ -7,7 +7,7 @@
  * without a separate durable store.
  */
 
-import type { Session, TraceNode, StreamEvent } from "./types";
+import type { Session, TraceNode } from "./types";
 
 export type ValidationKind =
   | "run"

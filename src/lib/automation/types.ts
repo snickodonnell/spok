@@ -8,12 +8,36 @@ export type JobKind = "background" | "scheduled" | "channel" | "compare";
 
 export type QueueItemStatus =
   | "queued"
+  | "starting"
   | "running"
   | "waiting_approval"
   | "completed"
   | "failed"
   | "cancelled"
   | "skipped";
+
+export type AutomationJobOutcomeKind =
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "skipped"
+  | "interrupted";
+
+export interface AutomationJobOutcome {
+  kind: AutomationJobOutcomeKind;
+  at: number;
+  exitCode?: number | null;
+  summary?: string;
+  reason?: string;
+}
+
+export interface AutomationJobPolicy {
+  /** Durable jobs always require a trusted workspace. */
+  requireTrusted: true;
+  isolate: boolean;
+  /** Permission/profile identity when one is selected by the launcher. */
+  profile?: string;
+}
 
 /** A single background / scheduled / channel-triggered job. */
 export interface AutomationJob {
@@ -34,6 +58,8 @@ export interface AutomationJob {
   status: QueueItemStatus;
   priority: number;
   createdAt: number;
+  updatedAt?: number;
+  preparingAt?: number;
   startedAt?: number;
   finishedAt?: number;
   /** Session created for this job */
@@ -49,6 +75,10 @@ export interface AutomationJob {
   agentId?: string;
   /** Compact result summary for Monitor */
   summary?: string;
+  /** Policy snapshot used to evaluate and launch the durable job. */
+  policy?: AutomationJobPolicy;
+  /** Stable terminal result; interrupted is represented by failed + this cause. */
+  outcome?: AutomationJobOutcome;
 }
 
 export type ScheduleIntervalUnit = "minutes" | "hours" | "days";
@@ -182,6 +212,20 @@ export const AUTOMATION_DEFAULTS = {
   maxChannelEvents: 50,
   scheduleTickMs: 30_000,
 } as const;
+
+export const AUTOMATION_CONCURRENCY_RANGE = {
+  min: 1,
+  max: 8,
+} as const;
+
+/** Keep user and managed fleet limits inside a predictable desktop-safe range. */
+export function clampAutomationConcurrency(value: number): number {
+  if (!Number.isFinite(value)) return AUTOMATION_DEFAULTS.maxConcurrentBackground;
+  return Math.max(
+    AUTOMATION_CONCURRENCY_RANGE.min,
+    Math.min(AUTOMATION_CONCURRENCY_RANGE.max, Math.floor(value))
+  );
+}
 
 export function intervalToMs(every: number, unit: ScheduleIntervalUnit): number {
   const n = Math.max(1, Math.floor(every));

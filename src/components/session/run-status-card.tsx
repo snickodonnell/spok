@@ -119,7 +119,7 @@ export function RunStatusCard({
   const activeJobCount = useSpokStore(
     (s) =>
       s.automationJobs.filter((j) =>
-        ["queued", "running", "waiting_approval"].includes(j.status)
+        ["queued", "starting", "running", "waiting_approval"].includes(j.status)
       ).length
   );
   const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);

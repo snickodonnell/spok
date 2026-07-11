@@ -6,16 +6,23 @@
  */
 
 import { useEffect, useState } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Circle,
+  Copy,
   GitBranch,
   HardDrive,
   History,
   Inbox,
   Layers,
   Loader2,
+  MoreHorizontal,
   Pause,
+  RotateCcw,
+  Square,
   Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +33,7 @@ import {
   type InboxLane,
   type SessionInbox,
 } from "@/lib/session-inbox";
+import type { InboxJobAction } from "@/lib/automation/job-actions";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
 const LANE_DOT: Record<InboxLane, string> = {
@@ -88,6 +96,7 @@ export function SessionInboxPanel({
   activeSessionId,
   onSelect,
   onDelete,
+  onJobAction,
   emptyHint,
   className,
   /** Collapse idle group when there is other work (default true). */
@@ -98,6 +107,7 @@ export function SessionInboxPanel({
   activeSessionId: string | null;
   onSelect: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
+  onJobAction?: (jobId: string, action: InboxJobAction) => void;
   emptyHint?: string;
   className?: string;
   collapseIdleWhenBusy?: boolean;
@@ -198,14 +208,27 @@ export function SessionInboxPanel({
                 {isOpen && (
                   <ul className="mt-0.5 space-y-0.5">
                     {entries.map((entry) => (
-                      <li key={entry.sessionId}>
+                      <li key={entry.entryId}>
                         <InboxRow
                           entry={entry}
-                          active={activeSessionId === entry.sessionId}
-                          onSelect={() => onSelect(entry.sessionId)}
+                          active={
+                            !!entry.sessionId &&
+                            activeSessionId === entry.sessionId
+                          }
+                          onSelect={
+                            entry.sessionId
+                              ? () => onSelect(entry.sessionId)
+                              : undefined
+                          }
                           onDelete={
-                            onDelete
+                            onDelete && entry.sessionId
                               ? () => onDelete(entry.sessionId)
+                              : undefined
+                          }
+                          onJobAction={
+                            onJobAction && entry.jobId
+                              ? (action) =>
+                                  onJobAction(entry.jobId!, action)
                               : undefined
                           }
                         />
@@ -227,11 +250,13 @@ function InboxRow({
   active,
   onSelect,
   onDelete,
+  onJobAction,
 }: {
   entry: InboxEntry;
   active: boolean;
-  onSelect: () => void;
+  onSelect?: () => void;
   onDelete?: () => void;
+  onJobAction?: (action: InboxJobAction) => void;
 }) {
   const src = sourceLabel(entry.source);
 
@@ -243,14 +268,18 @@ function InboxRow({
           ? "border-phosphor-green/35 bg-phosphor-green/12 text-phosphor-green"
           : "border-transparent text-phosphor-green/55 hover:border-phosphor-green/15 hover:bg-phosphor-green/5"
       )}
-      data-testid={`inbox-row-${entry.sessionId}`}
+      data-testid={`inbox-row-${entry.entryId.replace(/:/g, "-")}`}
       data-lane={entry.lane}
     >
       <div className="flex items-center gap-1">
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1.5 text-left",
+            !onSelect && "cursor-default"
+          )}
           onClick={onSelect}
+          disabled={!onSelect}
           title={entry.cwd || entry.name}
         >
           <Circle
@@ -263,6 +292,9 @@ function InboxRow({
           />
           <span className="min-w-0 flex-1 truncate font-medium">{entry.name}</span>
         </button>
+        {onJobAction && entry.jobActions && entry.jobId && (
+          <JobActionsMenu entry={entry} onAction={onJobAction} />
+        )}
         {onDelete && (
           <button
             type="button"
@@ -278,7 +310,11 @@ function InboxRow({
       <button
         type="button"
         onClick={onSelect}
-        className="mt-0.5 flex w-full flex-wrap items-center gap-1 pl-3.5 text-left"
+        disabled={!onSelect}
+        className={cn(
+          "mt-0.5 flex w-full flex-wrap items-center gap-1 pl-3.5 text-left",
+          !onSelect && "cursor-default"
+        )}
       >
         <span
           className={cn(
@@ -319,11 +355,19 @@ function InboxRow({
               disk
             </Badge>
           )}
-        {entry.backgroundJob && (
+        {entry.backgroundJob && entry.source !== "job" && (
           <Badge variant="muted" className="h-4 px-1 text-[8px]">
             <Layers className="mr-0.5 inline h-2 w-2" />
             job
           </Badge>
+        )}
+        {entry.jobStatus === "queued" && entry.jobPriority !== 0 && (
+          <span
+            className="font-mono text-[9px] text-phosphor-cyan/55"
+            title={`Queue priority ${entry.jobPriority}`}
+          >
+            p{entry.jobPriority}
+          </span>
         )}
         {entry.branch && (
           <span
@@ -350,5 +394,99 @@ function InboxRow({
         </div>
       )}
     </div>
+  );
+}
+
+function JobActionsMenu({
+  entry,
+  onAction,
+}: {
+  entry: InboxEntry;
+  onAction: (action: InboxJobAction) => void;
+}) {
+  const actions = entry.jobActions;
+  if (!actions) return null;
+
+  const itemClass =
+    "flex cursor-pointer select-none items-center gap-2 rounded px-2 py-1.5 text-[11px] text-phosphor-green/75 outline-none data-[highlighted]:bg-phosphor-green/10 data-[highlighted]:text-phosphor-green";
+  const run = (action: InboxJobAction) => onAction(action);
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          className="shrink-0 rounded p-0.5 text-phosphor-green/35 hover:bg-phosphor-green/10 hover:text-phosphor-green focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-green/50"
+          aria-label={`Actions for ${entry.name}`}
+          title={`Actions for ${entry.name}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="right"
+          align="start"
+          sideOffset={5}
+          className="z-[100] min-w-36 rounded-md border border-phosphor-green/20 bg-crt-panel p-1 shadow-xl shadow-black/50"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {actions.cancel && (
+            <DropdownMenu.Item
+              className={cn(itemClass, "text-phosphor-amber")}
+              onSelect={() => run("cancel")}
+              title={entry.jobStatus === "running" ? "Stop job" : "Cancel job"}
+            >
+              <Square className="h-3 w-3" />
+              {entry.jobStatus === "running" ? "Stop" : "Cancel"}
+            </DropdownMenu.Item>
+          )}
+          {actions.retry && (
+            <DropdownMenu.Item
+              className={itemClass}
+              onSelect={() => run("retry")}
+              title="Retry as a fresh isolated job"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Retry
+            </DropdownMenu.Item>
+          )}
+          {actions.duplicate && (
+            <DropdownMenu.Item
+              className={itemClass}
+              onSelect={() => run("duplicate")}
+              title="Duplicate as a fresh job"
+            >
+              <Copy className="h-3 w-3" />
+              Duplicate
+            </DropdownMenu.Item>
+          )}
+          {(actions.priority_up || actions.priority_down) && (
+            <DropdownMenu.Separator className="my-1 h-px bg-phosphor-green/15" />
+          )}
+          {actions.priority_up && (
+            <DropdownMenu.Item
+              className={itemClass}
+              onSelect={() => run("priority_up")}
+              title="Raise queue priority"
+            >
+              <ArrowUp className="h-3 w-3" />
+              Priority up
+            </DropdownMenu.Item>
+          )}
+          {actions.priority_down && (
+            <DropdownMenu.Item
+              className={itemClass}
+              onSelect={() => run("priority_down")}
+              title="Lower queue priority"
+            >
+              <ArrowDown className="h-3 w-3" />
+              Priority down
+            </DropdownMenu.Item>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }

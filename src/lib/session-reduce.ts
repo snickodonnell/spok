@@ -66,19 +66,6 @@ function upsertNode(
   }
 }
 
-function appendEventLog(session: Session, stamped: StreamEvent): Session {
-  const prevLog = session.eventLog ?? [];
-  const nextLog =
-    prevLog.length >= MAX_EVENT_LOG
-      ? [...prevLog.slice(prevLog.length - MAX_EVENT_LOG + 1), stamped]
-      : [...prevLog, stamped];
-  return {
-    ...session,
-    eventLog: nextLog,
-    eventCount: (session.eventCount ?? prevLog.length) + 1,
-  };
-}
-
 /** Single-pass metrics — avoids 5× filter + 2× reduce over the same arrays. */
 export function recomputeSessionMetrics(session: Session) {
   const startedAt = session.metrics.startedAt ?? session.createdAt;

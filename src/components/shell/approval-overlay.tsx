@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   completeUserApproval,
   cancelUserApproval,
-  subscribeApprovalWaiter,
+  subscribeApprovalQueue,
 } from "@/lib/settings-client";
 import type { ApprovalRequest } from "@/lib/settings/types";
 import { cn } from "@/lib/utils";
@@ -35,22 +35,33 @@ const RISK_STYLES: Record<
  * Driven by the global approval waiter in settings-client.
  */
 export function ApprovalOverlay() {
-  const [request, setRequest] = useState<ApprovalRequest | null>(null);
+  const [requests, setRequests] = useState<ApprovalRequest[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    return subscribeApprovalWaiter((w) => {
-      setRequest(w?.request ?? null);
+    return subscribeApprovalQueue((snapshot) => {
+      setRequests(snapshot.requests);
+      setSelectedId((current) =>
+        current && snapshot.requests.some((request) => request.id === current)
+          ? current
+          : snapshot.activeRequestId
+      );
       setBusy(false);
     });
   }, []);
+
+  const request =
+    requests.find((candidate) => candidate.id === selectedId) ??
+    requests[0] ??
+    null;
 
   useEffect(() => {
     if (!request) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        cancelUserApproval();
+        cancelUserApproval(request.id);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -66,9 +77,9 @@ export function ApprovalOverlay() {
     setBusy(true);
     try {
       if (decision === "deny") {
-        cancelUserApproval();
+        cancelUserApproval(request.id);
       } else {
-        await completeUserApproval(decision);
+        await completeUserApproval(decision, request.id);
       }
     } catch {
       setBusy(false);
@@ -83,7 +94,9 @@ export function ApprovalOverlay() {
       aria-labelledby="approval-title"
       onMouseDown={(e) => {
         // Click outside denies (safe default)
-        if (e.target === e.currentTarget && !busy) cancelUserApproval();
+        if (e.target === e.currentTarget && !busy) {
+          cancelUserApproval(request.id);
+        }
       }}
     >
       <div className="crt-panel w-full max-w-lg overflow-hidden rounded-xl border border-phosphor-amber/40 shadow-[0_0_60px_rgba(255,176,0,0.15)]">
@@ -100,12 +113,17 @@ export function ApprovalOverlay() {
             </h2>
             <p className="mt-0.5 text-[11px] leading-relaxed text-phosphor-green/55">
               Spok blocked a privileged action until you review it. Deny is always safe.
+              {requests.length > 1 && (
+                <span className="ml-1 text-phosphor-cyan">
+                  {requests.length} sessions are waiting.
+                </span>
+              )}
             </p>
           </div>
           <button
             type="button"
             className="rounded p-1 text-phosphor-green/40 hover:bg-white/5 hover:text-phosphor-green"
-            onClick={() => cancelUserApproval()}
+            onClick={() => cancelUserApproval(request.id)}
             title="Deny (Esc)"
             disabled={busy}
           >
@@ -114,6 +132,36 @@ export function ApprovalOverlay() {
         </div>
 
         <div className="space-y-3 p-4">
+          {requests.length > 1 && (
+            <div
+              className="flex gap-1 overflow-x-auto border-b border-phosphor-green/15 pb-2"
+              role="tablist"
+              aria-label="Pending approvals"
+            >
+              {requests.map((candidate, index) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={candidate.id === request.id}
+                  onClick={() => {
+                    setSelectedId(candidate.id);
+                    setBusy(false);
+                  }}
+                  className={cn(
+                    "max-w-[11rem] shrink-0 truncate rounded border px-2 py-1 font-mono text-[10px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-cyan/50",
+                    candidate.id === request.id
+                      ? "border-phosphor-cyan/45 bg-phosphor-cyan/10 text-phosphor-cyan"
+                      : "border-phosphor-green/15 text-phosphor-green/45 hover:border-phosphor-green/30 hover:text-phosphor-green/75"
+                  )}
+                  title={`${candidate.reason}\n${candidate.cwd ?? ""}`}
+                >
+                  {index + 1}. {candidate.sessionId?.slice(0, 8) || candidate.profile || candidate.action}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant={risk.badge}>{risk.label}</Badge>
             <Badge variant="muted">{request.action}</Badge>

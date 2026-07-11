@@ -44,18 +44,22 @@ The repository already has a strong product spine:
 - Strict background isolation that creates, trusts, verifies, and binds a managed worktree before launching an unattended agent.
 - Persistent review issue navigation through queue counts, a keyboard issue rail, and Monaco gutter/line/overview markers.
 - A supervised `npm run dev:app` path that dogfoods extracted routes through the standalone runtime.
+- A concurrent approval queue that keeps session waiters independent, binds each waiter to run cancellation, and exposes selected risk, command, path, policy, allow-once/scoped-always, and deny decisions without superseding or reviving another agent.
+- A compact New Task flow for repository, optional task, interactive draft versus isolated background execution, and advanced CLI selection; prompt content is never persisted or auto-run.
+- Inbox fleet controls for job-only and session-linked work: stop/cancel, retry, safe duplicate, and queued priority changes with execution/worktree identity stripped from clones.
+- Durable user-configurable background capacity (one to eight runner slots), with non-destructive limit changes and priority/FIFO queue reasons shown consistently in the inbox and Monitor.
+- A versioned, atomic, secret-safe automation job ledger linking job/session/worktree/branch/policy/timestamps/outcome, with persist-before-launch guarantees and restart reconciliation for interrupted or still-queued work.
 - Background jobs, schedules, channels, notifications, hooks, skills, MCP discovery foundations, mobile/LAN viewing, and an interim Tauri shell.
 
 ## Gaps Found In This Audit
 
 These remaining gaps weaken the core workflow:
 
-1. Worktree creation, task launch, session linkage, review handoff, archive, and cleanup are still separate UI actions rather than one lifecycle.
-2. Job/session recovery after app or runtime restart is not yet a durable orchestration contract.
-3. Validation recipes prefill prompts; they are not yet a structured, cancellable validation runner with durable artifacts.
-4. Automation timers are app-lifetime helpers, not a supervised scheduler with restart recovery and missed-run policy.
-5. Several automation, extension, attachment, secret, and live-runtime routes are still Next-hosted rather than shared standalone-runtime contracts.
-6. The final native Windows UI is a major separate product track; starting a full rewrite before the agent lifecycle stabilizes would create two moving UI targets.
+1. Task launch now creates the workspace/job boundary, but review handoff, archive, and worktree cleanup are still separate actions rather than one completion lifecycle.
+2. Validation recipes prefill prompts; they are not yet a structured, cancellable validation runner with durable artifacts.
+3. Automation timers are app-lifetime helpers, not a supervised scheduler with restart recovery and missed-run policy.
+4. Several automation, extension, attachment, secret, and live-runtime routes are still Next-hosted rather than shared standalone-runtime contracts.
+5. The final native Windows UI is a major separate product track; starting a full rewrite before the agent lifecycle stabilizes would create two moving UI targets.
 
 ## Ordered Delivery Plan
 
@@ -86,13 +90,11 @@ Goal: turn the vertical slice into the default daily workflow.
 
 Build in this order:
 
-1. **New task flow:** one compact launcher for repository, task, branch prefix, permission profile, and local/background execution. Isolation defaults on for parallel/background work.
-2. **Durable orchestration:** versioned run records linking job, session, PID/runtime run, worktree, branch, policy, timestamps, and terminal outcome. Reconcile stale `starting`/`running` records after restart.
-3. **Fleet controls:** stop, retry, continue, duplicate, reprioritize, and concurrency limits from the inbox. Show queued reason and runtime/resource pressure.
-4. **Approval inbox:** group pending approvals across sessions, show command/path/risk/policy, and support allow-once, scoped durable grant, or deny without losing context.
-5. **Handoff:** review readiness gate, commit, push, PR creation, open in IDE, and copy summary from one consistent completion panel.
-6. **Archive and cleanup:** distinguish archive session, keep branch/worktree, remove clean worktree, and force cleanup. Never remove dirty or unpushed work by default.
-7. **Run templates:** implement issue, fix CI, review branch, update dependencies, reproduce bug, and validate touched packages as editable presets—not hard-coded workflows.
+1. **Fleet policy:** add continue/steer and runtime/resource pressure. Stop, retry, safe duplicate, reprioritize, durable user-configurable concurrency, and explicit capacity/queue-position reasons already ship in the inbox and Monitor.
+2. **Approval recovery:** reconcile expired or runtime-interrupted approvals into explicit session/job outcomes and retain audit-safe decision history without restoring stale authority.
+3. **Handoff:** review readiness gate, commit, push, PR creation, open in IDE, and copy summary from one consistent completion panel.
+4. **Archive and cleanup:** distinguish archive session, keep branch/worktree, remove clean worktree, and force cleanup. Never remove dirty or unpushed work by default.
+5. **Run templates:** implement issue, fix CI, review branch, update dependencies, reproduce bug, and validate touched packages as editable presets—not hard-coded workflows.
 
 UX acceptance:
 

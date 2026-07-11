@@ -4,6 +4,9 @@
  */
 
 import {
+  handleAutomationJobsGet,
+  handleAutomationJobsPost,
+  handleAutomationJobsPut,
   handleApprovalsDelete,
   handleApprovalsGet,
   handleApprovalsPost,
@@ -40,6 +43,15 @@ function match(
 
   if (pathname === "/api/health" && m === "GET") {
     return { handler: handleHealthGet, params: {} };
+  }
+  if (pathname === "/api/automation/jobs" && m === "GET") {
+    return { handler: handleAutomationJobsGet, params: {} };
+  }
+  if (pathname === "/api/automation/jobs" && m === "POST") {
+    return { handler: handleAutomationJobsPost, params: {} };
+  }
+  if (pathname === "/api/automation/jobs" && m === "PUT") {
+    return { handler: handleAutomationJobsPut, params: {} };
   }
   if (pathname === "/api/session/start" && m === "POST") {
     return { handler: handleSessionStartPost, params: {} };
