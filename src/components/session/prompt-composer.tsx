@@ -20,6 +20,11 @@ import {
   Bot,
   X,
   Layers,
+  Paperclip,
+  FileText,
+  FileImage,
+  File as FileIcon,
+  FileType,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -46,8 +51,35 @@ import {
 } from "@/lib/extensions/format";
 import type { CustomAgentConfig, SkillDescriptor } from "@/lib/extensions/types";
 import { enqueueBackgroundJob } from "@/lib/background-runner";
+import {
+  formatAttachmentSize,
+  prepareAttachedPrompt,
+  removeAttachment,
+  uploadAttachments,
+} from "@/lib/attachments-client";
+import type { PromptAttachmentRef } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+
+const MAX_COMPOSER_ATTACHMENTS = 8;
+
+type QueuedPrompt = {
+  text: string;
+  attachments: PromptAttachmentRef[];
+};
+
+function attachmentIcon(kind: string) {
+  switch (kind) {
+    case "image":
+      return FileImage;
+    case "document":
+      return FileType;
+    case "text":
+      return FileText;
+    default:
+      return FileIcon;
+  }
+}
 
 function flagsFromSession(raw?: Record<string, unknown>): GrokRunFlags {
   const d = defaultGrokFlags();
@@ -76,9 +108,32 @@ type PromptComposerProps = {
 
 export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const mobile = variant === "mobile";
-  const session = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId] : null
+  // Field-level selectors: the composer is always mounted and must not
+  // re-render on every thinking token.
+  const sessionId = useSpokStore((s) => s.activeSessionId);
+  const sessionStatus = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.status : undefined
   );
+  const sessionCwd = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.config.cwd : undefined
+  );
+  const sessionCommand = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.config.command
+      : undefined
+  );
+  const grokFlags = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.grokFlags : undefined
+  );
+  // Re-render when prompt history membership/status changes (not every stream token).
+  const promptHistoryKey = useSpokStore((s) => {
+    const h = s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.promptHistory
+      : undefined;
+    if (!h?.length) return "0";
+    const last = h[h.length - 1];
+    return `${h.length}:${last?.id}:${last?.status}`;
+  });
   const pushPromptTurn = useSpokStore((s) => s.pushPromptTurn);
   const updatePromptTurn = useSpokStore((s) => s.updatePromptTurn);
   const clearSessionTraces = useSpokStore((s) => s.clearSessionTraces);
@@ -97,7 +152,11 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   /** Follow-up prompts queued while a run is active (Phase 7). */
-  const [promptQueue, setPromptQueue] = useState<string[]>([]);
+  const [promptQueue, setPromptQueue] = useState<QueuedPrompt[]>([]);
+  /** Pending file attachments for the next send (opaque ids, no paths). */
+  const [attachments, setAttachments] = useState<PromptAttachmentRef[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -105,12 +164,22 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const [agentCatalog, setAgentCatalog] = useState<CustomAgentConfig[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
   const queueDrainRef = useRef(false);
 
+  // Fresh session snapshot when identity/status/history/flags change.
+  void promptHistoryKey;
+  void sessionStatus;
+  void sessionCwd;
+  void sessionCommand;
+  const session = sessionId
+    ? useSpokStore.getState().sessions[sessionId] ?? null
+    : null;
+
   const flags = useMemo(
-    () => flagsFromSession(session?.grokFlags),
-    [session?.grokFlags]
+    () => flagsFromSession(grokFlags),
+    [grokFlags]
   );
 
   // Detect `/` autocomplete query (from start of line or only content)
@@ -191,9 +260,66 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
     setBusy(false);
   }, [session]);
 
+  const addFiles = useCallback(
+    async (fileList: FileList | File[]) => {
+      if (!session) return;
+      const incoming = Array.from(fileList).filter((f) => f && f.size > 0);
+      if (!incoming.length) return;
+      const room = MAX_COMPOSER_ATTACHMENTS - attachments.length;
+      if (room <= 0) {
+        toast.error(`Max ${MAX_COMPOSER_ATTACHMENTS} attachments per message`);
+        return;
+      }
+      const batch = incoming.slice(0, room);
+      if (incoming.length > room) {
+        toast.message(`Only ${room} more file(s) allowed — extras skipped`);
+      }
+      setUploading(true);
+      try {
+        const { attachments: saved, errors } = await uploadAttachments(
+          session.id,
+          batch
+        );
+        if (saved.length) {
+          setAttachments((prev) => {
+            const ids = new Set(prev.map((a) => a.id));
+            return [...prev, ...saved.filter((a) => !ids.has(a.id))];
+          });
+        }
+        if (errors?.length) {
+          toast.error(errors[0]);
+        } else if (saved.length) {
+          toast.success(
+            saved.length === 1
+              ? `Attached ${saved[0].name}`
+              : `Attached ${saved.length} files`
+          );
+        }
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Upload failed");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [session, attachments.length]
+  );
+
+  const dropAttachment = useCallback(
+    async (id: string) => {
+      if (!session) return;
+      setAttachments((prev) => prev.filter((a) => a.id !== id));
+      try {
+        await removeAttachment(session.id, id);
+      } catch {
+        /* best-effort cleanup */
+      }
+    },
+    [session]
+  );
+
   /** Execute one prompt turn (must not be called while busyRef is true). */
   const runPromptText = useCallback(
-    async (text: string) => {
+    async (text: string, turnAttachments: PromptAttachmentRef[] = []) => {
       if (!session) return;
       const resolved = resolveRun(text, flags);
 
@@ -281,6 +407,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
       }
 
       let runArgs = resolved.args;
+      let effectivePrompt = text;
       if (
         extensionPreamble &&
         resolved.type === "prompt" &&
@@ -289,20 +416,84 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
         const args = [...resolved.args];
         const last = args[args.length - 1];
         if (typeof last === "string" && last === text) {
-          args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${text}`;
+          effectivePrompt = `${extensionPreamble}\n\n---\n\n${text}`;
+          args[args.length - 1] = effectivePrompt;
           runArgs = args;
         } else if (typeof last === "string" && last.includes(text)) {
-          args[args.length - 1] = `${extensionPreamble}\n\n---\n\n${last}`;
+          effectivePrompt = `${extensionPreamble}\n\n---\n\n${last}`;
+          args[args.length - 1] = effectivePrompt;
           runArgs = args;
         }
       }
 
+      // Attachments → ACP content blocks via --prompt-file (vision + documents)
+      if (
+        turnAttachments.length > 0 &&
+        resolved.type === "prompt"
+      ) {
+        try {
+          const prepared = await prepareAttachedPrompt({
+            sessionId: session.id,
+            turnId,
+            prompt: effectivePrompt,
+            attachmentIds: turnAttachments.map((a) => a.id),
+            baseArgs: runArgs,
+          });
+          runArgs = prepared.args;
+          if (prepared.warnings.length) {
+            applyStreamEvent(session.id, {
+              type: "system",
+              timestamp: Date.now(),
+              title: "Attachment notes",
+              content: prepared.warnings.join("\n"),
+              status: "success",
+              severity: "info",
+              provider: "spok",
+            });
+          }
+          applyStreamEvent(session.id, {
+            type: "system",
+            timestamp: Date.now(),
+            title: "Attachments",
+            content: turnAttachments
+              .map(
+                (a) =>
+                  `• ${a.name} (${a.kind}, ${formatAttachmentSize(a.size)})`
+              )
+              .join("\n"),
+            status: "success",
+            severity: "info",
+            provider: "spok",
+            meta: {
+              attachments: turnAttachments.map((a) => ({
+                id: a.id,
+                name: a.name,
+                kind: a.kind,
+                mimeType: a.mimeType,
+                size: a.size,
+              })),
+            },
+          });
+        } catch (e) {
+          toast.error(
+            e instanceof Error ? e.message : "Failed to prepare attachments"
+          );
+          return;
+        }
+      }
+
+      const attachLabel =
+        turnAttachments.length > 0
+          ? ` [${turnAttachments.length} file${turnAttachments.length === 1 ? "" : "s"}]`
+          : "";
+
       pushPromptTurn(session.id, {
         id: turnId,
         text,
-        label: resolved.label,
+        label: `${resolved.label}${attachLabel}`.slice(0, 100),
         timestamp: Date.now(),
         status: "running",
+        attachments: turnAttachments.length ? turnAttachments : undefined,
       });
       setHint(null);
       busyRef.current = true;
@@ -318,7 +509,10 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
             event: "prompt_submit",
             sessionId: session.id,
             cwd: session.config.cwd,
-            vars: { prompt: text.slice(0, 200) },
+            vars: {
+              prompt: text.slice(0, 200),
+              attachmentCount: String(turnAttachments.length),
+            },
           });
           applyHookResultsToSession(session.id, results, (sid, ev) => {
             applyStreamEvent(sid, ev);
@@ -374,7 +568,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
     setPromptQueue((q) => q.slice(1));
     void (async () => {
       try {
-        await runPromptText(next);
+        await runPromptText(next.text, next.attachments);
       } finally {
         queueDrainRef.current = false;
       }
@@ -384,10 +578,11 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const submit = useCallback(async () => {
     if (!session) return;
     const text = value.trim();
-    if (!text) return;
+    const pending = [...attachments];
+    if (!text && pending.length === 0) return;
 
     // UI slash actions always run immediately (including stop while busy)
-    if (text.startsWith("/")) {
+    if (text.startsWith("/") && pending.length === 0) {
       const resolved = resolveRun(text, flags);
       if (resolved.type === "ui") {
         setValue("");
@@ -396,21 +591,42 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
       }
     }
 
+    const promptText =
+      text ||
+      (pending.length === 1
+        ? "Please analyze the attached file."
+        : "Please analyze the attached files.");
+
     if (busyRef.current || busy) {
       // Queue follow-up while live run is active
       if (promptQueue.length >= 12) {
         toast.error("Queue full (max 12). Wait for a turn to finish.");
         return;
       }
-      setPromptQueue((q) => [...q, text]);
+      setPromptQueue((q) => [
+        ...q,
+        { text: promptText, attachments: pending },
+      ]);
       setValue("");
-      toast.message(`Queued (#${promptQueue.length + 1}) — runs after current turn`);
+      setAttachments([]);
+      toast.message(
+        `Queued (#${promptQueue.length + 1}) — runs after current turn`
+      );
       return;
     }
 
     setValue("");
-    await runPromptText(text);
-  }, [session, value, flags, busy, promptQueue.length, runPromptText]);
+    setAttachments([]);
+    await runPromptText(promptText, pending);
+  }, [
+    session,
+    value,
+    attachments,
+    flags,
+    busy,
+    promptQueue.length,
+    runPromptText,
+  ]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (slashOpen && slashMatches.length) {
@@ -686,7 +902,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
           <ol className="space-y-1">
             {promptQueue.map((q, i) => (
               <li
-                key={`${i}-${q.slice(0, 24)}`}
+                key={`${i}-${q.text.slice(0, 24)}-${q.attachments.map((a) => a.id).join(",")}`}
                 className="flex items-center gap-1.5 rounded border border-phosphor-amber/25 bg-black/35 px-1.5 py-1"
               >
                 <span className="w-4 shrink-0 font-mono text-[10px] text-phosphor-amber/70">
@@ -697,12 +913,26 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
                   className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-phosphor-amber hover:underline"
                   title="Edit — load into composer"
                   onClick={() => {
-                    setValue(q);
+                    setValue(q.text);
+                    setAttachments((prev) => {
+                      const ids = new Set(prev.map((a) => a.id));
+                      return [
+                        ...prev,
+                        ...q.attachments.filter((a) => !ids.has(a.id)),
+                      ].slice(0, MAX_COMPOSER_ATTACHMENTS);
+                    });
                     setPromptQueue((prev) => prev.filter((_, j) => j !== i));
                     taRef.current?.focus();
                   }}
                 >
-                  {q}
+                  {q.text}
+                  {q.attachments.length > 0 && (
+                    <span className="text-phosphor-amber/60">
+                      {" "}
+                      · {q.attachments.length} file
+                      {q.attachments.length === 1 ? "" : "s"}
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -794,6 +1024,44 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
         </div>
       )}
 
+      {/* File attachment chips */}
+      {attachments.length > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-1.5 border-b border-phosphor-green/15 bg-black/30 px-3 py-1.5"
+          data-testid="composer-attachments"
+        >
+          <Paperclip className="h-3 w-3 text-phosphor-green/50" />
+          <span className="text-[9px] uppercase tracking-widest text-phosphor-green/40">
+            Attached
+          </span>
+          {attachments.map((a) => {
+            const Icon = attachmentIcon(a.kind);
+            return (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => void dropAttachment(a.id)}
+                className="inline-flex max-w-[200px] items-center gap-1 rounded border border-phosphor-green/30 bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-green/85 hover:border-red-400/50 hover:text-red-300"
+                title={`${a.name} · ${formatAttachmentSize(a.size)} · click to remove`}
+              >
+                <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                <span className="min-w-0 truncate">{a.name}</span>
+                <span className="shrink-0 text-phosphor-green/35">
+                  {formatAttachmentSize(a.size)}
+                </span>
+                <X className="h-2.5 w-2.5 shrink-0 opacity-50" />
+              </button>
+            );
+          })}
+          {uploading && (
+            <span className="inline-flex items-center gap-1 text-[10px] text-phosphor-amber">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              uploading…
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Recent turns — skip on mobile to save space */}
       {!mobile && (session.promptHistory?.length ?? 0) > 0 && (
         <div className="flex max-h-16 gap-1 overflow-x-auto border-b border-phosphor-green/10 px-2 py-1">
@@ -818,13 +1086,98 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
         </div>
       )}
 
-      <div className={cn("flex items-end gap-2 p-2", mobile && "gap-2.5 p-3")}>
+      <div
+        className={cn(
+          "flex items-end gap-2 p-2 transition-colors",
+          mobile && "gap-2.5 p-3",
+          dragOver && "bg-phosphor-cyan/10"
+        )}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer.types.includes("Files")) setDragOver(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer.types.includes("Files")) {
+            e.dataTransfer.dropEffect = "copy";
+            setDragOver(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // Only clear when leaving the container (not child nodes)
+          if (e.currentTarget === e.target) setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setDragOver(false);
+          if (e.dataTransfer.files?.length) {
+            void addFiles(e.dataTransfer.files);
+          }
+        }}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          accept="image/*,.pdf,.txt,.md,.json,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.rtf,.log,.xml,.yaml,.yml,.toml,.ts,.tsx,.js,.jsx,.py,.rs,.go,.html,.css"
+          onChange={(e) => {
+            if (e.target.files?.length) void addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <Button
+          type="button"
+          size={mobile ? "default" : "sm"}
+          variant="outline"
+          className={cn(
+            "shrink-0",
+            mobile ? "min-h-11 min-w-11" : "h-9 w-9 p-0",
+            attachments.length > 0 && "border-phosphor-cyan/40 text-phosphor-cyan"
+          )}
+          title="Attach files (images, PDFs, documents)"
+          disabled={uploading || attachments.length >= MAX_COMPOSER_ATTACHMENTS}
+          onClick={() => fileInputRef.current?.click()}
+          data-testid="composer-attach"
+        >
+          {uploading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Paperclip className="h-3.5 w-3.5" />
+          )}
+        </Button>
         <div className="relative min-w-0 flex-1">
+          {dragOver && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md border border-dashed border-phosphor-cyan/50 bg-phosphor-cyan/10 text-xs text-phosphor-cyan">
+              Drop files to attach
+            </div>
+          )}
           <textarea
             ref={taRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={(e) => {
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              const files: File[] = [];
+              for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.kind === "file") {
+                  const f = item.getAsFile();
+                  if (f) files.push(f);
+                }
+              }
+              if (files.length) {
+                e.preventDefault();
+                void addFiles(files);
+              }
+            }}
             rows={mobile ? 3 : 2}
             placeholder={
               busy
@@ -832,8 +1185,8 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
                   ? "Follow-up… (queues until done)"
                   : "Type a follow-up and Enter to queue…  (runs after current turn)"
                 : mobile
-                  ? "Message Grok on the host PC…"
-                  : "Prompt Grok…  or type / for commands (e.g. /continue, /model)"
+                  ? "Message Grok… drop files to attach"
+                  : "Prompt Grok… attach files, type / for commands"
             }
             className={cn(
               "w-full resize-none rounded-md border border-phosphor-green/25 bg-black/50 px-3 py-2 text-sm text-phosphor-green outline-none placeholder:text-phosphor-green/30 focus:border-phosphor-green/50 focus:ring-1 focus:ring-[var(--focus-ring)]",
@@ -860,7 +1213,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
               variant="amber"
               className={mobile ? "min-h-11 min-w-[4.5rem]" : undefined}
               onClick={() => void submit()}
-              disabled={!value.trim()}
+              disabled={!value.trim() && attachments.length === 0}
               title="Queue follow-up (Enter)"
             >
               <Layers className="h-3.5 w-3.5" />
@@ -872,7 +1225,9 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
                 size={mobile ? "default" : "sm"}
                 className={mobile ? "min-h-11 min-w-[4.5rem]" : undefined}
                 onClick={() => void submit()}
-                disabled={!value.trim()}
+                disabled={
+                  (!value.trim() && attachments.length === 0) || uploading
+                }
                 title="Send (Enter)"
               >
                 <CornerDownLeft className="h-3.5 w-3.5" />
@@ -932,7 +1287,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
             </kbd>{" "}
             newline ·{" "}
             <kbd className="rounded border border-phosphor-green/20 px-1">/</kbd>{" "}
-            commands
+            commands · drop files to attach
           </span>
           <button
             type="button"

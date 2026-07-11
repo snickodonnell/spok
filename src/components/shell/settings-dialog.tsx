@@ -40,9 +40,15 @@ import {
   Palette,
   Activity,
   Keyboard,
+  FolderLock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { THEME_META, UI_THEMES, type UiTheme } from "@/lib/theme";
+import {
+  listTrustedWorkspaces,
+  revokeTrustedWorkspace,
+  type TrustedRootDto,
+} from "@/lib/local-api-client";
 
 const MODES: AppPermissionMode[] = [
   "manual",
@@ -74,11 +80,22 @@ export function SettingsDialog() {
   const [draft, setDraft] = useState<SpokSettings | null>(null);
   const [layer, setLayer] = useState<"user" | "project">("user");
   const [grants, setGrants] = useState<ApprovalGrant[]>([]);
+  const [trustedRoots, setTrustedRoots] = useState<TrustedRootDto[]>([]);
+  const [revokingRoot, setRevokingRoot] = useState<string | null>(null);
   const [section, setSection] = useState<
     "permissions" | "commands" | "appearance" | "grants" | "privacy"
   >("permissions");
 
   const cwd = session?.config.cwd;
+
+  const loadTrusted = useCallback(async () => {
+    try {
+      const res = await listTrustedWorkspaces();
+      setTrustedRoots(res.roots);
+    } catch {
+      setTrustedRoots([]);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,12 +105,13 @@ export function SettingsDialog() {
       setDraft({ ...res.resolved });
       setGrants(res.grants ?? []);
       setAppPermissionMode(res.resolved.permissionMode);
+      await loadTrusted();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load settings");
     } finally {
       setLoading(false);
     }
-  }, [cwd, setAppPermissionMode]);
+  }, [cwd, setAppPermissionMode, loadTrusted]);
 
   useEffect(() => {
     if (open) void load();
@@ -664,6 +682,94 @@ export function SettingsDialog() {
                   checked={draft.auditPrivilegedActions}
                   onChange={(v) => patch({ auditPrivilegedActions: v })}
                 />
+
+                <div
+                  className="rounded border border-phosphor-green/15 bg-black/20 p-3"
+                  data-testid="trusted-roots-panel"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <FolderLock className="h-3.5 w-3.5 text-phosphor-green/70" />
+                      <span className="font-mono text-[11px] uppercase tracking-wider text-phosphor-green/80">
+                        Trusted workspaces
+                      </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-1.5 text-[10px]"
+                      onClick={() => void loadTrusted()}
+                      disabled={loading}
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      Refresh
+                    </Button>
+                  </div>
+                  <p className="mb-2 text-[10px] text-phosphor-green/40">
+                    Durable under{" "}
+                    <code className="text-phosphor-green/55">
+                      ~/.spok/workspace-trust.json
+                    </code>
+                    . Spawn, Git write, and browse policy use these roots across
+                    restarts. Revoke anytime.
+                  </p>
+                  {trustedRoots.length === 0 ? (
+                    <p className="text-[10px] text-phosphor-green/35">
+                      No trusted roots yet. Open a workspace from the launch
+                      dialog to trust it.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1.5">
+                      {trustedRoots.map((root) => (
+                        <li
+                          key={root.path}
+                          className="flex items-start gap-2 rounded border border-phosphor-green/10 bg-black/30 px-2 py-1.5"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-mono text-[10px] text-phosphor-green/85">
+                              {root.path}
+                            </div>
+                            {root.trustedAt > 0 && (
+                              <div className="mt-0.5 text-[9px] text-phosphor-green/35">
+                                Trusted{" "}
+                                {new Date(root.trustedAt).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 shrink-0 px-1.5 text-[10px] text-red-400/90 hover:text-red-300"
+                            disabled={revokingRoot === root.path}
+                            onClick={async () => {
+                              setRevokingRoot(root.path);
+                              try {
+                                await revokeTrustedWorkspace(root.path);
+                                toast.success("Workspace trust revoked");
+                                await loadTrusted();
+                              } catch (e) {
+                                toast.error(
+                                  e instanceof Error
+                                    ? e.message
+                                    : "Failed to revoke trust"
+                                );
+                              } finally {
+                                setRevokingRoot(null);
+                              }
+                            }}
+                          >
+                            {revokingRoot === root.path ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                            Revoke
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </TabsContent>
             </ScrollArea>
             </div>

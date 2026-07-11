@@ -93,6 +93,8 @@ export async function localFetch(
   return res;
 }
 
+export type TrustedRootDto = { path: string; trustedAt: number };
+
 export async function trustWorkspace(path: string): Promise<{ root: string }> {
   const res = await localFetch("/api/workspace/trust", {
     method: "POST",
@@ -108,4 +110,44 @@ export async function trustWorkspace(path: string): Promise<{ root: string }> {
   }
   if (!data.root) throw new Error("Trust response missing root");
   return { root: data.root };
+}
+
+/** List durable trusted workspace roots (with trust timestamps). */
+export async function listTrustedWorkspaces(): Promise<{
+  trustedRoots: string[];
+  roots: TrustedRootDto[];
+}> {
+  const res = await localFetch("/api/workspace/trust", { method: "GET" });
+  const data = (await res.json().catch(() => ({}))) as {
+    trustedRoots?: string[];
+    roots?: TrustedRootDto[];
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.error || `Failed to list trusted workspaces (${res.status})`);
+  }
+  return {
+    trustedRoots: data.trustedRoots ?? [],
+    roots: data.roots ?? (data.trustedRoots ?? []).map((p) => ({ path: p, trustedAt: 0 })),
+  };
+}
+
+/** Revoke a durable trusted workspace root. */
+export async function revokeTrustedWorkspace(path: string): Promise<{
+  revoked: string;
+}> {
+  const res = await localFetch("/api/workspace/trust", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    revoked?: string;
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.error || `Failed to revoke workspace trust (${res.status})`);
+  }
+  if (!data.revoked) throw new Error("Revoke response missing path");
+  return { revoked: data.revoked };
 }

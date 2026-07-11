@@ -28,6 +28,11 @@ function flattenVisible(
 ): TraceNode[] {
   const result: TraceNode[] = [];
   const q = filter.search.trim().toLowerCase();
+  const hasFilter =
+    !!q ||
+    filter.types.length > 0 ||
+    filter.status.length > 0 ||
+    filter.showOnlyLinked;
 
   function matches(n: TraceNode): boolean {
     if (filter.types.length && !filter.types.includes(n.type)) return false;
@@ -44,19 +49,38 @@ function flattenVisible(
     );
   }
 
+  // Memoize descendant match so filtered trees are O(n), not O(n²).
+  const descCache = new Map<string, boolean>();
   function anyDescendantMatches(id: string): boolean {
+    const cached = descCache.get(id);
+    if (cached !== undefined) return cached;
     const n = nodes[id];
-    if (!n) return false;
-    if (matches(n)) return true;
-    return n.children.some(anyDescendantMatches);
+    if (!n) {
+      descCache.set(id, false);
+      return false;
+    }
+    if (matches(n)) {
+      descCache.set(id, true);
+      return true;
+    }
+    for (const c of n.children) {
+      if (anyDescendantMatches(c)) {
+        descCache.set(id, true);
+        return true;
+      }
+    }
+    descCache.set(id, false);
+    return false;
   }
 
   function walk(id: string) {
     const n = nodes[id];
     if (!n) return;
-    const selfMatch = matches(n);
-    const childMatch = n.children.some(anyDescendantMatches);
-    if (!selfMatch && !childMatch) return;
+    if (hasFilter) {
+      const selfMatch = matches(n);
+      const childMatch = n.children.some(anyDescendantMatches);
+      if (!selfMatch && !childMatch) return;
+    }
     result.push(n);
     if (expanded.has(id) || q) {
       for (const c of n.children) walk(c);

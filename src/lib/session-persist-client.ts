@@ -74,11 +74,27 @@ export async function registerDurableSession(session: Session): Promise<void> {
   }
 }
 
+export type LoadDurableSessionOpts = {
+  /** Include raw.ndjson (default false). */
+  raw?: boolean;
+  /**
+   * Include events.ndjson (default true for back-compat).
+   * Pass false for snapshot-first restore — huge win at boot.
+   */
+  events?: boolean;
+  /** Include snapshot.json (default true). */
+  snapshot?: boolean;
+};
+
 export async function loadDurableSession(
   id: string,
-  opts?: { raw?: boolean }
+  opts?: LoadDurableSessionOpts
 ): Promise<DurableSessionBundle> {
-  const q = opts?.raw ? "?raw=1" : "";
+  const params = new URLSearchParams();
+  if (opts?.raw) params.set("raw", "1");
+  if (opts?.events === false) params.set("events", "0");
+  if (opts?.snapshot === false) params.set("snapshot", "0");
+  const q = params.toString() ? `?${params.toString()}` : "";
   const res = await localFetch(`/api/sessions/${encodeURIComponent(id)}${q}`);
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };

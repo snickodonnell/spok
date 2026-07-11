@@ -33,19 +33,30 @@ import { cn } from "@/lib/utils";
  * CLI readiness is presence/version only — never claims login state.
  */
 export function StatusLine() {
-  const session = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId] : null
+  // Only the fields we paint — full session would re-render on every stream tick.
+  const hasSession = useSpokStore((s) =>
+    !!(s.activeSessionId && s.sessions[s.activeSessionId])
+  );
+  const command = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.config.command || "grok"
+      : "grok"
+  );
+  const cwd = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.config.cwd : undefined
+  );
+  const gitBranch = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.gitSummary?.branch
+      : undefined
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [cliLoading, setCliLoading] = useState(false);
   const desktop = isDesktopRuntime();
 
-  const command = session?.config.command || "grok";
-  const cwd = session?.config.cwd;
-
   useEffect(() => {
-    if (!session) {
+    if (!hasSession) {
       setCli(null);
       return;
     }
@@ -69,12 +80,11 @@ export function StatusLine() {
       cancelled = true;
     };
     // Re-probe when session identity or CLI binary changes (not every store tick)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: session.id only
-  }, [session?.id, command]);
+  }, [hasSession, command]);
 
-  if (!session) return null;
+  if (!hasSession) return null;
 
-  const branch = session.gitSummary?.branch;
+  const branch = gitBranch;
   const cwdShort = shortenPath(cwd || "");
 
   return (

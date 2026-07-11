@@ -18,19 +18,81 @@ import {
 import { DiffStatChip } from "@/components/diff/monaco-diff";
 
 export function MetricsBar() {
-  const session = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId] : null
+  // Field-level selectors so thinking tokens don't re-render the bar every chunk.
+  const hasSession = useSpokStore((s) => !!s.activeSessionId && !!s.sessions[s.activeSessionId!]);
+  const status = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.status : undefined
+  );
+  // Primitive fingerprint so identical counts keep the same selector result.
+  const metricsKey = useSpokStore((s) => {
+    const m = s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.metrics
+      : undefined;
+    if (!m) return "";
+    return [
+      m.startedAt,
+      m.endedAt,
+      m.thinkingSteps,
+      m.toolCallCount,
+      m.filesChanged,
+      m.subagentCount,
+      m.errorCount,
+      m.linesAdded,
+      m.linesDeleted,
+      m.tokensEstimate,
+    ].join(":");
+  });
+  // Read metrics by key so Object.is on the fingerprint gates re-renders.
+  const metrics = (() => {
+    if (!metricsKey) return undefined;
+    const id = useSpokStore.getState().activeSessionId;
+    return id ? useSpokStore.getState().sessions[id]?.metrics : undefined;
+  })();
+  const createdAt = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.createdAt : undefined
+  );
+  const eventCount = useSpokStore((s) => {
+    const sess = s.activeSessionId
+      ? s.sessions[s.activeSessionId]
+      : null;
+    return sess?.eventCount ?? 0;
+  });
+  const reviewCount = useSpokStore((s) => {
+    const comments = s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.reviewComments
+      : undefined;
+    if (!comments?.length) return 0;
+    let n = 0;
+    for (const c of comments) if (!c.resolved) n++;
+    return n;
+  });
+  const source = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.source : undefined
+  );
+  const isolationGuard = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.config.isolationGuard
+      : undefined
+  );
+  const gitSummary = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.gitSummary : undefined
+  );
+  const cwd = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.config.cwd : undefined
+  );
+  const name = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.name : undefined
   );
   const [, tick] = useState(0);
 
   useEffect(() => {
-    if (!session || (session.status !== "running" && session.status !== "starting"))
-      return;
-    const id = setInterval(() => tick((t) => t + 1), 500);
+    if (status !== "running" && status !== "starting") return;
+    // 1s is enough for the elapsed clock; 500ms was pure re-render tax.
+    const id = setInterval(() => tick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [session]);
+  }, [status]);
 
-  if (!session) {
+  if (!hasSession || !metrics) {
     return (
       <div className="flex h-8 items-center gap-4 border-b border-phosphor-green/15 px-3 text-[11px] text-phosphor-green/35">
         <span>No session</span>
@@ -38,14 +100,12 @@ export function MetricsBar() {
     );
   }
 
-  const m = session.metrics;
+  const m = metrics;
   const elapsed =
-    session.status === "running" || session.status === "starting"
-      ? Date.now() - (m.startedAt ?? session.createdAt)
+    status === "running" || status === "starting"
+      ? Date.now() - (m.startedAt ?? createdAt ?? Date.now())
       : m.elapsedMs;
 
-  const eventCount = session.eventCount ?? session.eventLog?.length ?? 0;
-  const reviewCount = session.reviewComments?.filter((c) => !c.resolved).length ?? 0;
   const ui = getCachedSettings()?.resolved.ui;
   const showUsage = ui?.showUsageMeter !== false;
   const contextLimit = ui?.contextLimitTokens;
@@ -66,13 +126,13 @@ export function MetricsBar() {
 
   return (
     <div className="flex h-8 items-center gap-3 overflow-x-auto border-b border-phosphor-green/15 px-3 text-[11px]">
-      <StatusPill status={session.status} />
+      <StatusPill status={status ?? "idle"} />
       <UsageMeter
         compact
         show={showUsage}
         contextLimit={contextLimit}
       />
-      {session.source === "resume" && (
+      {source === "resume" && (
         <span
           title="Restored from durable session log"
           className="rounded border border-phosphor-cyan/30 bg-phosphor-cyan/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-phosphor-cyan"
@@ -80,7 +140,7 @@ export function MetricsBar() {
           restored
         </span>
       )}
-      {session.config.isolationGuard && (
+      {isolationGuard && (
         <span
           title="Worktree isolation: writes to main checkout are blocked"
           className="rounded border border-phosphor-magenta/35 bg-phosphor-magenta/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-phosphor-magenta"
@@ -88,7 +148,7 @@ export function MetricsBar() {
           isolated
         </span>
       )}
-      <GitStatusPill summary={session.gitSummary} cwd={session.config.cwd} compact />
+      <GitStatusPill summary={gitSummary} cwd={cwd} compact />
       <DiffStatChip additions={m.linesAdded} deletions={m.linesDeleted} />
       {items.map((item) => (
         <span
@@ -118,7 +178,7 @@ export function MetricsBar() {
         </span>
       )}
       <span className="ml-auto truncate font-mono text-phosphor-green/40">
-        {session.name}
+        {name}
       </span>
     </div>
   );

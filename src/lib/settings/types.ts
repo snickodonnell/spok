@@ -173,7 +173,9 @@ export type AuditEventType =
   | "policy_denial"
   | "runtime_action"
   | "redaction"
-  | "settings_change";
+  | "settings_change"
+  /** Durable workspace trust grant or revoke. */
+  | "workspace_trust";
 
 export interface AuditEvent {
   type: AuditEventType;

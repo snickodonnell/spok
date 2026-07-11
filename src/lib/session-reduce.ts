@@ -1,11 +1,11 @@
 /**
  * Pure session stream reducer — shared by the Zustand store and batch ingest.
- * Applies one stamped StreamEvent to session + expanded-node set without
- * touching React/Zustand. Callers recompute metrics once per batch flush.
+ * Applies stamped StreamEvents to session + expanded-node set without
+ * touching React/Zustand. Batch path mutates once and freezes at the end.
  */
 
 import { nanoid } from "nanoid";
-import type { Session, StreamEvent, TraceNode } from "./types";
+import type { FileDiff, Session, StreamEvent, TraceNode } from "./types";
 import { buildFileTree, createFileDiff } from "./diff-utils";
 import { streamEventToNodeType, extractPaths } from "./parser";
 import {
@@ -22,6 +22,8 @@ export type ReduceResult = {
   /** When true, metrics counts need a full recompute from nodes/files. */
   metricsDirty: boolean;
 };
+
+const MAX_EVENT_LOG = 8_000;
 
 function normalizeRepoPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.?\//, "");
@@ -65,10 +67,9 @@ function upsertNode(
 
 function appendEventLog(session: Session, stamped: StreamEvent): Session {
   const prevLog = session.eventLog ?? [];
-  const MAX_MEM = 8_000;
   const nextLog =
-    prevLog.length >= MAX_MEM
-      ? [...prevLog.slice(prevLog.length - MAX_MEM + 1), stamped]
+    prevLog.length >= MAX_EVENT_LOG
+      ? [...prevLog.slice(prevLog.length - MAX_EVENT_LOG + 1), stamped]
       : [...prevLog, stamped];
   return {
     ...session,
@@ -77,9 +78,8 @@ function appendEventLog(session: Session, stamped: StreamEvent): Session {
   };
 }
 
+/** Single-pass metrics — avoids 5× filter + 2× reduce over the same arrays. */
 export function recomputeSessionMetrics(session: Session) {
-  const nodes = Object.values(session.nodes);
-  const files = Object.values(session.files);
   const startedAt = session.metrics.startedAt ?? session.createdAt;
   const endedAt =
     session.status === "completed" ||
@@ -88,80 +88,188 @@ export function recomputeSessionMetrics(session: Session) {
     session.status === "ready"
       ? session.metrics.endedAt
       : null;
-  const tokensEstimate = session.metrics.tokensEstimate;
-  const tokensLimit = session.metrics.tokensLimit;
-  return {
+
+  let toolCallCount = 0;
+  let thinkingSteps = 0;
+  let subagentCount = 0;
+  let errorCount = 0;
+  for (const n of Object.values(session.nodes)) {
+    if (n.type === "tool_call") toolCallCount++;
+    if (n.type === "thinking" || n.type === "reasoning") thinkingSteps++;
+    if (n.type === "subagent") subagentCount++;
+    if (n.type === "error" || n.status === "error") errorCount++;
+  }
+
+  let linesAdded = 0;
+  let linesDeleted = 0;
+  const fileList = Object.values(session.files);
+  for (const f of fileList) {
+    linesAdded += f.additions;
+    linesDeleted += f.deletions;
+  }
+
+  // Prefer a stable wall-clock sample: for live runs the UI computes elapsed
+  // from startedAt. Reusing the previous elapsedMs when still running avoids
+  // a new metrics object identity every stream batch when counts are unchanged.
+  const elapsedMs =
+    endedAt != null
+      ? endedAt - startedAt
+      : session.metrics.elapsedMs || 0;
+
+  const next = {
     startedAt,
     endedAt,
-    elapsedMs: (endedAt ?? Date.now()) - startedAt,
-    toolCallCount: nodes.filter((n) => n.type === "tool_call").length,
-    thinkingSteps: nodes.filter(
-      (n) => n.type === "thinking" || n.type === "reasoning"
-    ).length,
-    filesChanged: files.length,
-    linesAdded: files.reduce((s, f) => s + f.additions, 0),
-    linesDeleted: files.reduce((s, f) => s + f.deletions, 0),
-    subagentCount: nodes.filter((n) => n.type === "subagent").length,
-    errorCount: nodes.filter((n) => n.type === "error" || n.status === "error")
-      .length,
-    tokensEstimate,
-    tokensLimit,
+    elapsedMs,
+    toolCallCount,
+    thinkingSteps,
+    filesChanged: fileList.length,
+    linesAdded,
+    linesDeleted,
+    subagentCount,
+    errorCount,
+    tokensEstimate: session.metrics.tokensEstimate,
+    tokensLimit: session.metrics.tokensLimit,
+  };
+
+  const prev = session.metrics;
+  if (
+    prev.startedAt === next.startedAt &&
+    prev.endedAt === next.endedAt &&
+    prev.elapsedMs === next.elapsedMs &&
+    prev.toolCallCount === next.toolCallCount &&
+    prev.thinkingSteps === next.thinkingSteps &&
+    prev.filesChanged === next.filesChanged &&
+    prev.linesAdded === next.linesAdded &&
+    prev.linesDeleted === next.linesDeleted &&
+    prev.subagentCount === next.subagentCount &&
+    prev.errorCount === next.errorCount &&
+    prev.tokensEstimate === next.tokensEstimate &&
+    prev.tokensLimit === next.tokensLimit
+  ) {
+    return prev;
+  }
+  return next;
+}
+
+/** Path → fileId index so we don't scan Object.values(files) every event. */
+function buildPathIndex(files: Record<string, FileDiff>): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const f of Object.values(files)) {
+    idx.set(normalizeRepoPath(f.path), f.id);
+  }
+  return idx;
+}
+
+function findFileByPath(
+  files: Record<string, FileDiff>,
+  pathIndex: Map<string, string>,
+  path: string
+): FileDiff | undefined {
+  const norm = normalizeRepoPath(path);
+  const byId = pathIndex.get(norm);
+  if (byId && files[byId]) return files[byId];
+  // suffix match fallback (rare)
+  for (const f of Object.values(files)) {
+    if (f.path.endsWith(path) || f.path.endsWith(norm)) return f;
+  }
+  return undefined;
+}
+
+type WorkState = {
+  status: Session["status"];
+  metrics: Session["metrics"];
+  nodes: Record<string, TraceNode>;
+  files: Record<string, FileDiff>;
+  rootTraceIds: string[];
+  selectedTraceId: string | null;
+  selectedFileId: string | null;
+  updatedAt: number;
+  eventLog: StreamEvent[];
+  eventCount: number;
+  filesDirty: boolean;
+  /** Cached id of most recent thinking/reasoning node (streaming coalesce). */
+  latestThoughtId: string | null;
+  /** Cached id of most recent tool_call (tool_result parent). */
+  latestToolCallId: string | null;
+  pathIndex: Map<string, string>;
+  expanded: Set<string>;
+  linkedHighlightFileId: string | null | undefined;
+  metricsDirty: boolean;
+};
+
+function findLatestOfType(
+  nodes: Record<string, TraceNode>,
+  types: Set<string>
+): string | null {
+  let bestId: string | null = null;
+  let bestTs = -Infinity;
+  for (const n of Object.values(nodes)) {
+    if (!types.has(n.type)) continue;
+    if (n.timestamp >= bestTs) {
+      bestTs = n.timestamp;
+      bestId = n.id;
+    }
+  }
+  return bestId;
+}
+
+function createWorkState(
+  session: Session,
+  expandedNodeIds: Set<string>
+): WorkState {
+  const nodes = { ...session.nodes };
+  const files = { ...session.files };
+  return {
+    status: session.status,
+    metrics: { ...session.metrics },
+    nodes,
+    files,
+    rootTraceIds: [...session.rootTraceIds],
+    selectedTraceId: session.selectedTraceId,
+    selectedFileId: session.selectedFileId,
+    updatedAt: session.updatedAt,
+    eventLog: session.eventLog ? session.eventLog.slice() : [],
+    eventCount: session.eventCount ?? session.eventLog?.length ?? 0,
+    filesDirty: false,
+    latestThoughtId: findLatestOfType(
+      nodes,
+      new Set(["thinking", "reasoning"])
+    ),
+    latestToolCallId: findLatestOfType(nodes, new Set(["tool_call"])),
+    pathIndex: buildPathIndex(files),
+    expanded: new Set(expandedNodeIds),
+    linkedHighlightFileId: undefined,
+    metricsDirty: false,
   };
 }
 
-/**
- * Apply a single already-stamped stream event.
- * Does not run full metrics recompute (caller flushes once per batch).
- */
-export function reduceStreamEvent(
-  session: Session,
-  expandedNodeIds: Set<string>,
-  event: StreamEvent
-): ReduceResult {
-  let expanded = expandedNodeIds;
-  let linkedHighlightFileId: string | null | undefined;
+function pushLog(ws: WorkState, event: StreamEvent) {
+  ws.eventLog.push(event);
+  ws.eventCount += 1;
+  if (ws.eventLog.length > MAX_EVENT_LOG) {
+    ws.eventLog = ws.eventLog.slice(ws.eventLog.length - MAX_EVENT_LOG);
+  }
+}
 
+function applyEventToWork(ws: WorkState, event: StreamEvent): void {
   if (event.type === "session_start") {
-    const updated = appendEventLog(
-      {
-        ...session,
-        status: "running",
-        metrics: { ...session.metrics, startedAt: event.timestamp },
-        updatedAt: Date.now(),
-      },
-      event
-    );
-    return {
-      session: updated,
-      expandedNodeIds: expanded,
-      metricsDirty: true,
-    };
+    ws.status = "running";
+    ws.metrics = { ...ws.metrics, startedAt: event.timestamp };
+    ws.updatedAt = Date.now();
+    pushLog(ws, event);
+    ws.metricsDirty = true;
+    return;
   }
 
   if (event.type === "session_end") {
-    const updated = appendEventLog(
-      {
-        ...session,
-        status: event.status === "error" ? "error" : "completed",
-        metrics: {
-          ...session.metrics,
-          endedAt: event.timestamp,
-        },
-        updatedAt: Date.now(),
-      },
-      event
-    );
-    return {
-      session: updated,
-      expandedNodeIds: expanded,
-      metricsDirty: true,
-    };
+    ws.status = event.status === "error" ? "error" : "completed";
+    ws.metrics = { ...ws.metrics, endedAt: event.timestamp };
+    ws.updatedAt = Date.now();
+    pushLog(ws, event);
+    ws.metricsDirty = true;
+    return;
   }
 
-  const nodes = { ...session.nodes };
-  const files = { ...session.files };
-  const rootTraceIds = [...session.rootTraceIds];
-  let selectedFileId = session.selectedFileId;
   let workingEvent = event;
 
   // File / diff events
@@ -170,9 +278,7 @@ export function reduceStreamEvent(
     workingEvent.path
   ) {
     const path = normalizeRepoPath(workingEvent.path);
-    const existing = Object.values(files).find(
-      (f) => normalizeRepoPath(f.path) === path || f.path.endsWith(path)
-    );
+    const existing = findFileByPath(ws.files, ws.pathIndex, path);
     const fd = createFileDiff({
       path: existing?.path ?? path,
       oldPath: workingEvent.oldPath,
@@ -189,15 +295,17 @@ export function reduceStreamEvent(
     if (workingEvent.id && !fd.relatedTraceIds.includes(workingEvent.id)) {
       fd.relatedTraceIds.push(workingEvent.id);
     }
-    files[fd.id] = fd;
-    selectedFileId = fd.id;
+    ws.files[fd.id] = fd;
+    ws.pathIndex.set(normalizeRepoPath(fd.path), fd.id);
+    ws.filesDirty = true;
+    ws.selectedFileId = fd.id;
 
     const nodeId = workingEvent.id || nanoid(10);
-    const prev = nodes[nodeId];
+    const prev = ws.nodes[nodeId];
     const parentId = workingEvent.parentId ?? prev?.parentId ?? null;
     const depth =
-      parentId && nodes[parentId] ? nodes[parentId].depth + 1 : 0;
-    upsertNode(nodes, rootTraceIds, {
+      parentId && ws.nodes[parentId] ? ws.nodes[parentId].depth + 1 : 0;
+    upsertNode(ws.nodes, ws.rootTraceIds, {
       id: nodeId,
       parentId,
       type: "file_change",
@@ -220,41 +328,22 @@ export function reduceStreamEvent(
       depth,
       meta: workingEvent.meta,
     });
-    expanded = new Set(expanded);
-    expanded.add(nodeId);
-    if (parentId) expanded.add(parentId);
-    linkedHighlightFileId = fd.id;
-
-    const fileTree = buildFileTree(Object.values(files));
-    let updated = appendEventLog(
-      {
-        ...session,
-        nodes,
-        files,
-        fileTree,
-        rootTraceIds,
-        selectedFileId,
-        selectedTraceId: nodeId,
-        status:
-          session.status === "idle" || session.status === "ready"
-            ? "running"
-            : session.status,
-        updatedAt: Date.now(),
-        metrics: session.metrics,
-      },
-      workingEvent
-    );
-    return {
-      session: updated,
-      expandedNodeIds: expanded,
-      linkedHighlightFileId,
-      metricsDirty: true,
-    };
+    ws.expanded.add(nodeId);
+    if (parentId) ws.expanded.add(parentId);
+    ws.linkedHighlightFileId = fd.id;
+    ws.selectedTraceId = nodeId;
+    if (ws.status === "idle" || ws.status === "ready") {
+      ws.status = "running";
+    }
+    ws.updatedAt = Date.now();
+    pushLog(ws, workingEvent);
+    ws.metricsDirty = true;
+    return;
   }
 
   // Generic trace node (upsert by id for chunk coalescing)
   let nodeId = workingEvent.id || nanoid(10);
-  let existingNode = nodes[nodeId];
+  let existingNode = ws.nodes[nodeId];
   const isThoughtType =
     workingEvent.type === "thinking" || workingEvent.type === "reasoning";
   if (isThoughtType) {
@@ -266,12 +355,13 @@ export function reduceStreamEvent(
     ) {
       workingEvent = { ...workingEvent, content: "", summary: undefined };
     } else if (incoming) {
-      const latestThought = Object.values(nodes)
-        .filter((n) => n.type === "thinking" || n.type === "reasoning")
-        .sort((a, b) => b.timestamp - a.timestamp)[0];
+      const latestThought = ws.latestThoughtId
+        ? ws.nodes[ws.latestThoughtId]
+        : undefined;
       if (latestThought) {
         const prev = latestThought.content || "";
-        const sameId = !!workingEvent.id && workingEvent.id === latestThought.id;
+        const sameId =
+          !!workingEvent.id && workingEvent.id === latestThought.id;
         const cumulative =
           incoming.startsWith(prev) ||
           (prev.startsWith(incoming) && incoming.length < prev.length);
@@ -296,16 +386,19 @@ export function reduceStreamEvent(
   if (workingEvent.type === "tool_result" && !resolvedParent) {
     const toolCallId = workingEvent.meta?.toolCallId as string | undefined;
     if (toolCallId) {
-      const match = Object.values(nodes).find(
-        (n) => n.meta?.toolCallId === toolCallId || n.id === toolCallId
-      );
-      if (match) resolvedParent = match.id;
+      if (ws.nodes[toolCallId]) {
+        resolvedParent = toolCallId;
+      } else {
+        for (const n of Object.values(ws.nodes)) {
+          if (n.meta?.toolCallId === toolCallId) {
+            resolvedParent = n.id;
+            break;
+          }
+        }
+      }
     }
-    if (!resolvedParent) {
-      const toolCalls = Object.values(nodes)
-        .filter((n) => n.type === "tool_call")
-        .sort((a, b) => b.timestamp - a.timestamp);
-      if (toolCalls[0]) resolvedParent = toolCalls[0].id;
+    if (!resolvedParent && ws.latestToolCallId) {
+      resolvedParent = ws.latestToolCallId;
     }
   }
   if (
@@ -316,43 +409,45 @@ export function reduceStreamEvent(
       workingEvent.type === "plan" ||
       workingEvent.type === "subagent_start")
   ) {
-    const lastRoot = rootTraceIds[rootTraceIds.length - 1];
-    if (lastRoot && nodes[lastRoot]?.type === "goal") {
+    const lastRoot = ws.rootTraceIds[ws.rootTraceIds.length - 1];
+    if (lastRoot && ws.nodes[lastRoot]?.type === "goal") {
       resolvedParent = lastRoot;
     }
   }
 
   const depth =
-    resolvedParent && nodes[resolvedParent]
-      ? nodes[resolvedParent].depth + 1
+    resolvedParent && ws.nodes[resolvedParent]
+      ? ws.nodes[resolvedParent].depth + 1
       : (existingNode?.depth ?? 0);
 
   const links = [...(workingEvent.links ?? existingNode?.links ?? [])];
-  const paths = extractPaths(workingEvent.content || "");
+  const contentStr = workingEvent.content || "";
+  const paths = contentStr ? extractPaths(contentStr) : [];
   const bareFile = workingEvent.path
     ? [workingEvent.path]
-    : (workingEvent.content || "").match(
-        /(?:^|[\s`"'])([a-zA-Z0-9_.-]+\.(?:md|ts|tsx|js|json|py|rs|go|css|html))\b/g
-      ) ?? [];
-  for (const p of [...paths, ...bareFile.map((x) => x.trim())]) {
-    const clean = p.replace(/^[\s`"']+/, "");
-    const f = Object.values(files).find(
-      (x) =>
-        normalizeRepoPath(x.path) === normalizeRepoPath(clean) ||
-        x.path.endsWith(clean)
-    );
-    if (f && !links.some((l) => l.targetId === f.id)) {
-      links.push({
-        kind: "file",
-        targetId: f.id,
-        path: f.path,
-        label: f.path,
-      });
-      if (!f.relatedTraceIds.includes(nodeId)) {
-        files[f.id] = {
-          ...f,
-          relatedTraceIds: [...f.relatedTraceIds, nodeId],
-        };
+    : contentStr
+      ? contentStr.match(
+          /(?:^|[\s`"'])([a-zA-Z0-9_.-]+\.(?:md|ts|tsx|js|json|py|rs|go|css|html))\b/g
+        ) ?? []
+      : [];
+  if (paths.length || bareFile.length) {
+    for (const p of [...paths, ...bareFile.map((x) => x.trim())]) {
+      const clean = p.replace(/^[\s`"']+/, "");
+      const f = findFileByPath(ws.files, ws.pathIndex, clean);
+      if (f && !links.some((l) => l.targetId === f.id)) {
+        links.push({
+          kind: "file",
+          targetId: f.id,
+          path: f.path,
+          label: f.path,
+        });
+        if (!f.relatedTraceIds.includes(nodeId)) {
+          ws.files[f.id] = {
+            ...f,
+            relatedTraceIds: [...f.relatedTraceIds, nodeId],
+          };
+          ws.filesDirty = true;
+        }
       }
     }
   }
@@ -361,7 +456,7 @@ export function reduceStreamEvent(
     workingEvent.type === "tool_result" &&
     existingNode?.type === "tool_call"
   ) {
-    upsertNode(nodes, rootTraceIds, {
+    upsertNode(ws.nodes, ws.rootTraceIds, {
       ...existingNode,
       type: "tool_call",
       title: workingEvent.title || existingNode.title,
@@ -414,7 +509,7 @@ export function reduceStreamEvent(
           : undefined) ||
         existingNode?.summary;
 
-    upsertNode(nodes, rootTraceIds, {
+    upsertNode(ws.nodes, ws.rootTraceIds, {
       id: nodeId,
       parentId: resolvedParent,
       type: streamEventToNodeType(workingEvent.type),
@@ -445,65 +540,106 @@ export function reduceStreamEvent(
   if (
     workingEvent.type === "tool_result" &&
     resolvedParent &&
-    nodes[resolvedParent]
+    ws.nodes[resolvedParent]
   ) {
-    nodes[resolvedParent] = {
-      ...nodes[resolvedParent],
+    ws.nodes[resolvedParent] = {
+      ...ws.nodes[resolvedParent],
       status: workingEvent.status === "error" ? "error" : "success",
       durationMs: workingEvent.durationMs,
     };
   }
 
-  expanded = new Set(expanded);
-  expanded.add(nodeId);
-  if (resolvedParent) expanded.add(resolvedParent);
+  // Track streaming coalesce targets
+  const nodeType = ws.nodes[nodeId]?.type;
+  if (nodeType === "thinking" || nodeType === "reasoning") {
+    ws.latestThoughtId = nodeId;
+  }
+  if (nodeType === "tool_call" || workingEvent.type === "tool_call") {
+    ws.latestToolCallId = nodeId;
+  }
 
-  const fileTree = buildFileTree(Object.values(files));
-  let updated = appendEventLog(
-    {
-      ...session,
-      nodes,
-      files,
-      fileTree,
-      rootTraceIds,
-      selectedTraceId: nodeId,
-      selectedFileId,
-      status:
-        session.status === "idle" ||
-        session.status === "starting" ||
-        session.status === "ready"
-          ? "running"
-          : session.status,
-      updatedAt: Date.now(),
-      metrics: session.metrics,
-    },
-    workingEvent
-  );
+  ws.expanded.add(nodeId);
+  if (resolvedParent) ws.expanded.add(resolvedParent);
+  ws.selectedTraceId = nodeId;
 
-  if (!updated.metrics.startedAt) {
-    updated = {
-      ...updated,
-      metrics: { ...updated.metrics, startedAt: workingEvent.timestamp },
-    };
+  if (
+    ws.status === "idle" ||
+    ws.status === "starting" ||
+    ws.status === "ready"
+  ) {
+    ws.status = "running";
+  }
+  ws.updatedAt = Date.now();
+  pushLog(ws, workingEvent);
+
+  if (!ws.metrics.startedAt) {
+    ws.metrics = { ...ws.metrics, startedAt: workingEvent.timestamp };
   }
 
   const providerTokens = extractProviderTokens(workingEvent.meta);
   if (providerTokens != null) {
-    updated = {
-      ...updated,
-      metrics: mergeTokensIntoMetrics(updated.metrics, providerTokens),
+    ws.metrics = mergeTokensIntoMetrics(ws.metrics, providerTokens);
+  }
+
+  ws.metricsDirty = true;
+}
+
+function freezeWorkState(
+  session: Session,
+  ws: WorkState,
+  recomputeMetrics: boolean
+): ReduceResult {
+  const fileTree = ws.filesDirty
+    ? buildFileTree(Object.values(ws.files))
+    : session.fileTree;
+
+  let next: Session = {
+    ...session,
+    status: ws.status,
+    metrics: ws.metrics,
+    nodes: ws.nodes,
+    files: ws.files,
+    fileTree,
+    rootTraceIds: ws.rootTraceIds,
+    selectedTraceId: ws.selectedTraceId,
+    selectedFileId: ws.selectedFileId,
+    updatedAt: ws.updatedAt,
+    eventLog: ws.eventLog,
+    eventCount: ws.eventCount,
+  };
+
+  if (recomputeMetrics && ws.metricsDirty) {
+    next = {
+      ...next,
+      metrics: recomputeSessionMetrics(next),
     };
   }
 
   return {
-    session: updated,
-    expandedNodeIds: expanded,
-    metricsDirty: true,
+    session: next,
+    expandedNodeIds: ws.expanded,
+    linkedHighlightFileId: ws.linkedHighlightFileId,
+    metricsDirty: ws.metricsDirty,
   };
 }
 
 /**
+ * Apply a single already-stamped stream event.
+ * Does not run full metrics recompute (caller flushes once per batch).
+ */
+export function reduceStreamEvent(
+  session: Session,
+  expandedNodeIds: Set<string>,
+  event: StreamEvent
+): ReduceResult {
+  const ws = createWorkState(session, expandedNodeIds);
+  applyEventToWork(ws, event);
+  return freezeWorkState(session, ws, false);
+}
+
+/**
  * Apply many stamped events; recomputes metrics once at the end.
+ * Clones session collections once, mutates for the batch, freezes once.
  */
 export function reduceStreamEvents(
   session: Session,
@@ -518,32 +654,9 @@ export function reduceStreamEvents(
     };
   }
 
-  let current = session;
-  let expanded = expandedNodeIds;
-  let linkedHighlightFileId: string | null | undefined;
-  let metricsDirty = false;
-
+  const ws = createWorkState(session, expandedNodeIds);
   for (const event of events) {
-    const result = reduceStreamEvent(current, expanded, event);
-    current = result.session;
-    expanded = result.expandedNodeIds;
-    if (result.linkedHighlightFileId !== undefined) {
-      linkedHighlightFileId = result.linkedHighlightFileId;
-    }
-    metricsDirty = metricsDirty || result.metricsDirty;
+    applyEventToWork(ws, event);
   }
-
-  if (metricsDirty) {
-    current = {
-      ...current,
-      metrics: recomputeSessionMetrics(current),
-    };
-  }
-
-  return {
-    session: current,
-    expandedNodeIds: expanded,
-    linkedHighlightFileId,
-    metricsDirty,
-  };
+  return freezeWorkState(session, ws, true);
 }

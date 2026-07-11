@@ -30,16 +30,31 @@ export function UsageMeter({
   contextLimit,
   show = true,
 }: Props) {
-  const session = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId] : null
-  );
+  const sessionId = useSpokStore((s) => s.activeSessionId);
+  // Rebuild only when token/turn counts move — not on every thinking chunk.
+  const usageKey = useSpokStore((s) => {
+    const sess = s.activeSessionId
+      ? s.sessions[s.activeSessionId]
+      : null;
+    if (!sess) return "";
+    return [
+      sess.metrics.tokensEstimate,
+      sess.metrics.tokensLimit,
+      sess.promptHistory?.length ?? 0,
+      sess.status,
+      Object.keys(sess.nodes).length > 0 ? 1 : 0,
+    ].join(":");
+  });
 
-  // Session object is replaced on each store update for that session, so it is
-  // a sufficient dependency for usage recompute without listing every field.
+  const session = sessionId
+    ? useSpokStore.getState().sessions[sessionId] ?? null
+    : null;
+
   const snapshot = useMemo(() => {
     if (!session) return null;
+    void usageKey;
     return buildSessionUsage(session, { contextLimit });
-  }, [session, contextLimit]);
+  }, [session, contextLimit, usageKey]);
 
   if (!show || !session || !snapshot) return null;
 

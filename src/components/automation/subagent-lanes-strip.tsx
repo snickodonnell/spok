@@ -16,32 +16,39 @@ import { cn } from "@/lib/utils";
  * without polluting the Thinking panel.
  */
 export function SubagentLanesStrip() {
-  const session = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId] : null
-  );
+  const sessionId = useSpokStore((s) => s.activeSessionId);
+  // Only re-extract when subagent-ish activity changes, not every token.
+  const lanesRevision = useSpokStore((s) => {
+    const sess = s.activeSessionId
+      ? s.sessions[s.activeSessionId]
+      : null;
+    if (!sess) return "";
+    return `${sess.metrics.subagentCount}:${Object.keys(sess.nodes).length}`;
+  });
   const selected = useSpokStore((s) => s.selectedSubagentLaneId);
   const setSelected = useSpokStore((s) => s.setSelectedSubagentLaneId);
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
   const setSessionLanes = useSpokStore((s) => s.setSessionSubagentLanes);
 
   const lanes = useMemo(() => {
+    if (!sessionId) return [];
+    void lanesRevision;
+    const session = useSpokStore.getState().sessions[sessionId];
     if (!session) return [];
     const extracted = extractSubagentLanes(session.nodes);
-    // Refresh cache when node set grows
     if (
       extracted.length &&
       (!session.subagentLanes ||
         session.subagentLanes.length !== extracted.length)
     ) {
-      // Defer store write
       queueMicrotask(() => {
-        if (session) setSessionLanes(session.id, extracted);
+        setSessionLanes(sessionId, extracted);
       });
     }
     return extracted;
-  }, [session, setSessionLanes]);
+  }, [sessionId, lanesRevision, setSessionLanes]);
 
-  if (!session || lanes.length === 0) return null;
+  if (!sessionId || lanes.length === 0) return null;
 
   const running = lanes.filter(
     (l) => l.status === "running" || l.status === "pending"

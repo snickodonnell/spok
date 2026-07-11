@@ -32,6 +32,7 @@ export type DiagnosticsBundle = {
     sessionsRoot: string;
     settingsUser: string;
     auditLog: string;
+    workspaceTrust: string;
   };
   sessions: {
     count: number;
@@ -194,6 +195,7 @@ export function buildDiagnosticsBundle(opts?: {
       sessionsRoot,
       settingsUser: path.join(home, "settings.json"),
       auditLog: path.join(home, "audit.ndjson"),
+      workspaceTrust: path.join(home, "workspace-trust.json"),
     },
     sessions: {
       count: sessionDirs.length,

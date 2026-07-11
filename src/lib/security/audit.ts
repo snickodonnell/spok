@@ -61,7 +61,11 @@ export function auditToStreamMeta(event: AuditEvent): {
           ? "Policy denial"
           : event.type === "settings_change"
             ? "Settings changed"
-            : "Runtime action";
+            : event.type === "workspace_trust"
+              ? event.action === "revoke"
+                ? "Workspace trust revoked"
+                : "Workspace trusted"
+              : "Runtime action";
 
   const lines = [
     `action=${event.action}`,

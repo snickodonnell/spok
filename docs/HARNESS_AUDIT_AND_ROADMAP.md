@@ -1,6 +1,6 @@
 # Spok Harness Competitive Development Plan
 
-Last updated: 2026-07-10
+Last updated: 2026-07-10 (perf + progressive session restore)
 
 This is the current product and engineering source of truth for making Spok a world-class Grok Build harness. Older audit snapshots and completed UI milestone trackers have been removed so planning stays focused on the next product leap.
 
@@ -35,9 +35,11 @@ Sources checked on 2026-07-10:
 
 Spok already has the right product spine:
 
-- A focused session shell for Grok Build with transcript, thinking, events, changes, review, and Git surfaces.
-- Durable session state with imported traces, live sessions, replay fixtures, slash command catalog checks, and test coverage around parser behavior.
-- A local API security posture with loopback-only checks, bearer token auth, Origin validation, no-store JSON responses, workspace trust gates, and policy denial helpers.
+- A focused session shell for Grok Build with transcript, thinking, events, changes, review, validation, and Git surfaces.
+- Durable session state with progressive snapshot-first restore, imported traces, live sessions, replay fixtures, slash command catalog checks, and test coverage around parser/stream/perf behavior.
+- Shared privileged runtime under `src/server` with thin Next adapters and standalone `npm run runtime`.
+- A local API security posture with loopback-only checks, bearer token auth, Origin validation, no-store JSON responses, **durable** workspace trust, and policy denial helpers.
+- Stream/UI responsiveness work: rAF batching, virtualized lists, selective store subscriptions, active-tab mount for heavy panels.
 - Mobile/LAN support with host session sync, mobile sessions, split panes, timeline, trace, diff, and artifact views.
 - Product modes that let the UI shift between Harness, Inbox, Workspaces, Automations, and Extensions.
 - A low-overhead desktop architecture plan that separates the Grok runtime from Next.js and targets native Windows UI for the final product.
@@ -48,11 +50,13 @@ These are the next corrections I would make before expanding scope.
 
 ### P0: Make Performance Measurable
 
-- Add a small performance telemetry layer for app boot, first session paint, stream event ingestion latency, reducer time, trace render time, diff render time, and memory high-water marks.
-- Add CI checks for fixture replay speed and stream ingestion throughput.
-- Define budgets now:
+- ~~Add a small performance telemetry layer~~ **Done (2026-07-10):** `src/lib/perf.ts` — boot, stream ingest burst, reduce, tab switch, memory heap samples; budgets in `PERF_BUDGETS`.
+- ~~Add CI checks for fixture replay speed and stream ingestion throughput.~~ **Done:** `tests/perf/perf-budgets.test.ts` + `npm run test:perf`.
+- ~~Ship a real responsiveness pass~~ **Done (2026-07-10):** batch reduce, selective Zustand selectors, mount-only-active workspace tabs, timeline marker cap, coarse large-file diffs, host/git poll pause when hidden — see Horizon 1 notes below.
+- ~~Progressive session restore~~ **Done (2026-07-10):** snapshot-first materialize of last active session only; meta shells for the rest; lazy full load on select (`src/lib/session-hydrate.ts`, `use-session-hydration`).
+- Budgets (enforced/soft in tests + product targets):
   - Cold launch to usable shell: under 2 seconds on a target Windows laptop.
-  - Reopen recent session: under 500 ms to first useful content.
+  - Reopen recent session: under 500 ms to first useful content (**snapshot-first path**).
   - Stream ingest: under 16 ms main-thread work per burst after batching.
   - Large trace navigation: no visible frame drops for 10k event fixtures.
   - Diff tab switch: under 300 ms for common repo diffs.
@@ -61,48 +65,52 @@ These are the next corrections I would make before expanding scope.
 
 Continue Track A from `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`.
 
-- Complete the `src/server` extraction so route-independent session, filesystem, Git, security, and policy logic can run outside Next.js.
-- Keep the existing Next API surface as a thin compatibility wrapper during migration.
-- Add parity tests that call both the shared runtime and the Next wrappers.
-- Move the harness toward a standalone Node sidecar that the native desktop UI can supervise.
+- ~~Complete the `src/server` extraction~~ **Done (2026-07-10) PR1b–1e core:** handlers under `src/server/routes/*`; Next routes are thin adapters.
+- ~~Parity tests~~ **Done:** `tests/server/handler-extraction.test.ts` exercises shared handlers + `dispatchRequest`.
+- ~~Standalone Node sidecar precursor~~ **Done:** `src/server/main.ts` + `src/server/router.ts` (`npm run runtime`, port `SPOK_PORT`/`7788`, loopback only). Remaining: full dogfood `dev-app.mjs` + SPA proxy (PR2 polish).
 
 ### P0: Stabilize The Review Loop
 
-- Keep the Changes and Review surfaces permanently visible as first-class work areas, not transcript sidebars.
-- Add a validation lane that shows tests, builds, command results, failures, retries, and approvals in time order.
-- Link validation failures back to the event, file, command, and model message that caused them.
-- Preserve raw stream events beside normalized UI state so parser regressions remain diagnosable.
+- ~~Keep the Changes and Review surfaces permanently visible as first-class work areas~~ **Done:** workspace right tabs (Changes / Review / Validation / Events / Health) with stable chrome + test ids.
+- ~~Add a validation lane that shows tests, builds, command results, failures, retries, and approvals in time order.~~ **Done (2026-07-09):** workspace **Validation** tab + pure `buildValidationLane` (`src/lib/validation-lane.ts`, `src/components/session/validation-panel.tsx`). Filters, badge counts, jump-to-trace/file.
+- ~~Link validation failures back to the event, file, command, and model message that caused them.~~ **Done** for trace nodes and file links; deeper hunk/prompt causal links remain Horizon 2.
+- Preserve raw stream events beside normalized UI state so parser regressions remain diagnosable. (Raw Log tab virtualized; durable `eventLog` retained.)
 
 ### P0: Reduce UI Jank
 
-- ~~Batch stream updates before React state commits.~~ **Done (2026-07-09):** pure `reduceStreamEvents` + single Zustand commit per multi-event batch; live harness + host sync coalesce via rAF `stream-batch` (`src/lib/session-reduce.ts`, `src/lib/stream-batch.ts`).
-- Make trace/event lists fully virtualized and stable for long runs. (Event graph tree virtualized; thinking stream / raw log still list-render.)
-- Lazy-load Monaco and large diff renderers only when their tabs are opened. (Monaco already dynamic-imported.)
-- Add skeletons and stable dimensions for panels so session activity does not shift layout.
-- Audit mobile panels for text wrapping, tap targets, and scroll ownership.
+- ~~Batch stream updates before React state commits.~~ **Done (2026-07-09 / tightened 2026-07-10):** pure batch `reduceStreamEvents` (single clone + mutate + freeze), rAF `stream-batch` with heavy-load frame skip (`src/lib/session-reduce.ts`, `src/lib/stream-batch.ts`).
+- ~~Make trace/event lists fully virtualized~~ **Done (2026-07-10):** event graph tree + **thinking stream** + **raw log** virtualized (`@tanstack/react-virtual`).
+- ~~Lazy-load Monaco and large diff renderers only when their tabs are opened.~~ **Done (2026-07-10):** workspace mounts **only the active right tab** (Changes/Review/Validation/Events/Health); Monaco remains dynamic-imported.
+- ~~Stop full-session re-renders of shell chrome during stream.~~ **Done (2026-07-10):** field-level Zustand selectors on desktop shell, sidebar, metrics, status, timeline, composer, run card, usage meter.
+- ~~Cap in-memory raw/event tails; timeline DOM markers.~~ **Done:** raw log 4k; restore event tail 80; timeline max 200 markers.
+- ~~Add skeletons and stable dimensions for panels~~ **Done:** `PanelSkeleton` + fixed-height workspace tab chrome.
+- ~~Audit mobile panels~~ **Done (pass):** mobile tab bar `min-h-14`, primary actions `min-h-11/12`, scroll ownership on main/run panes.
 
 ### P1: Make Security Durable
 
-- Persist trusted workspace roots intentionally instead of relying on process-local trust.
-- Store trust decisions with revocation UI and clear scope labels.
+- ~~Persist trusted workspace roots intentionally instead of relying on process-local trust.~~ **Done (2026-07-09):** `~/.spok/workspace-trust.json` schema v1 via `src/lib/security/workspace-trust.ts`.
+- ~~Store trust decisions with revocation UI and clear scope labels.~~ **Done:** Settings → Privacy trusted roots list + revoke; API `DELETE /api/workspace/trust`.
 - Keep the local API loopback-only and token-gated.
-- Add audit logging for denied operations, policy mode changes, workspace trust changes, and process spawn requests.
+- Audit logging: workspace trust grant/revoke write `workspace_trust` audit events; policy denials and spawn paths already audited.
 
 ## Development Plan
 
 ### Horizon 1: Fast, Stable Local Harness
 
-Target: 2-4 weeks
+Target: 2-4 weeks · **Status: core outcomes met (2026-07-10)** — remaining work is polish and dogfood packaging.
 
 Outcome: Spok feels fast and dependable on real Grok Build sessions.
 
-- Finish Track A PR1b-PR1e runtime extraction for filesystem browse, Git diff/status, session start, and security-policy helpers.
-- Add performance instrumentation and replay benchmarks.
-- ~~Introduce event ingestion batching~~ (done: pure reduce + rAF batch) and add reducer profiling / perf telemetry.
-- Virtualize high-volume thinking stream and raw log panes (event graph tree already virtualized).
-- Make Monaco and heavy diff views lazy by default.
-- Add an always-visible validation lane with command status, exit code, duration, and linked artifacts.
-- Update E2E coverage to assert mobile and desktop panel usability under live-session fixtures.
+- ~~Finish Track A PR1b-PR1e runtime extraction~~ **Done (2026-07-10)** for session start, sessions, settings, approvals, git, git-diff, fs browse, trust, diagnostics, cli-status, health + standalone `npm run runtime`. Extensions/automation still Next-hosted (PR1e residual).
+- ~~Add performance instrumentation and replay benchmarks.~~ **Done** (`src/lib/perf.ts`, `tests/perf`).
+- ~~Introduce event ingestion batching~~ + ~~reducer profiling / perf telemetry~~ **Done** (batch reduce + stream batch marks).
+- ~~Virtualize high-volume thinking stream and raw log panes~~ **Done**.
+- ~~Make Monaco and heavy diff views lazy by default~~ **Done** (active-tab mount + dynamic Monaco).
+- ~~Progressive / snapshot-first session restore~~ **Done:** last active full-materialize; sidebar shells; background snapshot fill; `listSessionMetas` no longer scans NDJSON; lean snapshots on disk.
+- ~~Add an always-visible validation lane with command status, exit code, duration, and linked artifacts.~~ **Done** (Validation tab).
+- ~~Prompt composer file attachments (images / PDFs / documents) with session-scoped storage and Grok ACP `--prompt-file` integration.~~ **Done (2026-07-10):** paperclip + drag/drop/paste; files under `~/.spok/sessions/<id>/attachments/`; vision via inline image blocks; docs via embedded text or `resource_link`.
+- ~~Update E2E coverage~~ **Done (partial):** Playwright smoke covers workspace tabs + composer attach control after sample load.
+- **Still open (Horizon 1 polish):** Hono + `dev-app.mjs` dogfood launcher (Track A PR2); optional efficiency diff mode setting; broader Playwright coverage for restore/stream.
 
 ### Horizon 2: Review Workbench
 
@@ -186,19 +194,20 @@ The product should feel quiet, dense, and operational. It should not feel like a
 
 ### Performance UX
 
-- Long sessions must stay responsive while data streams in.
+- ~~Long sessions must stay responsive while data streams in.~~ **In place:** rAF batch + selective re-renders + virtualized lists (ongoing dogfood).
 - Panels should not resize unexpectedly when new content arrives.
 - Loading states should be local to the affected panel.
-- Heavy editors and diff viewers should appear only when needed.
+- ~~Heavy editors and diff viewers should appear only when needed.~~ **Done:** active right-tab mount.
+- ~~Session reopen must not block on replaying every durable log.~~ **Done:** progressive snapshot-first restore.
 - The UI should expose when the runtime is busy, blocked, or waiting for permission.
 
 ## Architecture Priorities
 
 ### Runtime
 
-- Shared runtime logic belongs in `src/server`.
-- Next routes should become adapters.
-- The desktop product should eventually run a native UI plus a local Node sidecar.
+- ~~Shared runtime logic belongs in `src/server`.~~ **Done** for core privileged routes; extensions/automation extract residual.
+- ~~Next routes should become adapters.~~ **Done** for extracted handlers.
+- The desktop product should eventually run a native UI plus a local Node sidecar (Horizon 5 / Track B).
 - The runtime must preserve raw stream contracts and normalized store contracts.
 
 ### Stream Contracts
@@ -220,18 +229,18 @@ The product should feel quiet, dense, and operational. It should not feel like a
 
 Spok should reach these capabilities before being called competitive:
 
-- Fast desktop launch and session reopen.
-- Multi-session inbox with concurrent agents.
-- Worktree and branch orchestration.
-- First-class review workbench with trace-linked diffs.
-- Validation lane with commands, tests, failures, and artifacts.
-- MCP management with permissioned invocation logs.
-- Hooks, skills, and project rules.
-- Mobile/LAN continuity.
+- ~~Fast desktop launch and session reopen.~~ **Partial / strong:** progressive restore + stream/UI perf pass; formal cold-launch measurement on device still open.
+- Multi-session inbox with concurrent agents. *(Monitor / automation jobs exist; full inbox UX still open.)*
+- Worktree and branch orchestration. *(Git panel + worktree helpers exist; full orchestration UX still open.)*
+- First-class review workbench with trace-linked diffs. *(Changes/Review + causal rail ship; Horizon 2 queue/recipes still open.)*
+- ~~Validation lane with commands, tests, failures, and artifacts.~~ **Partial:** Validation tab ships tools/tests/builds/approvals/policy with jump-to-trace; artifact browser and one-click recipes still open.
+- MCP management with permissioned invocation logs. *(MCP registry + trust basics ship; full management UI still open.)*
+- Hooks, skills, and project rules. *(Discovery, attach, hooks run ship; conflict/ordering UI still open.)*
+- ~~Mobile/LAN continuity.~~ **Done for dogfood:** host sync, mobile shell, `dev:lan`.
 - GitHub/GitLab PR and CI integration.
-- Native desktop shell without WebView for the end-user product.
-- Performance budgets and automated replay benchmarks.
-- Durable workspace trust and audit logs.
+- Native desktop shell without WebView for the end-user product. *(Horizon 5 / Track B.)*
+- ~~Performance budgets and automated replay benchmarks.~~ **Done:** `perf.ts` + `tests/perf`.
+- ~~Durable workspace trust and audit logs.~~ **Partial:** durable trust + revoke + trust audit events done; broader denial/mode audit coverage continues.
 - Optional remote/cloud runners using the same local contracts.
 
 ## Documentation Policy

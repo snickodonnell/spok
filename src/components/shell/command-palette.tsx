@@ -26,6 +26,7 @@ import {
   Activity,
   Palette,
   Accessibility,
+  FlaskConical,
 } from "lucide-react";
 import type { UiTheme } from "@/lib/theme";
 import { THEME_META } from "@/lib/theme";
@@ -302,6 +303,14 @@ export function CommandPalette() {
               label="Workspace · Review tab"
               onSelect={() => {
                 setWorkspaceRightTab("review");
+                setOpen(false);
+              }}
+            />
+            <Item
+              icon={FlaskConical}
+              label="Workspace · Validation"
+              onSelect={() => {
+                setWorkspaceRightTab("validation");
                 setOpen(false);
               }}
             />

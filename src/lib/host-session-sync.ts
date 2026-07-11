@@ -98,21 +98,43 @@ export async function pullAndMergeSession(
   }
 ): Promise<{ added: number; status: SessionStatus }> {
   const liveSet = new Set(opts.liveIds);
-  const bundle = await loadDurableSession(sessionId);
-  const events = bundle.events ?? [];
   const store = useSpokStore.getState();
   let session = store.sessions[sessionId];
+  const isLive = liveSet.has(sessionId);
 
-  // Bootstrap pulled cursor: don't re-apply events already in memory
+  // Bootstrap cursor from in-memory session so we never re-ingest the full log.
   if (opts.pulledCount[sessionId] == null && session) {
     opts.pulledCount[sessionId] = Math.max(
       session.eventCount ?? 0,
       session.eventLog?.length ?? 0
     );
-    // If disk is shorter (rotated), reset
-    if (opts.pulledCount[sessionId] > events.length) {
-      opts.pulledCount[sessionId] = 0;
-    }
+  }
+
+  // Skip multi-MB events.ndjson when we already have full content and the
+  // session is not live on the host. Snapshot/meta is enough for status sync.
+  const needEvents =
+    isLive ||
+    !session ||
+    !!session.hydratePartial ||
+    (opts.pulledCount[sessionId] ?? 0) === 0;
+
+  const bundle = await loadDurableSession(sessionId, {
+    events: needEvents,
+  });
+  const events = bundle.events ?? [];
+  const diskEventCount =
+    bundle.meta?.eventCount ??
+    events.length ??
+    session?.eventCount ??
+    0;
+
+  // If disk is shorter than our cursor (rotated/truncated), reset once.
+  if (
+    needEvents &&
+    events.length > 0 &&
+    (opts.pulledCount[sessionId] ?? 0) > events.length
+  ) {
+    opts.pulledCount[sessionId] = 0;
   }
 
   const already = opts.pulledCount[sessionId] ?? 0;
@@ -134,13 +156,14 @@ export async function pullAndMergeSession(
           status,
           source: "resume",
           durable: true,
-          eventLog: bundle.snapshot.eventLog ?? events.slice(-200),
-          eventCount: events.length,
+          hydratePartial: false,
+          eventLog: bundle.snapshot.eventLog ?? events.slice(-80),
+          eventCount: diskEventCount || events.length,
         },
         { activate: opts.activateIfMissing === true }
       );
       // Cursor: full disk applied via snapshot nodes; only new tail next time
-      opts.pulledCount[sessionId] = events.length;
+      opts.pulledCount[sessionId] = diskEventCount || events.length;
       session = useSpokStore.getState().sessions[sessionId];
     } else if (bundle.meta) {
       store.createSession(
@@ -173,9 +196,9 @@ export async function pullAndMergeSession(
     }
   } else if (slice.length) {
     store.applyStreamEvents(sessionId, slice);
-    opts.pulledCount[sessionId] = events.length;
+    opts.pulledCount[sessionId] = events.length || diskEventCount;
   } else {
-    opts.pulledCount[sessionId] = Math.max(already, events.length);
+    opts.pulledCount[sessionId] = Math.max(already, events.length, diskEventCount);
   }
 
   session = useSpokStore.getState().sessions[sessionId];

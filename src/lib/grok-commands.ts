@@ -412,6 +412,30 @@ export function baseFlagsArgs(flags: GrokRunFlags): string[] {
 }
 
 /**
+ * Swap a headless text prompt (`-p` / `--single`) for `--prompt-file`.
+ * Used when attachments are delivered as ACP content-block JSON.
+ */
+export function replacePromptWithFile(
+  args: string[],
+  promptFilePath: string
+): string[] {
+  const out = [...args];
+  const pIdx = out.findIndex((a) => a === "-p" || a === "--single");
+  if (pIdx >= 0) {
+    out.splice(pIdx, out[pIdx + 1] != null ? 2 : 1, "--prompt-file", promptFilePath);
+    return out;
+  }
+  const pfIdx = out.findIndex((a) => a === "--prompt-file");
+  if (pfIdx >= 0) {
+    if (pfIdx + 1 < out.length) out[pfIdx + 1] = promptFilePath;
+    else out.push(promptFilePath);
+    return out;
+  }
+  out.push("--prompt-file", promptFilePath);
+  return out;
+}
+
+/**
  * Resolve user input + sticky flags into a runnable invocation.
  */
 export function resolveRun(

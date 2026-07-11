@@ -12,7 +12,7 @@ import { syncDiffsFromGit } from "@/lib/git/client";
 export function useGitWatch(
   cwd: string | undefined,
   enabled: boolean,
-  intervalMs = 2500
+  intervalMs = 3500
 ) {
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
   const lastKey = useRef("");
@@ -24,6 +24,12 @@ export function useGitWatch(
 
     const tick = async () => {
       try {
+        if (
+          typeof document !== "undefined" &&
+          document.visibilityState === "hidden"
+        ) {
+          return;
+        }
         // Lightweight status fingerprint first
         const stRes = await localFetch(
           `/api/session/git?cwd=${encodeURIComponent(cwd)}`
@@ -57,9 +63,14 @@ export function useGitWatch(
 
     void tick();
     const id = setInterval(tick, intervalMs);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [cwd, enabled, intervalMs, activeSessionId]);
 }

@@ -4,7 +4,7 @@ Date: 2026-07-10
 
 Spok is a privileged local harness for Grok Build. It can browse workspaces, run Git, start agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary.
 
-The current implementation still uses Next.js route handlers for the local API. The runtime extraction plan moves shared privileged logic into `src/server` while keeping the same token, origin, workspace trust, policy, and audit expectations.
+**Runtime extraction status:** shared privileged handlers live under `src/server/routes/*`. Next `src/app/api/**` routes are thin adapters. Standalone dogfood entry: `npm run runtime` (loopback). Token, origin, workspace trust, policy, and audit expectations are unchanged for both Next adapters and the standalone server.
 
 ## Trust Model
 
@@ -13,7 +13,7 @@ The current implementation still uses Next.js route handlers for the local API. 
 | Network | Privileged APIs accept loopback hosts by default. `SPOK_LAN_ACCESS=1` allows private LAN hosts for phone/tablet testing on the same trusted network. Public internet hosts remain denied. |
 | Capability | Privileged routes require `x-spok-capability-token` from `GET /api/health`. |
 | Origin | Browser-originated calls must come from allowed local or private LAN origins. |
-| Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. |
+| Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. Trust is **durable** in `~/.spok/workspace-trust.json` (schema v1) and survives process restart. |
 | Commands | Default command profiles are restricted. Custom or high-risk profiles require approval unless policy explicitly allows them. |
 | Secrets | Secrets are stored locally, redacted from exports/logs where possible, and treated as sensitive even after redaction. |
 | Desktop | Tauri is an interim shell. It must not gain arbitrary process spawn permissions. The long-term product is native UI plus the shared local runtime. |
@@ -47,6 +47,21 @@ The privileged API surface must call the shared authorization helpers:
 | Pin one host | `SPOK_ALLOWED_HOSTS=192.168.1.10` | That Host value plus loopback. |
 
 LAN mode is for trusted local networks only. Do not port-forward or expose Spok to the public internet.
+
+## Durable Workspace Trust
+
+| Item | Detail |
+| --- | --- |
+| File | `~/.spok/workspace-trust.json` (or `$SPOK_HOME/workspace-trust.json`) |
+| Schema | `{ "version": 1, "roots": [{ "path": string, "trustedAt": number }] }` |
+| Paths | Stored via `canonicalizePath` (absolute, Windows drive letter normalized) |
+| Grant | Opening a workspace / `POST /api/workspace/trust` with capability token |
+| List | `GET /api/workspace/trust` → `trustedRoots` + `roots` (with timestamps) |
+| Revoke | `DELETE /api/workspace/trust` body `{ "path" }`; Settings → Privacy UI |
+| Audit | `workspace_trust` events on grant and revoke in `~/.spok/audit.ndjson` |
+| Containment | `isTrustedWorkspacePath` / `requireTrustedCwd` — path must equal a root or nest under one |
+
+Trust is process-loaded on first use and rewritten atomically on every mutation. Tests should set `SPOK_HOME` to a temp directory so durable writes do not touch the developer’s real home.
 
 ## Permission Modes
 

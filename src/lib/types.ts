@@ -179,12 +179,24 @@ export interface SessionConfig {
   isolationGuard?: boolean;
 }
 
+/** User-facing attachment chip (no absolute storage paths). */
+export interface PromptAttachmentRef {
+  id: string;
+  name: string;
+  mimeType: string;
+  /** image | document | text | binary */
+  kind: string;
+  size: number;
+}
+
 export interface PromptTurn {
   id: string;
   text: string;
   label: string;
   timestamp: number;
   status: "pending" | "running" | "success" | "error" | "cancelled";
+  /** Files attached for this turn (display/history only). */
+  attachments?: PromptAttachmentRef[];
 }
 
 export interface Session {
@@ -221,6 +233,11 @@ export interface Session {
   lastPersistedAt?: number;
   /** Count of normalized events written (disk or memory) */
   eventCount?: number;
+  /**
+   * True when only meta/shell is in memory (sidebar entry).
+   * Full nodes/files load lazily when the session is activated.
+   */
+  hydratePartial?: boolean;
   /** Cached git branch/status summary for status line + Git panel. */
   gitSummary?: SessionGitSummary;
   /** Review-mode comments for this session. */

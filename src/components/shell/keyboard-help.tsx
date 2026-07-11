@@ -26,6 +26,10 @@ const GROUPS: { title: string; rows: { keys: string; action: string }[] }[] = [
       { keys: "Ctrl+Enter", action: "Submit prompt (composer focused)" },
       { keys: "↑ / ↓ history", action: "Recall previous prompts in composer" },
       { keys: "/", action: "Slash-command autocomplete in composer" },
+      {
+        keys: "Paperclip / drop / paste",
+        action: "Attach images, PDFs, or documents to the next prompt",
+      },
     ],
   },
   {

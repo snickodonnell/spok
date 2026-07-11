@@ -112,4 +112,52 @@ test.describe("Spok shell smoke", () => {
       ).toBeVisible();
     }
   });
+
+  test("workspace right tabs: changes review validation events health", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await expect(page.locator("text=SPOK").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    const demo = page.getByTestId("welcome-play-sample");
+    test.skip(
+      !(await demo.isVisible().catch(() => false)),
+      "sample button not available"
+    );
+    await demo.click();
+    await expect(page.getByTestId("workspace")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("workspace-right-tabs")).toBeVisible();
+    await expect(page.getByTestId("tab-changes")).toBeVisible();
+    await expect(page.getByTestId("tab-review")).toBeVisible();
+    await expect(page.getByTestId("tab-validation")).toBeVisible();
+    await expect(page.getByTestId("tab-events")).toBeVisible();
+    await expect(page.getByTestId("tab-health")).toBeVisible();
+
+    await page.getByTestId("tab-validation").click();
+    await page.getByTestId("tab-events").click();
+    await expect(page.getByTestId("log-panel")).toBeVisible();
+    await page.getByTestId("tab-review").click();
+    await page.getByTestId("tab-changes").click();
+    await page.getByTestId("tab-health").click();
+  });
+
+  test("composer exposes attach control", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("text=SPOK").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    const demo = page.getByTestId("welcome-play-sample");
+    test.skip(
+      !(await demo.isVisible().catch(() => false)),
+      "sample button not available"
+    );
+    await demo.click();
+    await expect(page.getByTestId("prompt-composer")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("composer-attach")).toBeVisible();
+  });
 });

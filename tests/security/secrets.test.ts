@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   decideFilePreview,
   isDeniedSecretPath,
@@ -96,6 +99,27 @@ describe("file preview policy", () => {
 });
 
 describe("workspace trust containment", () => {
+  let home: string;
+  let prevHome: string | undefined;
+
+  before(() => {
+    home = mkdtempSync(path.join(tmpdir(), "spok-secrets-trust-"));
+    prevHome = process.env.SPOK_HOME;
+    process.env.SPOK_HOME = home;
+    clearTrustedRoots();
+  });
+
+  after(() => {
+    clearTrustedRoots();
+    if (prevHome === undefined) delete process.env.SPOK_HOME;
+    else process.env.SPOK_HOME = prevHome;
+    try {
+      rmSync(home, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
   it("trusts roots and rejects outside cwd", () => {
     clearTrustedRoots();
     const root = canonicalizePath(process.cwd());

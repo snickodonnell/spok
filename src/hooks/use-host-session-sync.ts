@@ -10,8 +10,8 @@ import type { LiveProcessInfo } from "@/lib/session-persist-client";
 import { useSpokStore } from "@/lib/store";
 import type { SessionMetaRecord } from "@/lib/types";
 
-const BASE_POLL_MS = 2_000;
-const LIVE_POLL_MS = 900;
+const BASE_POLL_MS = 3_000;
+const LIVE_POLL_MS = 1_500;
 
 export type HostSessionSync = {
   metas: SessionMetaRecord[];
@@ -126,18 +126,40 @@ export function useHostSessionSync(enabled = true): HostSessionSync {
 
   useEffect(() => {
     if (!enabled) return;
-    void refresh();
-    const t = setInterval(() => void refresh(), BASE_POLL_MS);
-    return () => clearInterval(t);
-  }, [enabled, refresh]);
 
-  // Faster while active session is running
-  useEffect(() => {
-    if (!enabled) return;
-    if (activeStatus !== "running" && activeStatus !== "starting") return;
-    const t = setInterval(() => void refresh(), LIVE_POLL_MS);
-    return () => clearInterval(t);
-  }, [enabled, activeStatus, refresh]);
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      // Skip network work when the window is backgrounded.
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+      void refresh();
+    };
+
+    void refresh();
+
+    // Single interval: faster while the active session is live, otherwise baseline.
+    // Previously BASE + LIVE both ran at once (~3× more pull traffic).
+    const isLive =
+      activeStatus === "running" || activeStatus === "starting";
+    const ms = isLive ? LIVE_POLL_MS : BASE_POLL_MS;
+    const t = setInterval(tick, ms);
+
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [enabled, refresh, activeStatus]);
 
   const activeLive =
     !!activeSessionId && liveSessionIds.includes(activeSessionId);

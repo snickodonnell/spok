@@ -163,22 +163,14 @@ export function listSessionMetas(): SessionMetaRecord[] {
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
 
+  // Fast path: only read meta.json. Do NOT scan events.ndjson / raw.ndjson —
+  // re-reading multi-MB logs for every session on every list was an app killer
+  // at boot. Counts are maintained by appendNormalizedEvents / appendRawEnvelopes.
   const metas: SessionMetaRecord[] = [];
   for (const id of ids) {
     try {
       const m = readSessionMeta(id);
-      if (m) {
-        // Refresh counts from disk if meta is stale
-        const eventCount = countNdjsonLines(eventsPath(id));
-        const rawCount = countNdjsonLines(rawPath(id));
-        if (m.eventCount !== eventCount || m.rawCount !== rawCount) {
-          const updated = updateSessionMeta(id, { eventCount, rawCount });
-          if (updated) metas.push(updated);
-          else metas.push(m);
-        } else {
-          metas.push(m);
-        }
-      }
+      if (m) metas.push(m);
     } catch {
       /* skip corrupt */
     }
@@ -198,7 +190,12 @@ export function appendNormalizedEvents(
     throw new Error(`Session not found: ${id}`);
   }
 
-  const startSeq = countNdjsonLines(eventsPath(id));
+  // Prefer meta.eventCount (O(1)) over re-scanning the whole NDJSON file.
+  const meta = readSessionMeta(id);
+  const startSeq =
+    typeof meta?.eventCount === "number" && meta.eventCount >= 0
+      ? meta.eventCount
+      : countNdjsonLines(eventsPath(id));
   const lines: string[] = [];
   let seq = startSeq;
   for (const event of events) {
@@ -246,7 +243,11 @@ export function appendRawEnvelopes(
     throw new Error(`Session not found: ${id}`);
   }
 
-  const startSeq = countNdjsonLines(rawPath(id));
+  const meta = readSessionMeta(id);
+  const startSeq =
+    typeof meta?.rawCount === "number" && meta.rawCount >= 0
+      ? meta.rawCount
+      : countNdjsonLines(rawPath(id));
   const lines: string[] = [];
   let seq = startSeq;
   for (const env of envelopes) {
@@ -307,10 +308,23 @@ export function writeSnapshot(id: string, session: Session): void {
   if (!existsSync(sessionDir(id))) {
     throw new Error(`Session not found: ${id}`);
   }
-  // Redact snapshot lightly (full redaction happens on export)
+  // Keep snapshots lean for fast boot restore — full event log lives in
+  // events.ndjson; in-memory tails are enough for Thinking/UI continuity.
+  const MAX_SNAP_EVENTS = 120;
+  const MAX_SNAP_RAW = 400;
+  const eventLog = session.eventLog ?? [];
+  const rawLog = session.rawLog ?? [];
   const scrubbed: Session = {
     ...session,
-    rawLog: session.rawLog.map((l) => redactSecrets(l).text),
+    hydratePartial: undefined,
+    eventLog:
+      eventLog.length > MAX_SNAP_EVENTS
+        ? eventLog.slice(eventLog.length - MAX_SNAP_EVENTS)
+        : eventLog,
+    rawLog: rawLog
+      .slice(Math.max(0, rawLog.length - MAX_SNAP_RAW))
+      .map((l) => redactSecrets(l).text),
+    eventCount: session.eventCount ?? eventLog.length,
   };
   atomicWriteJson(snapshotPath(id), scrubbed);
   updateSessionMeta(id, {

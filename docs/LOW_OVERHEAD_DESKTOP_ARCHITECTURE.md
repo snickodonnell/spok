@@ -5,10 +5,10 @@
 | **Title** | High-efficiency, low-overhead Spok desktop architecture |
 | **Author** | _(TBD)_ |
 | **Date** | 2026-07-10 |
-| **Status** | **Approved — Track A Stage 1 started (PR1a done)** |
+| **Status** | **Approved — Track A PR1a–1e core done; PR2 loopback runtime available; SPA stream/restore perf shipped** |
 | **Repo** | `C:\dev\spok` |
 | **Related** | `docs/HARNESS_AUDIT_AND_ROADMAP.md`, `docs/UPDATER_AND_DESKTOP.md`, `docs/SECURITY_POSTURE.md` |
-| **Revision** | R6 - aligned with current competitive roadmap and docs cleanup |
+| **Revision** | R7 — progressive session restore + UI stream perf marked done (2026-07-10) |
 
 ---
 
@@ -119,19 +119,21 @@ flowchart TB
 | State | On restart |
 |---|---|
 | Capability token | New random unless `SPOK_LOCAL_TOKEN` (lab only) |
-| Trusted roots | Cleared unless durable (PR10) |
+| Trusted roots | **Durable** in `~/.spok/workspace-trust.json` (schema v1) |
 | Process registry | Handles lost; orphans possible |
 | Pending approvals | Dropped (confirmed product choice + banner) |
+| Sessions | **Durable** under `~/.spok/sessions/*`; boot uses **snapshot-first progressive restore** |
 
 ### Pain points
 
-| Pain | Severity |
-|---|---|
-| Dual-stack Tauri + Next cold start / memory | High |
-| WebView/Chromium (or system WebView2) overhead for a local tool | High (motivates **native UI** end state — not a web-based product shell) |
-| Rust toolchain for thin shell that is not the product UI | High for Windows contributors |
-| Privileged logic stuck behind Next App Router | High for native client |
-| Stream → React churn | Medium (Horizon A) |
+| Pain | Severity | Status |
+|---|---|---|
+| Dual-stack Tauri + Next cold start / memory | High | Open — motivates Horizon B native UI |
+| WebView/Chromium (or system WebView2) overhead for a local tool | High | Open — native UI end state |
+| Rust toolchain for thin shell that is not the product UI | High for contributors | Open (interim Tauri only) |
+| Privileged logic stuck behind Next App Router | High for native client | **Mostly done** — `src/server/*` + thin Next adapters + `npm run runtime` |
+| Stream → React churn | Medium (Horizon A) | **Done (dogfood):** rAF batch, batch reduce, selective selectors, active-tab mount |
+| Full event-log restore at boot | High | **Done:** progressive snapshot-first hydrate (`session-hydrate.ts`) |
 
 ### What we will not do
 
@@ -209,6 +211,14 @@ Record **B0** (current Next+Tauri) and **B1** (minimal native host + Node runtim
 
 Retain softer WebView-era budgets from R3 only as dogfood gates: architecture floor idle RSS ≤ 280 MB without Monaco; first interactive ≤ 2.5 s. **Not** product success criteria once Horizon B ships.
 
+**Shipped (2026-07-10) toward these budgets:**
+
+- Stream: batch reduce + rAF coalesce + heavy-load frame skip (`session-reduce`, `stream-batch`).
+- UI: virtualized thinking/trace/log; mount-only-active workspace tabs; field-level store selectors.
+- Restore: meta list without NDJSON full scans; snapshot-first active session; background fill; lazy materialize on select.
+- Diff: LCS cell cap + coarse fallback for huge files.
+- Host/git polls pause when `document.hidden`; host sync waits until hydration completes.
+
 **Event definition:** normalized `StreamEvent`s after ingest coalescing. Memory: sum native UI process + runtime Node; exclude Grok/git children.
 
 ---
@@ -241,10 +251,11 @@ Extract handlers from `src/app/api/**` into `src/server/**`.
 
 ### Horizon A — Intermediate SPA / contributor path (not product)
 
-- Vite React SPA **or** keep Next until extraction complete; purpose: dogfood runtime, tests, contributor velocity.
-- `scripts/dev-app.mjs`: port → runtime → Vite proxy (`VITE_API_PROXY_TARGET`).
-- Monaco: **default quality** (`ui.perfMode: balanced`); optional **efficiency** mode / >5k line lightweight path.
-- Pure `reduceSession` shared by `store.ts` and `session-replay.ts`; rAF batching; tight selectors.
+- Keep Next (thin adapters) + optional Tauri dogfood until native UI; purpose: dogfood runtime, tests, contributor velocity.
+- Standalone runtime: `npm run runtime` (`src/server/main.ts` on loopback). `scripts/dev-app.mjs` still open for Vite proxy packaging.
+- Monaco: dynamic import + **mounted only when Changes tab active**; coarse line-diff fallback for huge files (efficiency-mode setting still optional).
+- Pure batch `reduceStreamEvents` shared by store and replay; rAF batching; tight Zustand selectors — **shipped**.
+- Progressive session restore (`session-hydrate.ts`) — **shipped**.
 - **No requirement** to ship Tauri/WebView to end users in Horizon A; browser dogfood is enough for API parity.
 
 ### Horizon B — Native Windows UI (product end state)
@@ -365,8 +376,9 @@ All privileged routes, capability header, stream schema v1, session logs, approv
 | Session logs | Unchanged layout |
 | `~/.spok/runtime/<pid>.json` | Diagnostics; tokenSha256 only |
 | `~/.spok/runtime/<pid>-children.json` | Orphan reap |
-| `~/.spok/workspace-trust.json` | `{ "version": 1, "roots": [{ "path", "trustedAt" }] }` via `canonicalizePath` |
-| Settings `ui.perfMode` | SPA intermediate: `balanced` \| `efficiency`. Native: mirror as app setting |
+| `~/.spok/workspace-trust.json` | `{ "version": 1, "roots": [{ "path", "trustedAt" }] }` via `canonicalizePath` — **shipped** |
+| Session `snapshot.json` | Lean snapshot (trimmed event/raw tails) for fast boot; full log remains in `events.ndjson` |
+| Settings `ui.perfMode` | SPA intermediate: `balanced` \| `efficiency` (coarse large-file path exists; named setting still optional). Native: mirror as app setting |
 
 ---
 
@@ -443,16 +455,16 @@ Matches **native product UI** (not web-based) + TS runtime + Windows-first; netw
 
 ### Stages
 
-| Stage | Horizon | Outcome |
-|---|---|---|
-| 1 | A | Handler extraction PR1a–1e; Next still works |
-| 2 | A | Standalone runtime + durable trust + dev-app dogfood |
-| 3 | A | Optional Vite SPA for contributors; pure reduce + stream perf |
-| 4 | A | Runtime packaging (bundled Node); **no** product dependency on Tauri |
-| 5 | B | Native UI spike: shell chrome, health, session list, stream one sample |
-| 6 | B | Native parity must-column: trace, diff, composer, approvals, git basics |
-| 7 | B | Windows package (MSIX/zip); **product default = native**; SPA/Next demoted to `dev:web` |
-| 8 | B+ | Remove Tauri; optional remove SPA host later |
+| Stage | Horizon | Outcome | Status |
+|---|---|---|---|
+| 1 | A | Handler extraction PR1a–1e; Next still works | **Done** (PR1e residual: extensions/automation extract) |
+| 2 | A | Standalone runtime + durable trust + dev-app dogfood | **Partial** — runtime + durable trust done; `dev-app.mjs` open |
+| 3 | A | Pure reduce + stream/UI perf + progressive restore | **Done** (Vite SPA optional / deferred) |
+| 4 | A | Runtime packaging (bundled Node); **no** product dependency on Tauri | Open |
+| 5 | B | Native UI spike: shell chrome, health, session list, stream one sample | Open |
+| 6 | B | Native parity must-column: trace, diff, composer, approvals, git basics | Open |
+| 7 | B | Windows package (MSIX/zip); **product default = native**; SPA/Next demoted to `dev:web` | Open |
+| 8 | B+ | Remove Tauri; optional remove SPA host later | Open |
 
 ### Rollback
 
@@ -531,10 +543,11 @@ Matches **native product UI** (not web-based) + TS runtime + Windows-first; netw
 1. **WinUI 3 vs WPF** after packaging spike (default WinUI 3).
 2. **Native stream reduce in C# vs thicker runtime push** of normalized events.
 3. **CRT / phosphor theme** in native UI — port subset or drop.
-4. **When to stop SPA feature parity** and freeze Horizon A to bugfix only.
+4. **When to stop SPA feature parity** and freeze Horizon A to bugfix only — stream/restore perf is good enough to prioritize Track B spike after PR2 polish.
 5. **Named pipe ACL** as optional post-GA harden.
-6. **Lightweight diff threshold** (e.g. 5k lines) exact number.
+6. **Lightweight diff threshold** — coarse path already uses line/cell caps; named `ui.perfMode` setting still optional.
 7. **macOS/Linux native** stack later (Avalonia?) — out of Horizon B v1.
+8. **Hono + `dev-app.mjs`** — complete PR2 packaging for contributor dogfood without Next.
 
 ---
 
@@ -542,9 +555,9 @@ Matches **native product UI** (not web-based) + TS runtime + Windows-first; netw
 
 - `docs/HARNESS_AUDIT_AND_ROADMAP.md`, `docs/SECURITY_POSTURE.md`, `docs/UPDATER_AND_DESKTOP.md`
 - `src/lib/desktop.ts`, `security/local-api.ts`, `workspace-trust.ts`, `approvals.ts`
-- `src/lib/harness.ts`, `grok-stream.ts`, `store.ts`, `session-replay.ts`
+- `src/lib/harness.ts`, `grok-stream.ts`, `store.ts`, `session-replay.ts`, `session-reduce.ts`, `stream-batch.ts`, `session-hydrate.ts`, `perf.ts`
 - `src/lib/session-store-fs.ts`, `process-lifecycle.ts`, `spok-paths.ts`
-- `src/app/api/**` (22 routes), `src-tauri/**` (interim only)
+- `src/server/**` (shared handlers + `npm run runtime`), `src/app/api/**` (thin adapters), `src-tauri/**` (interim only)
 - WinUI 3 / Windows App SDK documentation (external)
 
 ---
@@ -569,38 +582,44 @@ Two tracks. **Track A** (runtime + dogfood) can proceed immediately. **Track B**
 
 #### PR1b — Session start/stop + stream parity tests
 
+- **Status (2026-07-10): Done.**
 - **Title:** `refactor(server): extract session start/stop streaming handlers`
-- **Files:** `src/server/routes/session-start.ts`, thin Next wrapper, integration test
+- **Files:** `src/server/routes/session-start.ts`, thin Next wrapper, `tests/server/handler-extraction.test.ts`
 - **Dependencies:** PR1a
 - **Description:** NDJSON + abort hard gate.
 
 #### PR1c — Sessions / settings / secrets / approvals
 
+- **Status (2026-07-10): Done** (sessions list/id/events, settings, approvals; secrets route still Next-local if present).
 - **Dependencies:** PR1a  
 - **Description:** Non-streaming privileged CRUD extract.
 
 #### PR1d — Git / fs / trust
 
+- **Status (2026-07-10): Done.**
 - **Dependencies:** PR1a  
 - **Description:** Prepares durable trust.
 
 #### PR1e — Extensions / automation / diagnostics / cli-status
 
+- **Status (2026-07-10): Partial** — diagnostics + cli-status extracted; extensions/automation routes remain Next-hosted (can extract next).
 - **Dependencies:** PR1a  
 - **Description:** Completes 22-route inventory.
 
 #### PR2 — Standalone Hono runtime + dev-app launcher
 
+- **Status (2026-07-10): Partial** — Node `http` loopback server (`src/server/main.ts`, `npm run runtime`) with shared router; not Hono yet; `dev-app.mjs` still open. SPA stream/restore perf no longer blocked on this PR.
 - **Title:** `feat(runtime): Hono loopback server + dev-app.mjs`
-- **Files:** `src/server/main.ts`, `scripts/dev-app.mjs`, Origin tests (dogfood), engines
+- **Files:** `src/server/main.ts`, `src/server/router.ts`, Origin tests (dogfood), engines
 - **Dependencies:** PR1b (+ ideally PR1e)
 - **Description:** Parent-chosen port prefer 7788; no HTTP shutdown; signals kill registry. **Product path independent of WebView.**
 
 #### PR10 — Durable workspace trust
 
-- **Files:** `workspace-trust.ts`, `~/.spok/workspace-trust.json` schema v1, tests
-- **Dependencies:** PR1d or PR2
-- **Description:** Multi-start safe.
+- **Status (2026-07-09): Done** (ahead of runtime extraction; still valid after PR1d/PR2).
+- **Files:** `src/lib/security/workspace-trust.ts`, `src/app/api/workspace/trust/route.ts` (GET/POST/DELETE), Settings Privacy UI, `tests/security/workspace-trust-durable.test.ts`
+- **Dependencies:** none hard (can run without Hono extraction)
+- **Description:** Multi-start safe. Atomic JSON write; revoke + audit.
 
 #### PR3 — Pure `reduceSession` + batching (TS dogfood)
 
@@ -742,10 +761,10 @@ flowchart TD
 
 ### Track A (intermediate)
 
-- [ ] Standalone runtime on loopback with full privileged API parity tests.
-- [ ] Durable trust; restart lifecycle; no unauthenticated shutdown.
-- [ ] Contributors run harness without Next (or with Next thin adapters only).
-- [ ] Session formats unchanged.
+- [x] Standalone runtime on loopback (`npm run runtime`); handler parity tests in `tests/server`.
+- [x] Durable trust; no unauthenticated HTTP shutdown (signals/Job Object).
+- [ ] Contributors run harness without Next via `dev-app.mjs` (Next thin adapters already work).
+- [x] Session formats unchanged; progressive restore uses same disk layout.
 
 ### Track B (product — **definition of done for architecture goal**)
 

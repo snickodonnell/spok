@@ -4,6 +4,16 @@ Date: 2026-07-10
 
 This document describes the current desktop glue and the updater plan. It should be read with `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`: Tauri is an interim packaging shell, while the product target is native Windows UI plus the shared local runtime.
 
+## Run Commands (dogfood)
+
+| Command | What it does |
+| --- | --- |
+| `npm run desktop` / `npm run tauri:dev` | Next + Tauri WebView shell (interim daily driver) |
+| `npm run tauri:build` | Packaged desktop binary (internal / unsigned unless signed) |
+| `npm run dev` | Browser-only Next UI |
+| `npm run runtime` | Standalone Node privileged API on loopback |
+| `npm run rust:path` | Ensure Rust/cargo on PATH (Windows) |
+
 ## What Runs Where Today
 
 | Concern | Current implementation |

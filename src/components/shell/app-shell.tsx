@@ -5,6 +5,13 @@ import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import { useMobileLayout } from "@/hooks/use-mobile-layout";
+import {
+  markAppBootEnd,
+  markAppBootStart,
+  sampleMemoryHeap,
+} from "@/lib/perf";
+
+markAppBootStart();
 
 /**
  * Thin shell router. Desktop and mobile are separate chunks so a phone on
@@ -40,6 +47,12 @@ function ShellSplash({ label }: { label: string }) {
 export function AppShell() {
   const { isMobile, ready: layoutReady, preference, setPreference } =
     useMobileLayout();
+
+  useEffect(() => {
+    if (!layoutReady) return;
+    markAppBootEnd({ surface: isMobile ? "mobile" : "desktop" });
+    sampleMemoryHeap();
+  }, [layoutReady, isMobile]);
 
   // Defer automation imports — not needed for first paint / phone welcome
   useEffect(() => {

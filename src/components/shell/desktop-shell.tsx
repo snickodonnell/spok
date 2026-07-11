@@ -44,18 +44,26 @@ import { Loader2 } from "lucide-react";
 export function DesktopShell() {
   const viewMode = useSpokStore((s) => s.viewMode);
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
-  const sessions = useSpokStore((s) => s.sessions);
+  // Avoid subscribing to the full sessions map — every stream tick rewrote it
+  // and re-rendered the entire shell (sidebar chrome, toasts, dialogs, etc.).
+  const sessionCount = useSpokStore((s) => Object.keys(s.sessions).length);
+  const activeCwd = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId]?.config.cwd : undefined
+  );
+  const activeStatus = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId]?.status : undefined
+  );
   const scanlines = useSpokStore((s) => s.scanlines);
   const crtEnabled = useSpokStore((s) => s.crtEnabled);
   const uiTheme = useSpokStore((s) => s.uiTheme);
   const reducedMotion = useSpokStore((s) => s.reducedMotion);
   const hydrating = useSpokStore((s) => s.hydrating);
-  const hydrated = useSpokStore((s) => s.hydrated);
-  const activeSession = activeSessionId ? sessions[activeSessionId] : null;
 
-  useSessionHydration();
-  // Same-network live sync with mobile (events, prompts, status, files)
-  useHostSessionSync(true);
+  // Snapshot-first progressive restore (do not full-replay every session at boot)
+  useSessionHydration({ preferSnapshot: true, maxSessions: 12 });
+  // Defer host sync until after restore so it doesn't compete for disk/network
+  const hydrated = useSpokStore((s) => s.hydrated);
+  useHostSessionSync(hydrated);
   useThemeSync();
 
   const themeFx = resolveThemeEffects({
@@ -66,10 +74,10 @@ export function DesktopShell() {
   });
 
   useGitWatch(
-    activeSession?.config.cwd || undefined,
-    !!activeSession &&
-      !!activeSession.config.cwd &&
-      (activeSession.status === "running" || activeSession.status === "starting")
+    activeCwd || undefined,
+    !!activeSessionId &&
+      !!activeCwd &&
+      (activeStatus === "running" || activeStatus === "starting")
   );
 
   useEffect(() => {
@@ -104,11 +112,13 @@ export function DesktopShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const hasSessions = Object.keys(sessions).length > 0;
+  const hasSessions = sessionCount > 0;
   const showWelcome = hydrated && !activeSessionId && !hasSessions;
 
   function renderMain() {
-    if (hydrating && !hasSessions) {
+    // Show splash only until the first usable session is active (or none exist).
+    // Progressive restore inserts sidebar shells first — don't leave a blank workspace.
+    if (hydrating && !activeSessionId) {
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 text-phosphor-green/60">
           <Loader2 className="h-6 w-6 animate-spin text-phosphor-cyan" />
@@ -116,7 +126,7 @@ export function DesktopShell() {
             Restoring sessions…
           </div>
           <p className="max-w-sm text-center text-[11px] text-phosphor-green/35">
-            Loading durable logs from disk so you can continue where you left off.
+            Loading your last session…
           </p>
         </div>
       );

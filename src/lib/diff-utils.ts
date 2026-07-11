@@ -2,12 +2,52 @@ import { nanoid } from "nanoid";
 import type { DiffHunk, DiffLine, DiffStatus, FileDiff, FileTreeNode } from "./types";
 import { languageFromPath } from "./language";
 
+/**
+ * LCS line-diff is O(m*n) memory/time. Cap product so a multi-MB file
+ * cannot freeze the main thread during git watch / file_change ingest.
+ */
+const MAX_LCS_CELLS = 400_000; // ~e.g. 632×632 or 200×2000
+const MAX_LINES_EACH = 2_500;
+
 export function computeLineDiff(
   oldText: string,
   newText: string
 ): { hunks: DiffHunk[]; additions: number; deletions: number } {
-  const oldLines = oldText.length ? oldText.split("\n") : [];
-  const newLines = newText.length ? newText.split("\n") : [];
+  if (oldText === newText) {
+    const lines = oldText.length ? oldText.split("\n") : [];
+    if (lines.length === 0) return { hunks: [], additions: 0, deletions: 0 };
+    return {
+      hunks: [
+        {
+          id: nanoid(8),
+          oldStart: 1,
+          oldLines: lines.length,
+          newStart: 1,
+          newLines: lines.length,
+          header: `@@ -1,${lines.length} +1,${lines.length} @@`,
+          lines: lines.map((content, i) => ({
+            type: "context" as const,
+            content,
+            oldLineNumber: i + 1,
+            newLineNumber: i + 1,
+          })),
+        },
+      ],
+      additions: 0,
+      deletions: 0,
+    };
+  }
+
+  let oldLines = oldText.length ? oldText.split("\n") : [];
+  let newLines = newText.length ? newText.split("\n") : [];
+
+  // Truncate pathological sizes before allocating the DP table
+  if (oldLines.length > MAX_LINES_EACH || newLines.length > MAX_LINES_EACH) {
+    return coarseLineDiff(oldLines, newLines);
+  }
+  if (oldLines.length * newLines.length > MAX_LCS_CELLS) {
+    return coarseLineDiff(oldLines, newLines);
+  }
 
   // LCS-based line diff (Myers simplified for moderate files)
   const m = oldLines.length;
@@ -66,6 +106,69 @@ export function computeLineDiff(
   // Group into hunks with context window of 3 around changes
   const hunks = groupIntoHunks(lines);
   return { hunks, additions, deletions };
+}
+
+/**
+ * Linear-time fallback for large files: common prefix/suffix + replace middle.
+ * Good enough for stats + Monaco (which diffs its own models anyway).
+ */
+function coarseLineDiff(
+  oldLines: string[],
+  newLines: string[]
+): { hunks: DiffHunk[]; additions: number; deletions: number } {
+  let start = 0;
+  const minLen = Math.min(oldLines.length, newLines.length);
+  while (start < minLen && oldLines[start] === newLines[start]) start++;
+
+  let oldEnd = oldLines.length - 1;
+  let newEnd = newLines.length - 1;
+  while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
+    oldEnd--;
+    newEnd--;
+  }
+
+  const lines: DiffLine[] = [];
+  let additions = 0;
+  let deletions = 0;
+
+  for (let i = 0; i < start; i++) {
+    lines.push({
+      type: "context",
+      content: oldLines[i],
+      oldLineNumber: i + 1,
+      newLineNumber: i + 1,
+    });
+  }
+  for (let i = start; i <= oldEnd; i++) {
+    deletions++;
+    lines.push({
+      type: "remove",
+      content: oldLines[i],
+      oldLineNumber: i + 1,
+    });
+  }
+  for (let i = start; i <= newEnd; i++) {
+    additions++;
+    lines.push({
+      type: "add",
+      content: newLines[i],
+      newLineNumber: i + 1,
+    });
+  }
+  const suffixOldStart = oldEnd + 1;
+  const suffixNewStart = newEnd + 1;
+  for (let k = 0; suffixOldStart + k < oldLines.length; k++) {
+    const oi = suffixOldStart + k;
+    const ni = suffixNewStart + k;
+    lines.push({
+      type: "context",
+      content: oldLines[oi],
+      oldLineNumber: oi + 1,
+      newLineNumber: ni + 1,
+    });
+  }
+
+  return { hunks: groupIntoHunks(lines), additions, deletions };
 }
 
 function groupIntoHunks(lines: DiffLine[]): DiffHunk[] {

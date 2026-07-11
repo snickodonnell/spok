@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   defaultGrokFlags,
   permissionModeLabel,
+  replacePromptWithFile,
   resolveRun,
 } from "../../src/lib/grok-commands";
 
@@ -47,5 +48,16 @@ describe("grok command defaults", () => {
       // ensure the prompt was not split across argv
       assert.equal(run.args.filter((a) => a === "Audit").length, 0);
     }
+  });
+
+  it("replacePromptWithFile swaps -p for attachment prompt files", () => {
+    const run = resolveRun("with files", defaultGrokFlags());
+    assert.equal(run.type, "prompt");
+    if (run.type !== "prompt") return;
+    const next = replacePromptWithFile(run.args, "/tmp/turn.json");
+    assert.ok(next.includes("--prompt-file"));
+    assert.equal(next[next.indexOf("--prompt-file") + 1], "/tmp/turn.json");
+    assert.ok(!next.includes("-p"));
+    assert.ok(!next.includes("with files"));
   });
 });

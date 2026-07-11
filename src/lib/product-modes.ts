@@ -6,7 +6,12 @@
 export type ProductMode = "run" | "review" | "automate" | "extend";
 
 /** Right pane task tabs inside the Run workspace. */
-export type WorkspaceRightTab = "changes" | "review" | "events" | "health";
+export type WorkspaceRightTab =
+  | "changes"
+  | "review"
+  | "validation"
+  | "events"
+  | "health";
 
 /** Left pane: readable Thinking feed vs full event graph. */
 export type LeftTraceMode = "thinking" | "events";
@@ -49,6 +54,10 @@ export const RIGHT_TAB_META: Record<
     label: "Review",
     description: "Commit, branch, push, PR, worktrees",
   },
+  validation: {
+    label: "Validation",
+    description: "Tools, tests, builds, approvals, failures",
+  },
   events: {
     label: "Events",
     description: "Raw stream log and system messages",
@@ -71,6 +80,10 @@ export function isProductMode(v: unknown): v is ProductMode {
 
 export function isWorkspaceRightTab(v: unknown): v is WorkspaceRightTab {
   return (
-    v === "changes" || v === "review" || v === "events" || v === "health"
+    v === "changes" ||
+    v === "review" ||
+    v === "validation" ||
+    v === "events" ||
+    v === "health"
   );
 }

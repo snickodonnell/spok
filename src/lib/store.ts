@@ -443,8 +443,9 @@ export const useSpokStore = create<SpokState>((set, get) => ({
     set((s) => ({
       sessions: { ...s.sessions, [session.id]: session },
       activeSessionId: activate ? session.id : s.activeSessionId,
+      // Expand only roots — expanding every node on restore freezes large sessions
       expandedNodeIds: activate
-        ? new Set(Object.keys(session.nodes))
+        ? new Set(session.rootTraceIds ?? [])
         : s.expandedNodeIds,
     }));
   },
@@ -507,15 +508,24 @@ export const useSpokStore = create<SpokState>((set, get) => ({
 
   appendRawLogs: (sessionId, lines) => {
     if (!lines.length) return;
+    // Cap in-memory raw log so long streams don't blow heap / re-render cost.
+    const MAX_RAW_LOG = 4_000;
     set((s) => {
       const session = s.sessions[sessionId];
       if (!session) return s;
+      const merged = session.rawLog.length
+        ? session.rawLog.concat(lines)
+        : lines.slice();
+      const rawLog =
+        merged.length > MAX_RAW_LOG
+          ? merged.slice(merged.length - MAX_RAW_LOG)
+          : merged;
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...session,
-            rawLog: [...session.rawLog, ...lines],
+            rawLog,
             updatedAt: Date.now(),
           },
         },

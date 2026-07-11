@@ -12,17 +12,19 @@ The product goal is a world-class Grok Build control room that can compete with 
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
+**Horizon 1 (fast stable local harness) core is shipped:** stream batching, virtualized traces, progressive snapshot-first session restore, validation tab, durable trust, shared Node runtime (`npm run runtime`). Next product leap is Horizon 2 review workbench and Track B native Windows UI.
+
 ## Why Spok
 
 | Area | What Spok Provides |
 | --- | --- |
-| Grok Build sessions | Local session launch, live stream ingestion, durable session state, replay/import fixtures, and resume-oriented UI. |
+| Grok Build sessions | Local session launch, live stream ingestion, durable session state, progressive restore, replay/import fixtures. |
 | Thinking and events | Human-readable thinking plus raw event inspection for trace debugging and parser regression work. |
 | Changes and review | Diff, review, and Git surfaces built into the harness instead of left to a terminal scrollback. |
-| Validation | Planned first-class lane for commands, tests, failures, retries, approvals, and artifacts. |
-| Safety | Loopback-only local API checks, bearer token auth, Origin validation, workspace trust, policy denials, and no-store JSON responses. |
+| Validation | First-class **Validation** tab: tools, tests, builds, run outcomes, approvals, and policy denials in time order with jump-to-event/file. |
+| Safety | Loopback-only local API checks, bearer token auth, Origin validation, **durable** workspace trust (with revoke UI), policy denials, audit log, and no-store JSON responses. |
 | Mobile/LAN | Host session discovery and phone-friendly session views for inbox, timeline, trace, diffs, and artifacts. |
-| Extensibility | Roadmap includes MCP management, hooks, skills, project rules, plugins, GitHub/GitLab, and IDE companion flows. |
+| Extensibility | Skills, hooks, MCP registry foundations; roadmap covers full MCP management, plugins, GitHub/GitLab, and IDE companion flows. |
 
 ## Quick Start
 
@@ -31,8 +33,9 @@ Requirements:
 - Node 20+
 - npm
 - Grok CLI / Grok Build tooling available on your path
+- For desktop shell: Rust toolchain (used by Tauri interim packaging)
 
-Install and run:
+### Browser (Next)
 
 ```powershell
 npm install
@@ -41,14 +44,40 @@ npm run dev
 
 Then open the local URL printed by Next.js, usually `http://localhost:3000`.
 
-Useful commands:
+### Desktop (Tauri interim shell)
+
+```powershell
+npm install
+npm run desktop
+```
+
+Same as `npm run tauri:dev`. First run compiles Rust deps and can take a while.
+
+Production desktop package:
+
+```powershell
+npm run tauri:build
+```
+
+### Standalone runtime (privileged API only)
+
+```powershell
+npm run runtime
+```
+
+Listens on loopback (`SPOK_PORT` or `7788`). Used by the architecture plan as the shared backend for native UI later.
+
+### Useful commands
 
 ```powershell
 npm test
+npm run test:perf
 npm run build
 npm run verify:slash-catalog
 npm run dev:lan
 npm run lan:urls
+npm run tauri:info
+npm run rust:path
 ```
 
 Use `npm run dev:lan` when testing from a phone or another device on the same network. `npm run lan:urls` prints the local and LAN URLs that the app can advertise.
@@ -57,22 +86,24 @@ Use `npm run dev:lan` when testing from a phone or another device on the same ne
 
 - Inbox: session queue, status, mobile entry points, and future multi-agent control.
 - Workspaces: trusted roots, workspace navigation, Git context, and project-oriented workflows.
-- Harness: live Grok Build session control with transcript, thinking, events, changes, review, and artifacts.
-- Automations: recurring or scheduled harness work.
-- Extensions: future home for MCP servers, hooks, skills, project rules, and plugins.
+- Harness: live Grok Build session control with transcript, thinking, events, changes, review, validation, and artifacts.
+- Automations: recurring or scheduled harness work (monitor + schedules).
+- Extensions: skills, hooks, MCP registry, and future plugins.
 
 ## Architecture
 
-The current application is a Next.js app with a local API and browser UI. The architecture plan is to extract shared runtime logic into `src/server`, keep Next routes as compatibility adapters, and move the final desktop product to a native Windows shell supervising a local Node runtime.
+The current dogfood app is **Next.js + React** with a local API (thin adapters over `src/server`) and optional **Tauri** WebView shell. Privileged logic lives in TypeScript under `src/server` and `src/lib`. The long-term product is a **native Windows UI** talking to the same Node runtime over loopback HTTP — not a permanent WebView app.
 
 Key areas:
 
-- `src/app`: Next app routes, API adapters, shell pages, and product surfaces.
-- `src/components`: UI panels, mobile views, shell navigation, workspace views, review surfaces, and shared controls.
-- `src/lib`: stream parsing, stores, security helpers, harness/runtime adapters, Git helpers, and shared state logic.
+- `src/app`: Next app routes, API adapters, shell pages.
+- `src/components`: UI panels, mobile views, shell, workspace, review, shared controls.
+- `src/lib`: stream parsing, stores, security, harness, Git, session hydrate/reduce/persist, shared state.
+- `src/server`: privileged HTTP handlers + standalone `main.ts` runtime.
 - `samples`: replayable stream fixtures.
-- `tests`: parser, API, security, UI, mobile, and regression coverage.
-- `scripts`: catalog checks, LAN helpers, fixture utilities, and automation scripts.
+- `tests`: parser, API, security, perf, session, stream, and regression coverage.
+- `scripts`: catalog checks, LAN helpers, Rust path, automation scripts.
+- `src-tauri`: interim desktop packaging only.
 
 ## Security Model
 
@@ -83,6 +114,8 @@ Security documentation lives in [docs/SECURITY_POSTURE.md](docs/SECURITY_POSTURE
 ## Desktop Status
 
 Tauri remains useful for internal packaging and updater experiments, but it is not the end-user performance target. The product direction is native Windows UI plus a shared local runtime. See [docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md](docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md) for the staged plan.
+
+Daily driver commands today: `npm run desktop` (Tauri + Next) or `npm run dev` (browser).
 
 ## Documentation Policy
 

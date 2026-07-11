@@ -74,17 +74,29 @@ describe("layered settings merge", () => {
 
 describe("permission policy engine", () => {
   let root: string;
+  let home: string;
+  let prevHome: string | undefined;
 
   before(() => {
     root = mkdtempSync(path.join(tmpdir(), "spok-policy-"));
+    home = mkdtempSync(path.join(tmpdir(), "spok-policy-home-"));
+    prevHome = process.env.SPOK_HOME;
+    process.env.SPOK_HOME = home;
     clearTrustedRoots();
     trustWorkspaceRoot(root);
   });
 
   after(() => {
     clearTrustedRoots();
+    if (prevHome === undefined) delete process.env.SPOK_HOME;
+    else process.env.SPOK_HOME = prevHome;
     try {
       rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    try {
+      rmSync(home, { recursive: true, force: true });
     } catch {
       /* ignore */
     }

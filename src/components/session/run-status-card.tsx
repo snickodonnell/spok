@@ -82,11 +82,46 @@ export function RunStatusCard({
   onStop?: () => void;
   queueCount?: number;
 }) {
-  const session = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId] : null
+  const sessionId = useSpokStore((s) => s.activeSessionId);
+  const status = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.status : undefined
+  );
+  const cwd = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.config.cwd : undefined
+  );
+  const command = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.config.command || "grok"
+      : "grok"
+  );
+  const gitSummary = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!]?.gitSummary : undefined
+  );
+  const filesChanged = useSpokStore((s) => {
+    const id = s.activeSessionId;
+    if (!id) return 0;
+    return Object.keys(s.sessions[id]?.files ?? {}).length;
+  });
+  const alwaysApprove = useSpokStore(
+    (s) =>
+      s.activeSessionId
+        ? s.sessions[s.activeSessionId!]?.grokFlags?.alwaysApprove === true
+        : false
+  );
+  const fileSelected = useSpokStore(
+    (s) =>
+      !!(
+        s.activeSessionId &&
+        s.sessions[s.activeSessionId!]?.selectedFileId
+      )
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
-  const automationJobs = useSpokStore((s) => s.automationJobs);
+  const activeJobCount = useSpokStore(
+    (s) =>
+      s.automationJobs.filter((j) =>
+        ["queued", "running", "waiting_approval"].includes(j.status)
+      ).length
+  );
   const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
   const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
@@ -95,11 +130,8 @@ export function RunStatusCard({
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [cliLoading, setCliLoading] = useState(false);
 
-  const command = session?.config.command || "grok";
-  const cwd = session?.config.cwd;
-
   useEffect(() => {
-    if (!session) {
+    if (!sessionId) {
       setCli(null);
       return;
     }
@@ -120,25 +152,18 @@ export function RunStatusCard({
     return () => {
       cancelled = true;
     };
-    // Re-probe only when session identity or CLI binary changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: session.id only
-  }, [session?.id, command]);
+  }, [sessionId, command]);
 
-  if (!session) return null;
+  if (!sessionId || !status) return null;
 
-  const isLive =
-    session.status === "running" || session.status === "starting";
-  const branch = session.gitSummary?.branch;
-  const dirtyCount = session.gitSummary
-    ? session.gitSummary.stagedCount +
-      session.gitSummary.unstagedCount +
-      session.gitSummary.untrackedCount
-    : Object.keys(session.files).length;
-  const bgJobs = automationJobs.filter((j) =>
-    ["queued", "running", "waiting_approval"].includes(j.status)
-  ).length;
-  const alwaysApprove = session.grokFlags?.alwaysApprove === true;
-  const fileSelected = !!session.selectedFileId;
+  const isLive = status === "running" || status === "starting";
+  const branch = gitSummary?.branch;
+  const dirtyCount = gitSummary
+    ? gitSummary.stagedCount +
+      gitSummary.unstagedCount +
+      gitSummary.untrackedCount
+    : filesChanged;
+  const bgJobs = activeJobCount;
 
   return (
     <div
@@ -150,13 +175,13 @@ export function RunStatusCard({
       <Badge
         className={cn(
           "h-6 gap-1.5 border px-2 font-mono text-[10px] uppercase tracking-wider",
-          statusTone(session.status)
+          statusTone(status)
         )}
       >
         {isLive && (
           <span className="live-dot h-1.5 w-1.5 rounded-full bg-current" />
         )}
-        {statusLabel(session.status)}
+        {statusLabel(status)}
       </Badge>
 
       <span
@@ -283,7 +308,7 @@ export function RunStatusCard({
             Stop
           </Button>
         )}
-        {!isLive && session.status === "ready" && (
+        {!isLive && status === "ready" && (
           <span className="text-[10px] text-phosphor-green/40">
             Prompt below to run
           </span>

@@ -5,31 +5,38 @@ import { toast } from "sonner";
 import { useSpokStore } from "@/lib/store";
 import {
   listDurableSessions,
-  loadDurableSession,
   registerDurableSession,
 } from "@/lib/session-persist-client";
-import { replayEvents } from "@/lib/session-replay";
+import {
+  materializeDurableSessionOnce,
+  metaShellSession,
+} from "@/lib/session-hydrate";
 import { trustWorkspace } from "@/lib/local-api-client";
 import { fetchSettings } from "@/lib/settings-client";
-import type { Session } from "@/lib/types";
+import type { Session, SessionMetaRecord } from "@/lib/types";
 
 const LAST_ACTIVE_KEY = "spok.lastActiveSessionId";
 
 export type SessionHydrationOptions = {
   /**
-   * Cap how many sessions to restore (phone defaults lower for Wi‑Fi speed).
+   * Cap how many sessions to put in the sidebar (phone defaults lower).
    */
   maxSessions?: number;
   /**
-   * Prefer snapshot over full event replay when event count is high.
-   * Much faster on mobile / LAN.
+   * Prefer snapshot over full event replay (default true).
+   * Kept for API compat; restore is always snapshot-first now.
    */
   preferSnapshot?: boolean;
 };
 
 /**
- * On app mount, restore durable sessions from ~/.spok/sessions (via local API).
- * Prefers replaying the append-only event log; falls back to snapshot.
+ * Progressive boot restore:
+ * 1. List metas (cheap — meta.json only).
+ * 2. Shell entries in sidebar immediately.
+ * 3. Fully materialize ONLY the active session (snapshot-first).
+ * 4. Unblock UI (hydrated=true).
+ * 5. Background-fill other sessions from snapshots without events.ndjson.
+ * 6. Trust cwds once per unique path after UI is up.
  */
 export function useSessionHydration(opts: SessionHydrationOptions = {}) {
   const started = useRef(false);
@@ -50,52 +57,50 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
     started.current = true;
 
     let cancelled = false;
-    // Hard deadline so phone never spins forever if LAN is flaky
+    // Short deadline — progressive restore should finish active session fast.
     const bootDeadline = window.setTimeout(() => {
       if (cancelled) return;
       console.warn("[spok] hydration deadline — showing UI anyway");
       setHydrated(true);
       setHydrating(false);
-    }, 12_000);
+    }, 4_000);
 
     (async () => {
       setHydrating(true);
+      const trustedCwds = new Set<string>();
       try {
-        // Load layered settings early so permission mode is visible
-        let maxRestore = opts.maxSessions ?? 20;
-        try {
-          const settings = await fetchSettings();
-          if (!cancelled) {
-            const ui = settings.resolved.ui;
-            const desktop = settings.resolved.desktop;
-            setAppPermissionMode(settings.resolved.permissionMode);
-            setUiTheme(ui.theme ?? "professional");
-            setCrtEnabled(ui.crtEnabled);
-            setScanlines(ui.scanlines);
-            setReducedMotion(ui.reducedMotion ?? false);
-            setOsNotifications(
-              ui.osNotifications ?? desktop?.osNotifications ?? true
-            );
-            setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
-            if (opts.maxSessions == null) {
-              maxRestore = settings.resolved.maxRestoredSessions ?? 20;
-            }
-          }
-        } catch {
-          /* settings optional at boot */
-        }
+        let maxRestore = opts.maxSessions ?? 12;
 
-        // Phone / LAN: keep boot tiny
-        maxRestore = Math.min(maxRestore, opts.maxSessions ?? maxRestore);
-
-        let metas: Awaited<ReturnType<typeof listDurableSessions>> = [];
-        try {
-          metas = await listDurableSessions();
-        } catch (e) {
+        // Settings + session list in parallel
+        const settingsP = fetchSettings().catch(() => null);
+        const metasP = listDurableSessions().catch((e) => {
           console.warn("[spok] list sessions failed (LAN?)", e);
-          return;
-        }
+          return [] as SessionMetaRecord[];
+        });
+
+        const [settings, metas] = await Promise.all([settingsP, metasP]);
         if (cancelled) return;
+
+        if (settings) {
+          const ui = settings.resolved.ui;
+          const desktop = settings.resolved.desktop;
+          setAppPermissionMode(settings.resolved.permissionMode);
+          setUiTheme(ui.theme ?? "professional");
+          setCrtEnabled(ui.crtEnabled);
+          setScanlines(ui.scanlines);
+          setReducedMotion(ui.reducedMotion ?? false);
+          setOsNotifications(
+            ui.osNotifications ?? desktop?.osNotifications ?? true
+          );
+          setNativeFolderPicker(desktop?.nativeFolderPicker ?? true);
+          if (opts.maxSessions == null) {
+            maxRestore = settings.resolved.maxRestoredSessions ?? 12;
+          }
+        }
+
+        maxRestore = Math.min(maxRestore, opts.maxSessions ?? maxRestore);
+        // Hard cap — never block boot on dozens of heavy sessions
+        maxRestore = Math.max(1, Math.min(24, maxRestore));
 
         if (metas.length === 0) {
           setHydrated(true);
@@ -110,159 +115,92 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
           /* ignore */
         }
 
-        // Restore most recent N sessions (keep UI snappy)
-        const toLoad = metas.slice(0, Math.max(1, Math.min(100, maxRestore)));
-        let restored = 0;
-        let activeId: string | null = null;
+        const toLoad = metas.slice(0, maxRestore);
+        const activeMeta =
+          toLoad.find((m) => m.id === lastActive) ?? toLoad[0] ?? null;
 
+        // 1) Sidebar shells immediately (no body IO)
         for (const meta of toLoad) {
+          if (cancelled) return;
+          hydrateSession(metaShellSession(meta), { activate: false });
+        }
+
+        // 2) Fully materialize active session only (blocks "Restoring…")
+        if (activeMeta) {
           try {
-            const bundle = await loadDurableSession(meta.id);
+            const session = await materializeDurableSessionOnce(
+              activeMeta,
+              "full"
+            );
             if (cancelled) return;
+            hydrateSession(session, { activate: true });
+            useSpokStore.getState().setActiveSession(session.id);
+            setViewMode("workspace");
 
-            let session: Session;
-            const eventCount = bundle.events.length;
-            const useSnapshot =
-              opts.preferSnapshot &&
-              bundle.snapshot &&
-              (eventCount === 0 || eventCount > 200);
-
-            if (useSnapshot && bundle.snapshot) {
-              session = {
-                ...bundle.snapshot,
-                id: meta.id,
-                source: "resume",
-                status:
-                  bundle.snapshot.status === "running" ||
-                  bundle.snapshot.status === "starting"
-                    ? "ready"
-                    : bundle.snapshot.status,
-                durable: true,
-                // Keep a short tail for thinking UI; full log stays on disk
-                eventLog: bundle.events.slice(-80),
-                eventCount: eventCount || bundle.snapshot.eventCount,
-              };
-            } else if (bundle.events.length > 0) {
-              session = replayEvents(bundle.events, {
-                id: meta.id,
-                name: meta.name,
-                source: "resume",
-                status:
-                  meta.status === "running" || meta.status === "starting"
-                    ? "ready"
-                    : meta.status,
-                createdAt: meta.createdAt,
-                grokFlags: meta.grokFlags,
-                config: {
-                  cwd: meta.cwd,
-                  command: meta.command || "grok",
-                  args: [],
-                  autoScroll: true,
-                  playbackSpeed: 1,
-                },
-              });
-              session.eventLog = bundle.events;
-              session.eventCount = bundle.events.length;
-              session.durable = true;
-              session.updatedAt = meta.updatedAt;
-              // Prefer snapshot prompt history / flags when available
-              if (bundle.snapshot?.promptHistory?.length) {
-                session.promptHistory = bundle.snapshot.promptHistory;
-              }
-              if (bundle.snapshot?.grokFlags) {
-                session.grokFlags = bundle.snapshot.grokFlags;
-              }
-              if (bundle.snapshot?.rawLog?.length && !session.rawLog.length) {
-                session.rawLog = bundle.snapshot.rawLog;
-              }
-            } else if (bundle.snapshot) {
-              session = {
-                ...bundle.snapshot,
-                id: meta.id,
-                source: "resume",
-                status:
-                  bundle.snapshot.status === "running" ||
-                  bundle.snapshot.status === "starting"
-                    ? "ready"
-                    : bundle.snapshot.status,
-                durable: true,
-                eventLog: bundle.snapshot.eventLog ?? [],
-              };
-            } else {
-              // Meta-only empty workspace
-              session = {
-                id: meta.id,
-                name: meta.name,
-                status: "ready",
-                createdAt: meta.createdAt,
-                updatedAt: meta.updatedAt,
-                config: {
-                  cwd: meta.cwd,
-                  command: meta.command || "grok",
-                  args: [],
-                  autoScroll: true,
-                  playbackSpeed: 1,
-                },
-                metrics: {
-                  startedAt: null,
-                  endedAt: null,
-                  elapsedMs: 0,
-                  toolCallCount: 0,
-                  thinkingSteps: 0,
-                  filesChanged: 0,
-                  linesAdded: 0,
-                  linesDeleted: 0,
-                  subagentCount: 0,
-                  errorCount: 0,
-                },
-                rootTraceIds: [],
-                nodes: {},
-                files: {},
-                fileTree: [],
-                selectedTraceId: null,
-                selectedFileId: null,
-                timelineCursor: null,
-                rawLog: [],
-                source: "resume",
-                promptHistory: [],
-                grokFlags: meta.grokFlags,
-                eventLog: [],
-                durable: true,
-                eventCount: 0,
-              };
+            // Trust active cwd ASAP so git/spawn work
+            if (session.config.cwd && !trustedCwds.has(session.config.cwd)) {
+              trustedCwds.add(session.config.cwd);
+              void trustWorkspace(session.config.cwd).catch(() => undefined);
             }
-
-            // Re-trust workspace root so git/spawn work after restart
-            if (session.config.cwd) {
-              try {
-                await trustWorkspace(session.config.cwd);
-              } catch {
-                /* user can re-open repo if trust fails */
-              }
-            }
-
-            const activate =
-              meta.id === lastActive ||
-              (!lastActive && restored === 0 && toLoad[0]?.id === meta.id);
-            hydrateSession(session, { activate: false });
-            if (activate) activeId = session.id;
-            restored += 1;
           } catch (e) {
-            console.warn("[spok] failed to restore session", meta.id, e);
+            console.warn(
+              "[spok] failed to restore active session",
+              activeMeta.id,
+              e
+            );
+            // Still activate shell so user isn't stuck on splash
+            useSpokStore.getState().setActiveSession(activeMeta.id);
+            setViewMode("workspace");
           }
         }
 
-        if (activeId) {
-          useSpokStore.getState().setActiveSession(activeId);
-          setViewMode("workspace");
+        // 3) Unblock UI NOW — remaining work is background
+        window.clearTimeout(bootDeadline);
+        if (!cancelled) {
+          setHydrated(true);
+          setHydrating(false);
+          toast.message(
+            toLoad.length === 1
+              ? "Restored session"
+              : `Restored ${toLoad.length} sessions`
+          );
         }
 
-        if (restored > 0) {
-          toast.message(
-            restored === 1
-              ? "Restored 1 session from disk"
-              : `Restored ${restored} sessions from disk`
-          );
+        // 4) Background: snapshot-fill other sessions (skip events.ndjson)
+        const rest = toLoad.filter((m) => m.id !== activeMeta?.id);
+        for (const meta of rest) {
+          if (cancelled) return;
+          try {
+            // Yield to paint / input between sessions
+            await new Promise<void>((r) => {
+              if (typeof requestIdleCallback === "function") {
+                requestIdleCallback(() => r(), { timeout: 400 });
+              } else {
+                setTimeout(r, 0);
+              }
+            });
+            if (cancelled) return;
+
+            // Don't clobber if user already opened this session fully
+            const existing = useSpokStore.getState().sessions[meta.id];
+            if (existing && !existing.hydratePartial) continue;
+
+            const session = await materializeDurableSessionOnce(
+              meta,
+              "snapshot"
+            );
+            if (cancelled) return;
+            if (session.hydratePartial) continue; // still no body; leave shell
+
+            hydrateSession(session, { activate: false });
+
+            if (session.config.cwd && !trustedCwds.has(session.config.cwd)) {
+              trustedCwds.add(session.config.cwd);
+              void trustWorkspace(session.config.cwd).catch(() => undefined);
+            }
+          } catch (e) {
+            console.warn("[spok] background restore failed", meta.id, e);
+          }
         }
       } catch (e) {
         console.warn("[spok] session hydration failed", e);
@@ -298,13 +236,59 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
   // Remember last active session for next launch
   useEffect(() => {
     const unsub = useSpokStore.subscribe((state, prev) => {
-      if (state.activeSessionId && state.activeSessionId !== prev.activeSessionId) {
+      if (
+        state.activeSessionId &&
+        state.activeSessionId !== prev.activeSessionId
+      ) {
         try {
           localStorage.setItem(LAST_ACTIVE_KEY, state.activeSessionId);
         } catch {
           /* ignore */
         }
       }
+    });
+    return unsub;
+  }, []);
+
+  // Lazy full materialize when user activates a partial shell
+  useEffect(() => {
+    const unsub = useSpokStore.subscribe((state, prev) => {
+      const id = state.activeSessionId;
+      if (!id || id === prev.activeSessionId) return;
+      const sess = state.sessions[id];
+      if (!sess?.hydratePartial) return;
+
+      void (async () => {
+        try {
+          const meta: SessionMetaRecord = {
+            id: sess.id,
+            name: sess.name,
+            status: sess.status,
+            createdAt: sess.createdAt,
+            updatedAt: sess.updatedAt,
+            source: sess.source,
+            cwd: sess.config.cwd,
+            command: sess.config.command,
+            grokFlags: sess.grokFlags,
+            formatVersion: 1,
+            eventCount: sess.eventCount ?? 0,
+            rawCount: 0,
+          };
+          const full = await materializeDurableSessionOnce(meta, "full");
+          // Only apply if still the active target / still partial
+          const cur = useSpokStore.getState().sessions[id];
+          if (!cur) return;
+          if (!cur.hydratePartial && Object.keys(cur.nodes).length > 0) return;
+          useSpokStore.getState().hydrateSession(full, {
+            activate: useSpokStore.getState().activeSessionId === id,
+          });
+          if (full.config.cwd) {
+            void trustWorkspace(full.config.cwd).catch(() => undefined);
+          }
+        } catch (e) {
+          console.warn("[spok] lazy materialize failed", id, e);
+        }
+      })();
     });
     return unsub;
   }, []);

@@ -26,7 +26,7 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Tauri CSP present for internal builds.
 - [ ] No Tauri `shell:allow-spawn` or `shell:allow-execute`.
 - [ ] Trusted workspace and policy regressions covered by tests.
-- [ ] Performance budgets checked for launch, reopen, stream ingest, trace render, and diff render when the release includes UI/runtime changes.
+- [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log) and live stream responsiveness.
 
 ## Internal Tauri Build
 

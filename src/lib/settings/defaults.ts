@@ -101,7 +101,7 @@ export function defaultSettings(): SpokSettings {
     browseRestrictedToTrusted: false, // picker must explore until trust; then UI can tighten
     showHiddenFolders: false,
     auditPrivilegedActions: true,
-    maxRestoredSessions: 20,
+    maxRestoredSessions: 12,
     ui: {
       // Professional is the daily-driver default (Phase 6); CRT remains one click away.
       theme: "professional",

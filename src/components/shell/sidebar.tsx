@@ -43,11 +43,49 @@ const VIEWS: { mode: ViewMode; icon: typeof Brain; label: string }[] = [
   { mode: "overview", icon: BarChart3, label: "Health" },
 ];
 
+type SessionListItem = {
+  id: string;
+  name: string;
+  status: Session["status"];
+  updatedAt: number;
+  source: Session["source"];
+  cwd: string;
+  durable: boolean;
+  eventCount: number;
+};
+
 export function Sidebar() {
   const open = useSpokStore((s) => s.sidebarOpen);
   const viewMode = useSpokStore((s) => s.viewMode);
   const setViewMode = useSpokStore((s) => s.setViewMode);
-  const sessions = useSpokStore((s) => s.sessions);
+  // Fingerprint without high-churn fields (updatedAt / eventCount every token).
+  // Sidebar re-renders when sessions appear/disappear or status/name changes.
+  const sessionListKey = useSpokStore((s) =>
+    Object.values(s.sessions)
+      .map(
+        (sess) =>
+          `${sess.id}:${sess.status}:${sess.name}:${sess.source}:${sess.config.cwd}`
+      )
+      .sort()
+      .join("|")
+  );
+  const sessionList: SessionListItem[] = (() => {
+    void sessionListKey;
+    const items: SessionListItem[] = Object.values(
+      useSpokStore.getState().sessions
+    ).map((sess) => ({
+      id: sess.id,
+      name: sess.name,
+      status: sess.status,
+      updatedAt: sess.updatedAt,
+      source: sess.source,
+      cwd: sess.config.cwd,
+      durable: sess.durable !== false,
+      eventCount: sess.eventCount ?? 0,
+    }));
+    items.sort((a, b) => b.updatedAt - a.updatedAt);
+    return items;
+  })();
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
   const setActiveSession = useSpokStore((s) => s.setActiveSession);
   const deleteSession = useSpokStore((s) => s.deleteSession);
@@ -58,17 +96,20 @@ export function Sidebar() {
   const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
   const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
-  const automationJobs = useSpokStore((s) => s.automationJobs);
-  const notifications = useSpokStore((s) => s.notifications);
+  const activeJobs = useSpokStore(
+    (s) =>
+      s.automationJobs.filter((j) =>
+        ["queued", "running", "waiting_approval"].includes(j.status)
+      ).length
+  );
+  const unreadNotes = useSpokStore(
+    (s) => s.notifications.filter((n) => !n.read).length
+  );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
-  const activeJobs = automationJobs.filter((j) =>
-    ["queued", "running", "waiting_approval"].includes(j.status)
-  ).length;
-  const unreadNotes = notifications.filter((n) => !n.read).length;
 
   if (!open) return null;
 
-  const list = Object.values(sessions).sort((a, b) => b.updatedAt - a.updatedAt);
+  const list = sessionList;
 
   const startNewSessionInWorkspace = async () => {
     const ws = resolveCurrentWorkspace();
@@ -274,7 +315,7 @@ function SessionRow({
   onSelect,
   onDelete,
 }: {
-  session: Session;
+  session: SessionListItem;
   active: boolean;
   onSelect: () => void;
   onDelete: () => void;
@@ -290,8 +331,6 @@ function SessionRow({
             ? "import"
             : s.source;
 
-  const eventCount = s.eventCount ?? s.eventLog?.length ?? 0;
-
   return (
     <div
       className={cn(
@@ -306,7 +345,7 @@ function SessionRow({
           type="button"
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           onClick={onSelect}
-          title={s.config.cwd || s.name}
+          title={s.cwd || s.name}
         >
           <Circle
             className={cn(
@@ -349,27 +388,27 @@ function SessionRow({
             sourceLabel
           )}
         </Badge>
-        {s.durable !== false && (s.source === "live" || s.source === "resume") && (
+        {s.durable && (s.source === "live" || s.source === "resume") && (
           <Badge variant="muted" className="h-4 px-1 text-[8px]">
             <HardDrive className="mr-0.5 inline h-2 w-2" />
             disk
           </Badge>
         )}
-        {eventCount > 0 && (
+        {s.eventCount > 0 && (
           <span className="font-mono text-[9px] text-phosphor-green/30">
-            {eventCount} evt
+            {s.eventCount} evt
           </span>
         )}
         <span className="ml-auto font-mono text-[9px] text-phosphor-green/25">
           {formatRelativeTime(s.updatedAt)}
         </span>
       </button>
-      {s.config.cwd && (
+      {s.cwd && (
         <div
           className="mt-0.5 truncate pl-3.5 font-mono text-[9px] text-phosphor-green/25"
-          title={s.config.cwd}
+          title={s.cwd}
         >
-          {s.config.cwd}
+          {s.cwd}
         </div>
       )}
     </div>

@@ -28,12 +28,14 @@ describe("product modes", () => {
     assert.equal(isProductMode("run"), true);
     assert.equal(isProductMode("nope"), false);
     assert.equal(isWorkspaceRightTab("changes"), true);
+    assert.equal(isWorkspaceRightTab("validation"), true);
     assert.equal(isWorkspaceRightTab("diff"), false);
   });
 
   it("labels right tabs for task orientation", () => {
     assert.equal(RIGHT_TAB_META.changes.label, "Changes");
     assert.equal(RIGHT_TAB_META.review.label, "Review");
+    assert.equal(RIGHT_TAB_META.validation.label, "Validation");
     assert.equal(RIGHT_TAB_META.events.label, "Events");
     assert.equal(RIGHT_TAB_META.health.label, "Health");
   });
