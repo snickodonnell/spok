@@ -52,6 +52,7 @@ export type BackgroundJobBlueprint = {
   priority: number;
   parentSessionId?: string;
   agentId?: string;
+  enterprise?: AutomationJob["enterprise"];
 };
 
 export type CloneJobIntent = "retry" | "duplicate";
@@ -104,6 +105,9 @@ export function cloneJobBlueprint(
       priority: job.priority,
       parentSessionId: job.parentSessionId,
       agentId: job.agentId,
+      ...(intent === "retry" && job.enterprise
+        ? { enterprise: job.enterprise }
+        : {}),
     },
   };
 }

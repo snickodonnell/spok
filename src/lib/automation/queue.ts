@@ -18,6 +18,7 @@ export function createJob(partial: {
   scheduleId?: string;
   channelId?: string;
   agentId?: string;
+  enterprise?: AutomationJob["enterprise"];
   worktreePath?: string;
   branch?: string;
   mainCheckout?: string;
@@ -41,6 +42,7 @@ export function createJob(partial: {
     scheduleId: partial.scheduleId,
     channelId: partial.channelId,
     agentId: partial.agentId,
+    enterprise: partial.enterprise,
     policy: {
       requireTrusted: true,
       isolate: partial.isolate !== false,

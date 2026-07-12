@@ -12,7 +12,7 @@ The product goal is a world-class Grok Build control room that can compete with 
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
-The fast local harness and Review Workbench foundations are shipped: batched/virtualized streams, snapshot-first restore, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, and an operational session inbox. Spok now also has a compact New Task flow, strict isolated background launch, a durable/recoverable job ledger, concurrent approval queue, inbox fleet controls, and durable user-tunable runner capacity with explicit queue reasons. The current product milestone is completing review handoff, archive, and safe worktree cleanup without touching the main checkout.
+The fast local harness and Review Workbench foundations are shipped: batched/virtualized streams, snapshot-first restore, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, and an operational session inbox. Spok now also has a compact New Task flow, strict isolated background launch, a durable/recoverable job ledger, concurrent approval queue, inbox fleet controls, durable user-tunable runner capacity, and an Enterprise surface for Grok-led subagent missions with per-person traces and same-worktree follow-up. The current product milestone is completing review handoff, archive, and safe worktree cleanup without touching the main checkout.
 
 ## Why Spok
 
@@ -92,6 +92,7 @@ Use `npm run dev:lan` when testing from a phone or another device on the same ne
 - Workspaces: trusted roots, workspace navigation, Git context, and project-oriented workflows.
 - Harness: live Grok Build session control with transcript, thinking, events, changes, review, validation, and artifacts.
 - Automations: recurring or scheduled harness work (monitor + schedules).
+- Enterprise: ultimate-goal and crew briefing, a live ASCII mission deck backed by actual Grok subagent lanes, filterable person traces, durable turn history, team summary, and same-worktree continuation.
 - Extensions: skills, hooks, MCP registry, and future plugins.
 
 ## Architecture

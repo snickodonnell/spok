@@ -15,6 +15,7 @@ import {
   AUTOMATION_DEFAULTS,
   type AutomationJob,
   type AutomationJobOutcome,
+  type EnterpriseJobLink,
   type JobKind,
   type QueueItemStatus,
 } from "./types";
@@ -73,6 +74,13 @@ const OUTCOMES = new Set<AutomationJobOutcome["kind"]>([
   "interrupted",
 ]);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const ENTERPRISE_ROLES = new Set<EnterpriseJobLink["role"]>([
+  "leader",
+]);
+const ENTERPRISE_PHASES = new Set<EnterpriseJobLink["phase"]>([
+  "mission",
+  "followup",
+]);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -128,6 +136,58 @@ function sanitizeOutcome(value: unknown): AutomationJobOutcome | undefined {
   };
 }
 
+function sanitizeEnterprise(value: unknown): {
+  link?: EnterpriseJobLink;
+  redactions: number;
+  error?: string;
+} {
+  if (value === undefined) return { redactions: 0 };
+  if (!isObject(value)) {
+    return { redactions: 0, error: "Enterprise linkage must be an object" };
+  }
+  const teamId = optionalSafeId(value.teamId);
+  const memberId = optionalSafeId(value.memberId);
+  const memberName = redactAndLimit(value.memberName, 80);
+  const role = value.role as EnterpriseJobLink["role"];
+  const phase = value.phase as EnterpriseJobLink["phase"];
+  const version = value.version === undefined ? 1 : value.version;
+  const turn =
+    value.turn === undefined
+      ? phase === "mission"
+        ? 1
+        : 2
+      : typeof value.turn === "number" && Number.isInteger(value.turn)
+        ? value.turn
+        : undefined;
+  const acceptedAt = finiteTime(value.acceptedAt);
+  if (
+    version !== 1 ||
+    !teamId ||
+    !memberId ||
+    !memberName.text ||
+    turn === undefined ||
+    turn < 1 ||
+    turn > 1_000 ||
+    !ENTERPRISE_ROLES.has(role) ||
+    !ENTERPRISE_PHASES.has(phase)
+  ) {
+    return { redactions: memberName.count, error: "Invalid Enterprise linkage" };
+  }
+  return {
+    redactions: memberName.count,
+    link: {
+      version: 1,
+      teamId,
+      memberId,
+      memberName: memberName.text,
+      role,
+      phase,
+      turn,
+      acceptedAt,
+    },
+  };
+}
+
 /**
  * Convert an untrusted job payload into the exact durable shape.
  * Unknown fields (notably env maps and credentials) are never retained.
@@ -147,6 +207,14 @@ export function sanitizeAutomationJob(input: unknown): JobSanitizeResult {
 
   const title = redactAndLimit(input.title, 200);
   const prompt = redactAndLimit(input.prompt, 100_000);
+  const enterprise = sanitizeEnterprise(input.enterprise);
+  if (enterprise.error) {
+    return {
+      ok: false,
+      code: "invalid_enterprise",
+      error: enterprise.error,
+    };
+  }
   const cwd = absolutePath(input.cwd);
   const createdAt = finiteTime(input.createdAt);
   if (!title.text || !prompt.text || !cwd || createdAt === undefined) {
@@ -228,7 +296,8 @@ export function sanitizeAutomationJob(input: unknown): JobSanitizeResult {
       prompt.count +
       error.count +
       summary.count +
-      branch.count,
+      branch.count +
+      enterprise.redactions,
     job: {
       id,
       kind: input.kind as JobKind,
@@ -260,6 +329,7 @@ export function sanitizeAutomationJob(input: unknown): JobSanitizeResult {
         profile: policyProfile,
       },
       outcome,
+      enterprise: enterprise.link,
     },
   };
 }

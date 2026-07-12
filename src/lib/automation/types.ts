@@ -39,6 +39,24 @@ export interface AutomationJobPolicy {
   profile?: string;
 }
 
+export type EnterpriseJobRole = "leader";
+export type EnterpriseJobPhase = "mission" | "followup";
+
+/** Durable UI-level linkage for Enterprise teams; execution stays a normal job. */
+export interface EnterpriseJobLink {
+  /** Link contract version for forward-compatible durable recovery. */
+  version: 1;
+  teamId: string;
+  role: EnterpriseJobRole;
+  phase: EnterpriseJobPhase;
+  /** Stable mission turn; retries intentionally retain the same turn. */
+  turn: number;
+  memberId: string;
+  memberName: string;
+  /** Captain accepted this turn's leader summary and returned to Run. */
+  acceptedAt?: number;
+}
+
 /** A single background / scheduled / channel-triggered job. */
 export interface AutomationJob {
   id: string;
@@ -79,6 +97,8 @@ export interface AutomationJob {
   policy?: AutomationJobPolicy;
   /** Stable terminal result; interrupted is represented by failed + this cause. */
   outcome?: AutomationJobOutcome;
+  /** Optional Enterprise team/member identity, sanitized by the durable ledger. */
+  enterprise?: EnterpriseJobLink;
 }
 
 export type ScheduleIntervalUnit = "minutes" | "hours" | "days";

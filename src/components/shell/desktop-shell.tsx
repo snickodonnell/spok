@@ -40,9 +40,11 @@ import { useThemeSync } from "@/hooks/use-theme";
 import { resolveThemeEffects } from "@/lib/theme";
 import type { ViewMode } from "@/lib/types";
 import { Loader2 } from "lucide-react";
+import { EnterpriseScreen } from "@/components/enterprise/enterprise-screen";
 
 export function DesktopShell() {
   const viewMode = useSpokStore((s) => s.viewMode);
+  const productMode = useSpokStore((s) => s.productMode);
   const activeSessionId = useSpokStore((s) => s.activeSessionId);
   // Avoid subscribing to the full sessions map — every stream tick rewrote it
   // and re-rendered the entire shell (sidebar chrome, toasts, dialogs, etc.).
@@ -116,6 +118,7 @@ export function DesktopShell() {
   const showWelcome = hydrated && !activeSessionId && !hasSessions;
 
   function renderMain() {
+    if (productMode === "enterprise") return <EnterpriseScreen />;
     // Show splash only until the first usable session is active (or none exist).
     // Progressive restore inserts sidebar shells first — don't leave a blank workspace.
     if (hydrating && !activeSessionId) {
@@ -177,12 +180,12 @@ export function DesktopShell() {
           <Sidebar />
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar />
-            <MetricsBar />
-            <StatusLine />
+            {productMode !== "enterprise" && <MetricsBar />}
+            {productMode !== "enterprise" && <StatusLine />}
             <main id="spok-main" className="min-h-0 flex-1" tabIndex={-1}>
               <ErrorBoundary name="main">{renderMain()}</ErrorBoundary>
             </main>
-            {!showWelcome && <Timeline />}
+            {productMode !== "enterprise" && !showWelcome && <Timeline />}
           </div>
         </div>
         <CommandPalette />

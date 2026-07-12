@@ -123,7 +123,7 @@ interface SpokState {
   sessions: Record<string, Session>;
   activeSessionId: string | null;
   viewMode: ViewMode;
-  /** Primary product mode: Run / Review / Automate / Extend */
+  /** Primary product mode: Run / Review / Automate / Enterprise / Extend */
   productMode: ProductMode;
   /** Right pane task tab inside workspace (Changes / Review / Events / Health) */
   workspaceRightTab: WorkspaceRightTab;
@@ -348,7 +348,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   setViewMode: (mode) => set({ viewMode: mode }),
   setProductMode: (mode) =>
     set((s) => {
-      // Run/Review stay in workspace; Automate/Extend open progressive panels
+      // Run/Review stay in workspace; other modes open progressive surfaces.
       if (mode === "run") {
         return {
           productMode: mode,
@@ -371,6 +371,13 @@ export const useSpokStore = create<SpokState>((set, get) => ({
         return {
           productMode: mode,
           monitorOpen: true,
+          extensionsOpen: false,
+        };
+      }
+      if (mode === "enterprise") {
+        return {
+          productMode: mode,
+          monitorOpen: false,
           extensionsOpen: false,
         };
       }

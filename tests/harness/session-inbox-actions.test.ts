@@ -119,4 +119,23 @@ describe("cloneJobBlueprint", () => {
     if (result.ok) return;
     assert.match(result.reason, /worktree cannot be reused/i);
   });
+
+  it("keeps Enterprise identity on retry but strips it from a duplicate", () => {
+    const enterprise = {
+      version: 1 as const,
+      teamId: "ent-test",
+      role: "leader" as const,
+      phase: "mission" as const,
+      turn: 1,
+      memberId: "spok",
+      memberName: "Spok",
+    };
+    const retry = cloneJobBlueprint(job({ enterprise }), "retry");
+    const duplicate = cloneJobBlueprint(job({ enterprise }), "duplicate");
+
+    assert.equal(retry.ok, true);
+    if (retry.ok) assert.deepEqual(retry.blueprint.enterprise, enterprise);
+    assert.equal(duplicate.ok, true);
+    if (duplicate.ok) assert.equal(duplicate.blueprint.enterprise, undefined);
+  });
 });

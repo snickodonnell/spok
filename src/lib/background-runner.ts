@@ -229,6 +229,10 @@ export function enqueueBackgroundJob(opts: {
   scheduleId?: string;
   channelId?: string;
   agentId?: string;
+  enterprise?: AutomationJob["enterprise"];
+  worktreePath?: string;
+  branch?: string;
+  mainCheckout?: string;
   activateSession?: boolean;
 }): string {
   const job = createJob({
@@ -242,6 +246,10 @@ export function enqueueBackgroundJob(opts: {
     scheduleId: opts.scheduleId,
     channelId: opts.channelId,
     agentId: opts.agentId,
+    enterprise: opts.enterprise,
+    worktreePath: opts.worktreePath,
+    branch: opts.branch,
+    mainCheckout: opts.mainCheckout,
   });
 
   useSpokStore.getState().enqueueJob(job);
@@ -257,6 +265,27 @@ export function enqueueBackgroundJob(opts: {
 
   void persistNewJobBeforeRun(job.id);
   return job.id;
+}
+
+/** Durably record that the captain accepted an Enterprise leader turn. */
+export async function acceptEnterpriseTurn(jobId: string): Promise<void> {
+  const job = useSpokStore
+    .getState()
+    .automationJobs.find((candidate) => candidate.id === jobId);
+  if (!job?.enterprise) throw new Error("Enterprise turn is unavailable");
+  if (["queued", "starting", "running", "waiting_approval"].includes(job.status)) {
+    throw new Error("Enterprise turn is still active");
+  }
+  const previous = job.enterprise;
+  patchJobState(jobId, {
+    enterprise: { ...previous, acceptedAt: Date.now() },
+  });
+  try {
+    await persistCurrentJobNow(jobId);
+  } catch (error) {
+    patchJobState(jobId, { enterprise: previous });
+    throw error;
+  }
 }
 
 export function cancelBackgroundJob(jobId: string): void {
@@ -509,7 +538,9 @@ async function runJob(jobId: string): Promise<void> {
   // Create session without stealing focus
   const sessionId = store.createSession(
     {
-      name: `BG · ${job.title}`.slice(0, 64),
+      name: job.enterprise
+        ? `Enterprise · ${job.enterprise.memberName}`.slice(0, 64)
+        : `BG · ${job.title}`.slice(0, 64),
       source: "live",
       status: "ready",
       backgroundJob: true,
@@ -561,7 +592,7 @@ async function runJob(jobId: string): Promise<void> {
     ].join("\n"),
     status: "running",
     provider: "spok",
-    meta: { backgroundJob: true, jobId },
+    meta: { backgroundJob: true, jobId, enterprise: job.enterprise },
   });
 
   patchJobState(jobId, {
@@ -608,6 +639,9 @@ async function runJob(jobId: string): Promise<void> {
   }
 
   const flags = defaultGrokFlags();
+  if (job.enterprise?.phase === "followup") {
+    flags.continueSession = true;
+  }
   const args = [...baseFlagsArgs(flags), "-p", job.prompt];
 
   try {

@@ -183,4 +183,36 @@ describe("durable automation job ledger", { concurrency: false }, () => {
     if (saved.ok) assert.equal(saved.jobs.length, 100);
     assert.equal(loadAutomationJobLedger().jobs.length, 100);
   });
+
+  it("roundtrips sanitized Enterprise linkage and rejects malformed roles", () => {
+    const linked = {
+      ...job("job-enterprise"),
+      enterprise: {
+        version: 1 as const,
+        teamId: "ent-123",
+        role: "leader" as const,
+        phase: "mission" as const,
+        turn: 1,
+        memberId: "spok",
+        memberName: "Spok",
+        acceptedAt: 250,
+      },
+    };
+    const saved = upsertAutomationJob(linked);
+    assert.equal(saved.ok, true);
+    assert.equal(
+      loadAutomationJobLedger().jobs[0]?.enterprise?.teamId,
+      "ent-123"
+    );
+    assert.equal(loadAutomationJobLedger().jobs[0]?.enterprise?.turn, 1);
+    assert.equal(loadAutomationJobLedger().jobs[0]?.enterprise?.acceptedAt, 250);
+
+    const malformed = upsertAutomationJob({
+      ...linked,
+      id: "job-enterprise-bad",
+      enterprise: { ...linked.enterprise, role: "crew" },
+    });
+    assert.equal(malformed.ok, false);
+    if (!malformed.ok) assert.equal(malformed.code, "invalid_enterprise");
+  });
 });

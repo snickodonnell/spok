@@ -1,6 +1,6 @@
 # Spok Product Roadmap
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 This is the product and engineering source of truth for Spok. It describes what is true now, what is being built next, and the order in which larger capabilities should land. Completed implementation detail belongs in code, tests, and Git history—not in a permanent checklist of crossed-out tasks.
 
@@ -48,6 +48,7 @@ The repository already has a strong product spine:
 - A compact New Task flow for repository, optional task, interactive draft versus isolated background execution, and advanced CLI selection; prompt content is never persisted or auto-run.
 - Inbox fleet controls for job-only and session-linked work: stop/cancel, retry, safe duplicate, and queued priority changes with execution/worktree identity stripped from clones.
 - Durable user-configurable background capacity (one to eight runner slots), with non-destructive limit changes and priority/FIFO queue reasons shown consistently in the inbox and Monitor.
+- An Enterprise coordinated-mission surface: one isolated Spok leader turn receives the ultimate goal plus requested crew briefs; Grok's real subagent lanes populate an interactive ASCII ship and filterable per-person trace inspector; versioned turn history preserves prior evidence; and durable same-worktree follow-ups use Grok continuation before persisted accept-to-Run.
 - A versioned, atomic, secret-safe automation job ledger linking job/session/worktree/branch/policy/timestamps/outcome, with persist-before-launch guarantees and restart reconciliation for interrupted or still-queued work.
 - Background jobs, schedules, channels, notifications, hooks, skills, MCP discovery foundations, mobile/LAN viewing, and an interim Tauri shell.
 
@@ -90,7 +91,7 @@ Goal: turn the vertical slice into the default daily workflow.
 
 Build in this order:
 
-1. **Fleet policy:** add continue/steer and runtime/resource pressure. Stop, retry, safe duplicate, reprioritize, durable user-configurable concurrency, and explicit capacity/queue-position reasons already ship in the inbox and Monitor.
+1. **Fleet policy:** add general-purpose continue/steer and runtime/resource pressure. Enterprise now ships a focused same-worktree team continuation flow; stop, retry, safe duplicate, reprioritize, durable user-configurable concurrency, and explicit capacity/queue-position reasons already ship in the inbox and Monitor.
 2. **Approval recovery:** reconcile expired or runtime-interrupted approvals into explicit session/job outcomes and retain audit-safe decision history without restoring stale authority.
 3. **Handoff:** review readiness gate, commit, push, PR creation, open in IDE, and copy summary from one consistent completion panel.
 4. **Archive and cleanup:** distinguish archive session, keep branch/worktree, remove clean worktree, and force cleanup. Never remove dirty or unpushed work by default.

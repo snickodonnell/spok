@@ -27,6 +27,7 @@ import {
   Palette,
   Accessibility,
   FlaskConical,
+  UsersRound,
 } from "lucide-react";
 import type { UiTheme } from "@/lib/theme";
 import { THEME_META } from "@/lib/theme";
@@ -238,6 +239,14 @@ export function CommandPalette() {
               onSelect={() => {
                 setOpen(false);
                 setMonitorOpen(true);
+              }}
+            />
+            <Item
+              icon={UsersRound}
+              label="Mode · Enterprise (Crew)"
+              onSelect={() => {
+                setProductMode("enterprise");
+                setOpen(false);
               }}
             />
             <Item

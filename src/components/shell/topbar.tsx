@@ -32,7 +32,13 @@ import {
 } from "@/lib/session-inbox";
 import { cn } from "@/lib/utils";
 
-const PRODUCT_MODES: ProductMode[] = ["run", "review", "automate", "extend"];
+const PRODUCT_MODES: ProductMode[] = [
+  "run",
+  "review",
+  "automate",
+  "enterprise",
+  "extend",
+];
 
 export function Topbar() {
   const sidebarOpen = useSpokStore((s) => s.sidebarOpen);

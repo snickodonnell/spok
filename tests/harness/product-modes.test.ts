@@ -9,9 +9,10 @@ import {
 } from "../../src/lib/product-modes";
 
 describe("product modes", () => {
-  it("has four primary modes", () => {
+  it("has five primary modes including Enterprise", () => {
     assert.deepEqual(Object.keys(PRODUCT_MODE_META).sort(), [
       "automate",
+      "enterprise",
       "extend",
       "review",
       "run",
@@ -22,10 +23,12 @@ describe("product modes", () => {
     assert.equal(defaultRightTabForMode("review"), "review");
     assert.equal(defaultRightTabForMode("run"), "changes");
     assert.equal(defaultRightTabForMode("automate"), "changes");
+    assert.equal(defaultRightTabForMode("enterprise"), "changes");
   });
 
   it("validates mode and tab guards", () => {
     assert.equal(isProductMode("run"), true);
+    assert.equal(isProductMode("enterprise"), true);
     assert.equal(isProductMode("nope"), false);
     assert.equal(isWorkspaceRightTab("changes"), true);
     assert.equal(isWorkspaceRightTab("validation"), true);

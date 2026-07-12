@@ -1,6 +1,6 @@
 # Spok Security Posture
 
-Date: 2026-07-11
+Date: 2026-07-12
 
 Spok is a privileged local harness for Grok Build. It can browse workspaces, run Git, start agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary.
 
@@ -16,6 +16,7 @@ Spok is a privileged local harness for Grok Build. It can browse workspaces, run
 | Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. Trust is **durable** in `~/.spok/workspace-trust.json` (schema v1) and survives process restart. |
 | Background isolation | Concurrent/unattended jobs that request isolation must create, trust, and verify a Spok-managed linked worktree before process launch. Failure runs no agent process and never falls back to the main checkout. |
 | Job recovery | Active job records are sanitized and persisted before privileged preparation/process launch. On restart, stale in-flight work becomes an explicit interrupted failure; queued work resumes only while its workspace remains trusted. |
+| Enterprise missions | Enterprise adds sanitized, versioned team/turn/acceptance linkage to a normal durable background job. It grants no new command, filesystem, approval, or process authority; initial turns require verified isolation and follow-ups must re-verify the same managed worktree before Grok continuation. |
 | Concurrent approvals | Each pending approval is bound to one session/run and its abort signal. Cancelling a run denies/removes only its request; a later approval cannot supersede or revive another run. |
 | Commands | Default command profiles are restricted. Custom or high-risk profiles require approval unless policy explicitly allows them. |
 | Secrets | Secrets are stored locally, redacted from exports/logs where possible, and treated as sensitive even after redaction. |

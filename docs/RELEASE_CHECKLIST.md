@@ -1,6 +1,6 @@
 # Spok Release Checklist
 
-Date: 2026-07-10
+Date: 2026-07-12
 
 This checklist covers the current internal web/Tauri packaging path and the future native Windows product path. Tauri is acceptable for dogfood and updater experiments. The end-user performance target is a native Windows UI supervising the shared local runtime.
 
@@ -30,6 +30,7 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Isolated background jobs create/verify a managed worktree and fail closed before process launch if isolation cannot be established.
 - [ ] Durable automation ledger roundtrip, overwrite, redaction, trust denial, corrupt input, and interrupted-run reconciliation tests pass.
 - [ ] Fleet capacity persists across restart; lowering it does not cancel active work, and queued rows explain capacity plus priority/FIFO position.
+- [ ] Enterprise mission metadata, ordered turns, and accepted state roundtrip safely; requested crew never masquerade as emitted lanes; historical person traces remain inspectable; follow-up re-verifies the existing managed worktree and uses Grok continuation.
 - [ ] Cancelling a run while it waits for approval removes that exact request and cannot later launch the process.
 - [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log) and live stream responsiveness.
 

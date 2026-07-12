@@ -3,7 +3,12 @@
  * Run is the default daily loop; Review / Automate / Extend are progressive power surfaces.
  */
 
-export type ProductMode = "run" | "review" | "automate" | "extend";
+export type ProductMode =
+  | "run"
+  | "review"
+  | "automate"
+  | "enterprise"
+  | "extend";
 
 /** Right pane task tabs inside the Run workspace. */
 export type WorkspaceRightTab =
@@ -34,6 +39,11 @@ export const PRODUCT_MODE_META: Record<
     label: "Automate",
     short: "Automate",
     description: "Queue, schedules, lanes",
+  },
+  enterprise: {
+    label: "Enterprise",
+    short: "Enterprise",
+    description: "Coordinate a Grok-led subagent crew",
   },
   extend: {
     label: "Extend",
@@ -75,7 +85,13 @@ export function defaultRightTabForMode(mode: ProductMode): WorkspaceRightTab {
 }
 
 export function isProductMode(v: unknown): v is ProductMode {
-  return v === "run" || v === "review" || v === "automate" || v === "extend";
+  return (
+    v === "run" ||
+    v === "review" ||
+    v === "automate" ||
+    v === "enterprise" ||
+    v === "extend"
+  );
 }
 
 export function isWorkspaceRightTab(v: unknown): v is WorkspaceRightTab {
