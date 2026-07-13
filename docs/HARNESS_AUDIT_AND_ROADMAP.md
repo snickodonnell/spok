@@ -57,12 +57,15 @@ Spok already has a broad capability spine:
 
 - Durable sessions, snapshot-first restore, replay/import/export, raw event preservation, parser fixtures, batched stream reduction, selective subscriptions, and virtualized high-volume views.
 - A review workbench with risk ordering, trace-linked diffs, findings, validation recipes, Git state, and guided handoff records.
-- A versioned inbox lifecycle projection that separates attention, active, queued, failed, review-ready, finished, and ready states; contradictions become diagnostics and job-only rows have a real detail target.
+- A versioned inbox lifecycle projection that separates attention, active, queued, failed, review-ready, finished, and ready states; contradictions become diagnostics and job-only rows have a real detail target. Monitor and Run now consume the same projection via `session-lifecycle-projection` (review readiness and handoff surfaces still incomplete).
 - A shared privileged Node runtime with capability tokens, loopback/origin checks, durable trust, approvals, audit events, path containment, secret redaction, and thin Next adapters for core routes.
 - Managed-worktree isolation for background jobs, a durable job ledger, restart reconciliation, concurrent approvals, fleet controls, and configurable runner capacity.
+- A thin versioned **Mission v1** domain and privileged API (`src/lib/missions`, `/api/missions`) with milestones, work items, dependency/evidence rules, authority and budget receipts, and checkpoint materialization. It is not yet wired as the user-facing Missions leadership surface.
+- Composer effective-policy summary plus confirm-before-escalation for high-risk provider modes; Settings/Topbar still expose parallel policy chrome.
+- Deterministic long-project performance gates for 100 jobs, 10 lanes, 10k hot events, and checkpoint-first projection under 500 ms (fixture-owned bounds; production `session.nodes` growth after 10k reduce remains a known breach).
 - An experimental Spok-led multi-agent mission implementation with durable turns, real provider-lane linkage, same-worktree continuation, and accepted summaries. Its internal name and evidence hierarchy are being migrated; it is not yet the long-project contract.
 
-Direct dogfood evidence still shows release-blocking product defects. Startup/lifecycle/trust defects UX-001, UX-002, UX-003, and UX-008 are closed. UX-004–UX-007 and UX-009–UX-017 remain the current gate. The first UX-005/UX-006 inbox slice is implemented in the current worktree and remains open until mission, run, review, monitor, and handoff surfaces consume the same contract.
+Direct dogfood evidence still shows release-blocking product defects. Startup/lifecycle/trust defects UX-001, UX-002, UX-003, and UX-008 are closed. UX-004–UX-007 and UX-009–UX-017 remain the current gate. UX-005/UX-006 are advanced on Inbox, Missions, Monitor, and Run but stay open until review/handoff and remaining row E2E/a11y criteria pass.
 
 ## Ordered Delivery Plan
 
@@ -70,18 +73,18 @@ Direct dogfood evidence still shows release-blocking product defects. Startup/li
 
 Outcome: the current app always reaches a truthful, usable state; no passive client event changes execution; every visible state has one safe next action; the shell stays responsive under load.
 
-Progress verified 2026-07-13: Missions is first in primary navigation and the welcome/sidebar hierarchy, Spok is explicitly the accountable leader, specialist presets are optional, leader prompts require dependency-aware planning and durable checkpoints, and mission status consumes the versioned inbox lifecycle projection. Contradictory job/session claims render diagnostics; evidence and next action precede the collapsed team map; legacy durable names render with Missions vocabulary. Desktop review passed at 1024×768 and 1440×900 without horizontal overflow. All 309 unit/integration tests, lint, typecheck, production build, and 17 Chromium E2E tests pass. The 100-job inbox/mission projection gate passes within the 16 ms frame budget. This is a first slice, not closure of the remaining P0/P1 audit.
+Progress verified 2026-07-13 (enterprise mission `spok/enterprise-p0p1-mission` @ `c1b88df`): prior Missions navigation/leadership vocabulary slice retained. Additionally: Monitor and Run project the canonical lifecycle (lane, process, job layers distinct; diagnostics on contradiction; one next action); composer presents an effective-policy summary and blocks high-risk provider escalation until scope/duration confirmation (2/2 permission E2E + 15 unit); deterministic perf gates cover 100 jobs / 10 lanes / 10k hot events / checkpoint-first ≤500 ms (12/12 `test:perf`). Full suite: 351 unit/integration tests, lint, production build, and 9 Chromium E2E (permission + startup/lifecycle subset) pass. Remaining P0 gaps: review/handoff lifecycle consumption, navigation/cleanup, Settings/Topbar policy consolidation, a11y/responsive, and production hot-node bounding.
 
 Build in this order:
 
-1. Finish the canonical lifecycle projection across Inbox, Missions, Run, Monitor, Review, and handoff. Contradictory durable claims render a diagnostic, never optimistic success.
+1. Finish the canonical lifecycle projection across Inbox, Missions, Run, Monitor, Review, and handoff. **In progress:** Inbox, Missions, Monitor, and Run consume the versioned projection; Review and handoff still need the same legal model. Contradictory durable claims render a diagnostic, never optimistic success.
 2. Replace mixed product-mode/dialog navigation with durable destinations: **Missions, Run, Review, Automate, Extend**. Context tabs remain local to a destination.
 3. Replace direct deletion with archive-first, scope-aware cleanup previews covering durable records, logs, branches, worktrees, dirty files, and unpushed commits.
-4. Present one effective policy summary; require explicit scope/duration confirmation for escalation.
+4. Present one effective policy summary; require explicit scope/duration confirmation for escalation. **In progress (composer slice):** effective summary + confirm-before-escalation for high-risk provider modes; Settings/Topbar/Run Status duplication and launch/handoff evidence remain.
 5. Simplify New Task, Run, and composer hierarchy. Put outcome and next action first; move provider/debug detail on demand.
 6. Unify changed files, findings, validation, readiness, and Git handoff in one review workbench.
 7. Meet keyboard, AA contrast, screen-reader, 200% zoom, and compact/standard/wide layout gates.
-8. Enforce performance budgets with release-build telemetry and representative long-project fixtures.
+8. Enforce performance budgets with release-build telemetry and representative long-project fixtures. **In progress:** representative gates exist and pass; production `session.nodes` after 10k reduce remains unbounded (breach for sequential fix).
 
 Exit criteria:
 
@@ -98,8 +101,8 @@ Outcome: a user can hand Spok a substantial outcome and rely on a durable, inspe
 
 Build in this order:
 
-1. Replace prompt-only mission metadata with a versioned mission record: outcome, definition of done, constraints, policy, repository/worktree, status provenance, next action, and checkpoint.
-2. Add durable milestones and work items with dependencies, owner, requested capability, authority, time/token/tool budget, expected evidence, retries, and terminal outcome.
+1. Replace prompt-only mission metadata with a versioned mission record: outcome, definition of done, constraints, policy, repository/worktree, status provenance, next action, and checkpoint. **Domain/API slice landed** (`MISSION_SCHEMA_VERSION = 1`, FS persist under `$SPOK_HOME/missions`, privileged list/create/read/update/checkpoint routes). Not yet the user-facing Missions store.
+2. Add durable milestones and work items with dependencies, owner, requested capability, authority, time/token/tool budget, expected evidence, retries, and terminal outcome. **Domain/API slice landed** with validation that refuses false dependency completion without evidence and keeps terminal provenance distinct from process exit. Scheduler and UI wiring remain open.
 3. Let Spok propose and revise the plan. Plan changes retain rationale and require user approval only when authority, destructive scope, cost, or declared outcome changes.
 4. Add a scheduler for ready work items with dependency, capacity, repository-lock, and worktree constraints. Spok may parallelize only independent work.
 5. Add checkpoint summaries that make a mission resumable without replaying its full transcript: completed, active, blocked, changed assumptions, evidence, risks, and next decisions.

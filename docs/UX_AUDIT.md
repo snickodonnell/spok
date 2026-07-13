@@ -97,7 +97,7 @@ Required outcome:
 
 #### UX-005 — Status and completion vocabulary contradicts itself
 
-Status: **In progress 2026-07-13.** The inbox now uses a versioned lifecycle presentation that distinguishes ready, active, review-ready, finished, and diagnostic states; names the reason's owning layer; and refuses to present contradictory session/job outcomes as success. Missions now consumes that projection and has a focused contradiction regression test. Monitor, Run, review readiness, and handoff still need the same legal transition model before this finding can close.
+Status: **In progress 2026-07-13.** The inbox now uses a versioned lifecycle presentation that distinguishes ready, active, review-ready, finished, and diagnostic states; names the reason's owning layer; and refuses to present contradictory session/job outcomes as success. Missions consumes that projection and has a focused contradiction regression test. **Monitor and Run now project the same contract** via `src/lib/session-lifecycle-projection.ts` (lane badge, distinct process/job labels, diagnostic wins over optimistic “Completed”, reason provenance, one next action); unit tests cover success, contradiction, and next-action paths. Review readiness UI and handoff still need the same legal transition model before this finding can close. No direct dogfood re-pass of Monitor/Run was claimed as full closure evidence.
 
 The observed Enterprise mission simultaneously showed “Needs attention,” “Accepted,” a completed background job, zero emitted lanes, zero visible events, and no substantial summary. Inbox lanes, process status, job status, mission turn status, review readiness, and handoff outcomes use overlapping but non-equivalent labels.
 
@@ -110,7 +110,7 @@ Required outcome:
 
 #### UX-006 — Inbox rows do not reliably answer “what now?”
 
-Status: **In progress 2026-07-13.** Every current inbox row now exposes one visible primary navigation action. Review-ready sessions route to Changes; pre-session/job-only records open Monitor with the matching job focused; terminal clean records appear under Finished rather than Idle; and rows show execution location plus reason provenance. Focused contract tests cover job-only, review, terminal, and contradictory-state paths, with direct restored-data review at standard and wide widths. Job detail/navigation E2E and final row hierarchy/accessibility review remain before closure.
+Status: **In progress 2026-07-13.** Every current inbox row now exposes one visible primary navigation action. Review-ready sessions route to Changes; pre-session/job-only records open Monitor with the matching job focused; terminal clean records appear under Finished rather than Idle; and rows show execution location plus reason provenance. Focused contract tests cover job-only, review, terminal, and contradictory-state paths, with direct restored-data review at standard and wide widths. **Monitor job rows and Run status now surface the same reason/next-action projection** (including focusing Monitor when Run’s next action is `open_job`). Job detail/navigation E2E and final row hierarchy/accessibility review remain before closure.
 
 Job-only rows appear in the session inbox but their main buttons are disabled when no `sessionId` exists. They expose branch/cwd/status yet cannot be opened from the row. Actions are hidden in an overflow menu; selection, active state, review readiness, and lifecycle identity are ambiguous. “Idle sessions” can describe completed job-only records.
 
@@ -149,7 +149,9 @@ Required outcome:
 
 #### UX-009 — Permission controls are duplicated, jargon-heavy, and too easy to escalate
 
-The app exposes an app permission mode in Settings/Topbar/Run Status plus a separate per-session Grok permission selector in the composer. That compact selector includes Default, Auto, Don't ask, Bypass permissions, and Always approve; selecting a high-risk value mutates state immediately and only then shows a toast (`src/components/session/prompt-composer.tsx:795-817`).
+Status: **In progress 2026-07-13.** Composer slice landed: `effective-policy` helper + summary component shows app mode, provider selection, risk tier, and precedence; high-risk provider modes (`dontAsk`, `bypassPermissions`, `always-approve`) open a scope/duration confirmation dialog and **do not call `setGrokFlags` until Confirm**; de-escalation is immediate; elevated risk stays visible via a persistent indicator. Verified by 15 unit tests and 2 Chromium E2E (cancel leaves manual; confirm applies bypass + elevated chip). **Not closed:** Settings/Topbar/Run Status still expose parallel policy chrome; slash-command escalation paths are ungated; launch/continue/handoff evidence of elevated modes is incomplete; mobile composer omits the desktop cockpit selector.
+
+The app still exposes an app permission mode in Settings/Topbar/Run Status plus a per-session Grok permission selector in the composer. High-risk composer selection previously mutated immediately then toasted; that composer path is fixed as above.
 
 Required outcome:
 
@@ -193,7 +195,7 @@ Required outcome:
 
 #### UX-013 — Missions presents decoration before reliable leadership evidence
 
-Status: **In progress 2026-07-13.** User-facing vocabulary now presents Missions, Spok is explicitly the leader, leader checkpoints and canonical state reasons precede the collapsed optional team map, preset specialists are optional, and legacy durable titles are display-migrated. Desktop interaction review passed at 1024×768 and 1440×900 without horizontal overflow; the 17-test Chromium suite, including mobile startup/lifecycle contracts, passed. A direct phone visual rerun remains because the development hot-reload chunk failed during the manual viewport switch. Internal `enterprise` identifiers remain for durable migration compatibility. The finding stays open until durable plans, milestones, work items, checkpoints, and cross-surface lifecycle semantics ship.
+Status: **In progress 2026-07-13.** User-facing vocabulary now presents Missions, Spok is explicitly the leader, leader checkpoints and canonical state reasons precede the collapsed optional team map, preset specialists are optional, and legacy durable titles are display-migrated. Desktop interaction review passed at 1024×768 and 1440×900 without horizontal overflow; Chromium startup/lifecycle E2E contracts still pass. **Domain foundation added:** versioned Mission v1 types, validation, FS persistence, budget/authority receipts, pure checkpoint projection, and privileged `/api/missions` routes (9 domain/route unit tests). The Missions UI is **not** yet wired to this store; decorative team surfaces can still dominate without durable plan/evidence. Internal `enterprise` identifiers remain for migration. Finding stays open until UI leadership evidence, milestones/work items in the control room, and cross-surface lifecycle semantics ship.
 
 The ASCII ship, crew avatars, rooms, telemetry, roster, turn rail, summary, and person inspector can dominate a mission that has zero actual lanes/events and no summary. Requested crew placeholders can look like agents even when no provider lane exists. The surface uses the same job/session/review lifecycle but does not yet have a durable long-project plan model.
 
