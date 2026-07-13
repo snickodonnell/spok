@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { EffectivePolicySummaryView } from "@/components/session/effective-policy-summary";
 import { useSpokStore } from "@/lib/store";
 import { runHarness } from "@/lib/harness";
 import {
@@ -38,6 +40,16 @@ import {
   type GrokRunFlags,
   type SlashCommand,
 } from "@/lib/grok-commands";
+import {
+  buildEffectivePolicySummary,
+  buildEscalationConfirmation,
+  currentProviderSelection,
+  flagsForProviderSelection,
+  isHighRiskProviderMode,
+  isProviderPermissionSelection,
+  requiresEscalationConfirmation,
+  type ProviderPermissionSelection,
+} from "@/lib/security/effective-policy";
 import { localFetch } from "@/lib/local-api-client";
 import { buildExportPayload } from "@/lib/export-session";
 import {
@@ -164,6 +176,9 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
   const [slashIdx, setSlashIdx] = useState(0);
   const [skillCatalog, setSkillCatalog] = useState<SkillDescriptor[]>([]);
   const [agentCatalog, setAgentCatalog] = useState<CustomAgentConfig[]>([]);
+  /** High-risk provider mode awaiting scope/duration confirm (no mutate until Confirm). */
+  const [pendingEscalation, setPendingEscalation] =
+    useState<ProviderPermissionSelection | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -197,6 +212,68 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
     () => flagsFromSession(grokFlags),
     [grokFlags]
   );
+
+  const providerSelection = useMemo(
+    () => currentProviderSelection(flags),
+    [flags]
+  );
+
+  const effectivePolicy = useMemo(
+    () =>
+      buildEffectivePolicySummary({
+        appPermissionMode,
+        flags,
+        cwd: sessionCwd,
+      }),
+    [appPermissionMode, flags, sessionCwd]
+  );
+
+  const escalationCopy = useMemo(
+    () =>
+      pendingEscalation
+        ? buildEscalationConfirmation(pendingEscalation, { cwd: sessionCwd })
+        : null,
+    [pendingEscalation, sessionCwd]
+  );
+
+  const applyProviderSelection = useCallback(
+    (selection: ProviderPermissionSelection) => {
+      if (!sessionId) return;
+      setGrokFlags(sessionId, flagsForProviderSelection(selection));
+    },
+    [sessionId, setGrokFlags]
+  );
+
+  const onProviderPermissionChange = useCallback(
+    (raw: string) => {
+      if (!isProviderPermissionSelection(raw)) return;
+      const next = raw;
+      if (requiresEscalationConfirmation(providerSelection, next)) {
+        // Controlled select stays on current flags until Confirm.
+        setPendingEscalation(next);
+        return;
+      }
+      // De-escalation and non-high-risk changes apply immediately.
+      applyProviderSelection(next);
+    },
+    [providerSelection, applyProviderSelection]
+  );
+
+  const confirmEscalation = useCallback(() => {
+    if (!pendingEscalation) return;
+    const target = pendingEscalation;
+    applyProviderSelection(target);
+    setPendingEscalation(null);
+    if (isHighRiskProviderMode(target)) {
+      toast.warning(
+        `${target} enabled for this session — elevated risk remains visible until you switch back.`
+      );
+    }
+  }, [pendingEscalation, applyProviderSelection]);
+
+  const cancelEscalation = useCallback(() => {
+    setPendingEscalation(null);
+  }, []);
 
   // Detect `/` autocomplete query (from start of line or only content)
   const slashQuery = useMemo(() => {
@@ -758,6 +835,8 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
             </span>
           </div>
 
+          <EffectivePolicySummaryView summary={effectivePolicy} />
+
           <label
             className="inline-flex items-center gap-1"
             title="App permission policy (Settings)"
@@ -767,6 +846,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
               type="button"
               onClick={() => setSettingsOpen(true)}
               className="rounded border border-phosphor-cyan/25 px-1.5 py-0.5 font-mono text-[10px] text-phosphor-cyan/85 hover:border-phosphor-cyan/50"
+              data-testid="composer-app-permission"
             >
               {appPermissionMode}
             </button>
@@ -774,38 +854,14 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
 
           <label
             className="inline-flex items-center gap-1"
-            title="Grok CLI permission mode for this session"
+            title="Grok CLI permission mode for this session — high-risk modes require confirmation"
           >
             <span className="text-[9px] text-phosphor-green/40">Permission</span>
             <select
               className="h-6 max-w-[160px] rounded border border-phosphor-green/25 bg-black/60 px-1.5 text-[10px] text-phosphor-green outline-none focus:border-phosphor-amber/50"
-              value={
-                flags.alwaysApprove
-                  ? "always-approve"
-                  : flags.permissionMode || "manual"
-              }
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v === "always-approve") {
-                  setGrokFlags(session.id, {
-                    alwaysApprove: true,
-                    permissionMode: undefined,
-                  });
-                  toast.warning(
-                    "Always approve is on — tools run without prompts. Use only in trusted workspaces."
-                  );
-                } else if (v === "manual") {
-                  setGrokFlags(session.id, {
-                    alwaysApprove: false,
-                    permissionMode: undefined,
-                  });
-                } else {
-                  setGrokFlags(session.id, {
-                    alwaysApprove: false,
-                    permissionMode: v,
-                  });
-                }
-              }}
+              data-testid="permission-mode-select"
+              value={providerSelection}
+              onChange={(e) => onProviderPermissionChange(e.target.value)}
             >
               <option value="manual">Manual (safe)</option>
               <option value="default">Default</option>
@@ -861,14 +917,6 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
             )}
           </button>
 
-          {flags.alwaysApprove && (
-            <Badge
-              variant="amber"
-              title="Always approve — tools run without prompts. Trusted disposable workspaces only."
-            >
-              Always approve
-            </Badge>
-          )}
           {flags.effort && (
             <Badge variant="magenta">effort:{flags.effort}</Badge>
           )}
@@ -1320,6 +1368,21 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
             )}
           </button>
         </div>
+      )}
+
+      {escalationCopy && (
+        <ConfirmDialog
+          open={!!pendingEscalation}
+          title={escalationCopy.title}
+          description={escalationCopy.description}
+          detail={escalationCopy.detail}
+          confirmLabel={escalationCopy.confirmLabel}
+          cancelLabel="Cancel"
+          tone={escalationCopy.tone}
+          onConfirm={confirmEscalation}
+          onCancel={cancelEscalation}
+          testId="permission-escalation-dialog"
+        />
       )}
     </div>
   );

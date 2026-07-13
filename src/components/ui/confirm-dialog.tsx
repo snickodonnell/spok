@@ -22,6 +22,7 @@ export function ConfirmDialog({
   busy,
   onConfirm,
   onCancel,
+  testId,
 }: {
   open: boolean;
   title: string;
@@ -33,6 +34,8 @@ export function ConfirmDialog({
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Optional data-testid on the dialog surface (not a zero-size wrapper). */
+  testId?: string;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -79,6 +82,7 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-title"
+      data-testid={testId}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !busy) onCancel();
       }}
