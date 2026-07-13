@@ -42,3 +42,11 @@ export {
   handleAutomationJobsPost,
   handleAutomationJobsPut,
 } from "./routes/automation-jobs";
+export {
+  handleMissionsGet,
+  handleMissionsPost,
+  handleMissionIdGet,
+  handleMissionIdPut,
+  handleMissionCheckpointGet,
+  handleMissionCheckpointPost,
+} from "./routes/missions";

@@ -17,6 +17,12 @@ import {
   handleGitGet,
   handleGitPost,
   handleHealthGet,
+  handleMissionCheckpointGet,
+  handleMissionCheckpointPost,
+  handleMissionIdGet,
+  handleMissionIdPut,
+  handleMissionsGet,
+  handleMissionsPost,
   handleSessionEventsGet,
   handleSessionEventsPost,
   handleSessionIdDelete,
@@ -52,6 +58,12 @@ function match(
   }
   if (pathname === "/api/automation/jobs" && m === "PUT") {
     return { handler: handleAutomationJobsPut, params: {} };
+  }
+  if (pathname === "/api/missions" && m === "GET") {
+    return { handler: handleMissionsGet, params: {} };
+  }
+  if (pathname === "/api/missions" && m === "POST") {
+    return { handler: handleMissionsPost, params: {} };
   }
   if (pathname === "/api/session/start" && m === "POST") {
     return { handler: handleSessionStartPost, params: {} };
@@ -106,6 +118,46 @@ function match(
   }
   if (pathname === "/api/runtime/cli-status" && m === "GET") {
     return { handler: handleCliStatusGet, params: {} };
+  }
+
+  const missionCheckpoint = pathname.match(
+    /^\/api\/missions\/([^/]+)\/checkpoint$/
+  );
+  if (missionCheckpoint) {
+    const id = decodeURIComponent(missionCheckpoint[1]);
+    if (m === "GET") {
+      return {
+        handler: (req) =>
+          handleMissionCheckpointGet(req, { params: Promise.resolve({ id }) }),
+        params: { id },
+      };
+    }
+    if (m === "POST") {
+      return {
+        handler: (req) =>
+          handleMissionCheckpointPost(req, { params: Promise.resolve({ id }) }),
+        params: { id },
+      };
+    }
+  }
+
+  const missionId = pathname.match(/^\/api\/missions\/([^/]+)$/);
+  if (missionId) {
+    const id = decodeURIComponent(missionId[1]);
+    if (m === "GET") {
+      return {
+        handler: (req) =>
+          handleMissionIdGet(req, { params: Promise.resolve({ id }) }),
+        params: { id },
+      };
+    }
+    if (m === "PUT") {
+      return {
+        handler: (req) =>
+          handleMissionIdPut(req, { params: Promise.resolve({ id }) }),
+        params: { id },
+      };
+    }
   }
 
   const sessionEvents = pathname.match(/^\/api\/sessions\/([^/]+)\/events$/);
