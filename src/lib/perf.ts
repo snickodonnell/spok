@@ -4,6 +4,12 @@
  * Browser: uses performance.now() + optional Performance API marks.
  * Node/tests: falls back to process.hrtime / Date.now.
  * Never throws; never logs secrets.
+ *
+ * Roadmap hard ceilings (docs/HARNESS_AUDIT_AND_ROADMAP.md):
+ * - Inbox update 100 jobs: 16 ms
+ * - Checkpoint-first useful content: 500 ms
+ * - 10k hot-event navigation: no stall over 250 ms
+ * - Stream reduce burst: 16 ms
  */
 
 export const PERF_BUDGETS = {
@@ -11,28 +17,64 @@ export const PERF_BUDGETS = {
   coldLaunchMs: 2000,
   /** Reopen recent session → first useful content (ms) */
   sessionReopenMs: 500,
+  /**
+   * Checkpoint-first restore → useful projection (ms).
+   * Same hard ceiling as session reopen / recent mission checkpoint.
+   */
+  checkpointProjectionMs: 500,
   /** Main-thread work per stream batch after coalesce (ms) */
   streamIngestBurstMs: 16,
   /** Diff tab switch for common repos (ms) */
   diffTabSwitchMs: 300,
   /** Mission-control projection for 100 jobs (ms) */
   missionControlProjectionMs: 16,
+  /** Inbox update with 100 jobs (ms) — roadmap hard ceiling */
+  inboxUpdateMs: 16,
+  /** Multi-agent lane projection for 10 concurrent lanes (ms) */
+  multiLaneProjectionMs: 16,
   /** Fixture replay of a mid-size session (ms) */
   fixtureReplayMs: 2000,
   /** Stream events reduced per second (throughput floor in tests) */
   streamEventsPerSec: 50,
+  /**
+   * 10k hot-event navigation / window projection (ms).
+   * Pure-node proxy for "no stall over 250 ms".
+   */
+  hotEventNavigationMs: 250,
+} as const;
+
+/**
+ * Hot/cold contract bounds for long-project fixtures and telemetry meta.
+ * Production modules may use different caps; fixtures assert *these* stay bounded.
+ */
+export const PERF_HOT_BOUNDS = {
+  /** Max rows kept in a virtualized render window */
+  renderWindowEvents: 200,
+  /** In-memory eventLog tail used after checkpoint hydrate */
+  hotEventLog: 80,
+  /** Representative long-project hot event count */
+  longProjectHotEvents: 10_000,
+  /** Representative concurrent agent lanes */
+  concurrentAgentLanes: 10,
+  /** Representative mission-control fleet size */
+  missionControlJobs: 100,
+  /** Production reducer eventLog cap (documented for breach checks) */
+  reduceEventLogCap: 8_000,
 } as const;
 
 export type PerfMetricName =
   | "app_boot"
   | "first_session_paint"
   | "session_reopen"
+  | "checkpoint_projection"
   | "stream_ingest_burst"
   | "reduce_batch"
   | "trace_render"
   | "diff_tab_switch"
   | "inbox_projection"
   | "mission_projection"
+  | "lane_projection"
+  | "hot_event_nav"
   | "fixture_replay"
   | "memory_heap";
 
@@ -61,7 +103,23 @@ function nowMs(): number {
   return Date.now();
 }
 
-function budgetFor(name: string): number | undefined {
+/**
+ * CI hosts are noisier; multiply hard ceilings when `CI` is set.
+ * Local/default is 1. Existing fixture replay used an informal 3× — keep that
+ * via explicit callers where needed.
+ */
+export function ciBudgetMultiplier(explicit?: number): number {
+  if (explicit != null && Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
+  if (typeof process !== "undefined" && process.env?.CI) {
+    return 2;
+  }
+  return 1;
+}
+
+/** Resolve the hard ceiling for a metric name, if any. */
+export function budgetMsFor(name: string): number | undefined {
   switch (name) {
     case "app_boot":
     case "cold_launch":
@@ -69,19 +127,41 @@ function budgetFor(name: string): number | undefined {
     case "first_session_paint":
     case "session_reopen":
       return PERF_BUDGETS.sessionReopenMs;
+    case "checkpoint_projection":
+      return PERF_BUDGETS.checkpointProjectionMs;
     case "stream_ingest_burst":
     case "reduce_batch":
       return PERF_BUDGETS.streamIngestBurstMs;
     case "diff_tab_switch":
       return PERF_BUDGETS.diffTabSwitchMs;
     case "inbox_projection":
+      return PERF_BUDGETS.inboxUpdateMs;
     case "mission_projection":
       return PERF_BUDGETS.missionControlProjectionMs;
+    case "lane_projection":
+      return PERF_BUDGETS.multiLaneProjectionMs;
+    case "hot_event_nav":
+      return PERF_BUDGETS.hotEventNavigationMs;
     case "fixture_replay":
       return PERF_BUDGETS.fixtureReplayMs;
     default:
       return undefined;
   }
+}
+
+function budgetFor(name: string): number | undefined {
+  return budgetMsFor(name);
+}
+
+/** True when duration exceeds the named budget (after optional multiplier). */
+export function isOverBudget(
+  name: string,
+  durationMs: number,
+  multiplier = 1
+): boolean {
+  const budget = budgetMsFor(name);
+  if (budget == null) return false;
+  return durationMs > budget * multiplier;
 }
 
 /** Record a completed duration sample. */
