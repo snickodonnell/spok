@@ -1,22 +1,24 @@
 # Spok UX Audit
 
-Date: 2026-07-12
+Date: 2026-07-13
 
 Status: active remediation contract. This document records the substantial UX defects in the current React/Tauri dogfood product. Product order lives in `HARNESS_AUDIT_AND_ROADMAP.md`; this file owns the evidence, UX requirements, and closure criteria.
 
 ## Executive Summary
 
-Spok has broad harness capability, but the current interface is not yet a dependable control room. The largest problems are lifecycle safety and product coherence rather than styling:
+Spok has broad harness capability, but the current interface is not yet a dependable control room. The product core is now Spok-led Missions for long-running multi-agent Grok work; the current UI still reflects an older “workbench plus Enterprise demo” hierarchy. The largest problems are lifecycle safety and product coherence rather than styling:
 
 - the preferred development UI can remain indefinitely on session restoration;
 - the phone surface can stop active host work merely because the page hides or changes layout, and changing folders stops unrelated runs;
-- Run, Review, Automate, Enterprise, and Extend do not share one navigation model;
+- Missions, Run, Review, Automate, and Extend do not yet share one navigation model;
 - session, job, run, turn, mission, review, and handoff states can contradict one another;
 - trust, permission, isolation, stop, delete, and cleanup consequences are fragmented or implicit;
 - dense, low-contrast, frequently 9–10 px controls and hover-only actions prevent the advertised keyboard/AA quality bar;
 - smoke tests can pass or skip while the usable workspace is still blocked.
 
-The next product milestone is therefore UX recovery and lifecycle coherence. New platform breadth, Enterprise spectacle, native UI expansion, and extension packaging should not outrank the P0/P1 findings below.
+The target interaction is: give Spok an outcome, inspect the plan and authority, leave safely, return to truthful progress, and review evidence. Performance and accessibility are part of usability: long projects must reopen from checkpoints, stream without shell churn, and remain navigable at 200% zoom.
+
+The next product milestone is therefore fast, trustworthy mission control. New orchestration breadth, decorative team visualization, native UI expansion, and extension packaging should not outrank the P0/P1 findings below.
 
 ## Method And Scope
 
@@ -81,18 +83,21 @@ Required outcome:
 
 ### P1 — Core Product Coherence And Safety
 
-#### UX-004 — Top-level navigation mixes pages, tab aliases, and dialogs
+#### UX-004 — Top-level navigation does not express the product hierarchy
 
 Run maps to the workspace Changes tab; Review maps to the workspace Git/Review tab; Automate changes product state and opens Monitor as a modal; Enterprise replaces the whole main surface; Extend opens another modal. The sidebar separately exposes Workspace, Split, Thinking, Changes, Events, and Health, plus duplicate Monitor/Extensions entries. Closing a modal can leave a meaningless active product mode.
 
 Required outcome:
 
-- use one stable navigation model: durable destinations in primary navigation, contextual panels/tabs inside a destination, transient dialogs only for short tasks;
+- use one stable navigation model, ordered around Missions, Run, Review, Automate, and Extend: durable destinations in primary navigation, contextual panels/tabs inside a destination, transient dialogs only for short tasks;
+- identify Spok as the accountable leader in Missions; Run is a single-session context, not the product’s top-level mental model;
 - make URL/history, title, selected state, focus return, and keyboard shortcuts consistent;
 - remove duplicate entry points unless one is explicitly a shortcut to the same destination;
 - rename Review surfaces so “changed files,” “review findings,” and “Git handoff” are distinct.
 
 #### UX-005 — Status and completion vocabulary contradicts itself
+
+Status: **In progress 2026-07-13.** The inbox now uses a versioned lifecycle presentation that distinguishes ready, active, review-ready, finished, and diagnostic states; names the reason's owning layer; and refuses to present contradictory session/job outcomes as success. Missions now consumes that projection and has a focused contradiction regression test. Monitor, Run, review readiness, and handoff still need the same legal transition model before this finding can close.
 
 The observed Enterprise mission simultaneously showed “Needs attention,” “Accepted,” a completed background job, zero emitted lanes, zero visible events, and no substantial summary. Inbox lanes, process status, job status, mission turn status, review readiness, and handoff outcomes use overlapping but non-equivalent labels.
 
@@ -104,6 +109,8 @@ Required outcome:
 - impossible or contradictory combinations fail validation and render a diagnostic state rather than optimistic success.
 
 #### UX-006 — Inbox rows do not reliably answer “what now?”
+
+Status: **In progress 2026-07-13.** Every current inbox row now exposes one visible primary navigation action. Review-ready sessions route to Changes; pre-session/job-only records open Monitor with the matching job focused; terminal clean records appear under Finished rather than Idle; and rows show execution location plus reason provenance. Focused contract tests cover job-only, review, terminal, and contradictory-state paths, with direct restored-data review at standard and wide widths. Job detail/navigation E2E and final row hierarchy/accessibility review remain before closure.
 
 Job-only rows appear in the session inbox but their main buttons are disabled when no `sessionId` exists. They expose branch/cwd/status yet cannot be opened from the row. Actions are hidden in an overflow menu; selection, active state, review readiness, and lifecycle identity are ambiguous. “Idle sessions” can describe completed job-only records.
 
@@ -184,16 +191,19 @@ Required outcome:
 - findings can be sent back to the agent without losing prior evidence;
 - validation runs are cancellable, durable, attributable, and explicit about untested scope.
 
-#### UX-013 — Enterprise presents decoration before reliable evidence
+#### UX-013 — Missions presents decoration before reliable leadership evidence
 
-The ASCII ship, crew avatars, rooms, telemetry, roster, turn rail, summary, and person inspector dominate a mission that can have zero actual lanes/events and no summary. Requested crew placeholders look like agents even when no provider lane exists. The surface is a separate product mode despite depending on the same job/session/review lifecycle.
+Status: **In progress 2026-07-13.** User-facing vocabulary now presents Missions, Spok is explicitly the leader, leader checkpoints and canonical state reasons precede the collapsed optional team map, preset specialists are optional, and legacy durable titles are display-migrated. Desktop interaction review passed at 1024×768 and 1440×900 without horizontal overflow; the 17-test Chromium suite, including mobile startup/lifecycle contracts, passed. A direct phone visual rerun remains because the development hot-reload chunk failed during the manual viewport switch. Internal `enterprise` identifiers remain for durable migration compatibility. The finding stays open until durable plans, milestones, work items, checkpoints, and cross-surface lifecycle semantics ship.
+
+The ASCII ship, crew avatars, rooms, telemetry, roster, turn rail, summary, and person inspector can dominate a mission that has zero actual lanes/events and no summary. Requested crew placeholders can look like agents even when no provider lane exists. The surface uses the same job/session/review lifecycle but does not yet have a durable long-project plan model.
 
 Required outcome:
 
-- coordinated work uses the standard task, inbox, trace, review, and handoff primitives;
+- coordinated work uses the standard project, mission, work-item, inbox, trace, review, and handoff primitives;
+- Spok shows outcome, plan/checkpoint, critical blockers, evidence gaps, budget pressure, and next action before optional team visualization;
 - requested, assigned, running, reported, failed, and synthesized agents are visually and semantically distinct;
 - evidence and blockers precede decorative visualization;
-- Enterprise remains behind an experimental flag until state consistency, recovery, accessibility, and core-loop reuse pass.
+- internal Enterprise-era contracts remain migration-only until state consistency, recovery, accessibility, performance, and core-loop reuse pass.
 
 #### UX-014 — Mobile is neither a safe monitor nor a complete control surface
 
@@ -302,9 +312,9 @@ Work should land as five vertical slices:
 
 1. **Recoverable shell:** fix hydration, explicit disconnected/error states, truthful stale shells, and non-skipping startup E2E.
 2. **Safe lifecycle:** remove passive mobile cancellation, scope stop/delete/cleanup, separate restore from trust, and add previews/audit.
-3. **Coherent control room:** simplify primary navigation, canonicalize state/outcomes, and rebuild inbox rows around the next safe action.
+3. **Coherent control room:** make Missions the durable core destination, simplify primary navigation, canonicalize state/outcomes, and rebuild rows around the next safe action.
 4. **Review-centered core loop:** simplify launch/composer, unify review evidence/validation/handoff, and make continuation preserve prior evidence.
-5. **Accessible adaptive surfaces:** raise typography/contrast, complete keyboard/semantics, establish compact/standard/wide layouts, and then reshape Automate/Enterprise/Extend on shared primitives.
+5. **Accessible adaptive surfaces:** raise typography/contrast, complete keyboard/semantics, establish compact/standard/wide layouts, and then reshape Missions/Automate/Extend on shared primitives.
 
 ## Global UX Acceptance Criteria
 
@@ -318,6 +328,7 @@ Work should land as five vertical slices:
 - The full core loop works by keyboard and at 200% zoom; all themes meet AA for operational content.
 - Compact, standard, and wide layouts preserve task context and expose the same safety state.
 - Required E2E tests fail on missing/blocked UI rather than conditionally skipping.
+- A mission with 100 jobs, 10 active lanes, and 10,000 hot events remains responsive; longer history restores checkpoint-first with bounded DOM and hot memory.
 
 ## Ownership Map
 
@@ -328,7 +339,7 @@ Work should land as five vertical slices:
 | Navigation/state ontology | product modes/store, topbar/sidebar, session inbox, job/session/mission records |
 | Launch/composer | launch dialog, directory navigator, prompt composer, settings/policy presentation |
 | Review/evidence | diff/review queue, validation runner, Git completion/handoff |
-| Automate/Enterprise/Extend | monitor, enterprise screen, extensions dialog, shared lifecycle contracts |
+| Missions/Automate/Extend | mission screen (`enterprise` migration module), monitor, extensions dialog, shared lifecycle contracts |
 | Accessibility/responsive | global tokens/components, dialog/navigation primitives, desktop/mobile layout contracts |
 | Verification | `e2e`, harness lifecycle tests, accessibility and responsive release gates |
 

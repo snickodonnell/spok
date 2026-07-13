@@ -4,12 +4,13 @@ import {
   defaultRightTabForMode,
   isProductMode,
   isWorkspaceRightTab,
+  missionDisplayName,
   PRODUCT_MODE_META,
   RIGHT_TAB_META,
 } from "../../src/lib/product-modes";
 
 describe("product modes", () => {
-  it("has five primary modes including Enterprise", () => {
+  it("keeps the Enterprise migration key but presents Missions as the core", () => {
     assert.deepEqual(Object.keys(PRODUCT_MODE_META).sort(), [
       "automate",
       "enterprise",
@@ -17,6 +18,8 @@ describe("product modes", () => {
       "review",
       "run",
     ]);
+    assert.equal(PRODUCT_MODE_META.enterprise.label, "Missions");
+    assert.match(PRODUCT_MODE_META.enterprise.description, /Spok leads/i);
   });
 
   it("maps review mode to review tab", () => {
@@ -41,5 +44,13 @@ describe("product modes", () => {
     assert.equal(RIGHT_TAB_META.validation.label, "Validation");
     assert.equal(RIGHT_TAB_META.events.label, "Events");
     assert.equal(RIGHT_TAB_META.health.label, "Health");
+  });
+
+  it("presents durable Enterprise-era names as Missions", () => {
+    assert.equal(missionDisplayName("Enterprise · Spok"), "Mission · Spok");
+    assert.equal(
+      missionDisplayName("Enterprise follow-up · Repair validation"),
+      "Mission follow-up · Repair validation"
+    );
   });
 });

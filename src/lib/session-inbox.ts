@@ -15,6 +15,7 @@ import {
 } from "./automation/job-actions";
 import { describeJobQueueStatus } from "./automation/queue";
 import type { Session, SessionStatus } from "./types";
+import { missionDisplayName } from "./product-modes";
 
 /** Operational inbox lane (UI-derived; not a durable SessionStatus). */
 export type InboxLane =
@@ -23,7 +24,25 @@ export type InboxLane =
   | "queued"
   | "failed"
   | "ready_review"
+  | "finished"
   | "idle";
+
+/** Versioned UI projection of the durable session/job lifecycle contracts. */
+export const INBOX_LIFECYCLE_PRESENTATION_VERSION = 1 as const;
+
+export type InboxReasonSource =
+  | "restore"
+  | "approval"
+  | "session"
+  | "job"
+  | "git"
+  | "review"
+  | "diagnostic";
+
+export type InboxNextAction = {
+  kind: "open_session" | "review_changes" | "open_job";
+  label: string;
+};
 
 export type InboxLaneMeta = {
   id: InboxLane;
@@ -70,12 +89,19 @@ export const INBOX_LANE_META: Record<InboxLane, InboxLaneMeta> = {
     rank: 4,
     description: "Changes or dirty tree waiting for review",
   },
+  finished: {
+    id: "finished",
+    label: "Finished",
+    short: "Done",
+    rank: 5,
+    description: "Terminal work with no pending review",
+  },
   idle: {
     id: "idle",
-    label: "Idle",
-    short: "Idle",
-    rank: 5,
-    description: "No active work or pending review",
+    label: "Ready",
+    short: "Ready",
+    rank: 6,
+    description: "Session is ready for another turn",
   },
 };
 
@@ -86,6 +112,7 @@ export const INBOX_LANE_ORDER: InboxLane[] = [
   "queued",
   "failed",
   "ready_review",
+  "finished",
   "idle",
 ];
 
@@ -98,6 +125,11 @@ export type InboxEntry = {
   lane: InboxLane;
   /** One-line operational reason for the lane. */
   reason: string;
+  /** Layer that owns the visible reason. */
+  reasonSource: InboxReasonSource;
+  /** Single safest navigation action for this lifecycle state. */
+  nextAction: InboxNextAction;
+  lifecycleVersion: typeof INBOX_LIFECYCLE_PRESENTATION_VERSION;
   status: SessionStatus;
   cwd: string;
   source: Session["source"] | "job";
@@ -210,36 +242,160 @@ function hasReviewableWork(session: Session): boolean {
   return false;
 }
 
+type ClassifiedInboxState = {
+  lane: InboxLane;
+  reason: string;
+  reasonSource: InboxReasonSource;
+};
+
+type TerminalOutcome = "completed" | "failed" | "cancelled";
+
+function sessionTerminalOutcome(status: SessionStatus): TerminalOutcome | null {
+  if (status === "completed") return "completed";
+  if (status === "error") return "failed";
+  if (status === "stopped") return "cancelled";
+  return null;
+}
+
+function jobTerminalOutcome(
+  status: AutomationJob["status"]
+): TerminalOutcome | "skipped" | null {
+  if (status === "completed") return "completed";
+  if (status === "failed") return "failed";
+  if (status === "cancelled") return "cancelled";
+  if (status === "skipped") return "skipped";
+  return null;
+}
+
+/**
+ * Durable records may arrive from different persistence layers. Never guess a
+ * successful state when their active/terminal claims cannot both be true.
+ */
+export function describeLifecycleContradiction(
+  session: Session,
+  job?: AutomationJob | null
+): string | null {
+  if (!job) return null;
+
+  const sessionOutcome = sessionTerminalOutcome(session.status);
+  const jobOutcome = jobTerminalOutcome(job.status);
+  const sessionActive = ["starting", "running", "paused"].includes(
+    session.status
+  );
+  const jobActive = [
+    "queued",
+    "starting",
+    "running",
+    "waiting_approval",
+  ].includes(job.status);
+
+  if ((sessionOutcome && jobActive) || (jobOutcome && sessionActive)) {
+    return `State mismatch · session ${session.status}, job ${job.status}`;
+  }
+
+  if (
+    sessionOutcome &&
+    jobOutcome &&
+    !(sessionOutcome === "cancelled" && jobOutcome === "skipped") &&
+    sessionOutcome !== jobOutcome
+  ) {
+    return `Outcome mismatch · session ${sessionOutcome}, job ${jobOutcome}`;
+  }
+
+  if (job.outcome) {
+    const durableOutcome =
+      job.outcome.kind === "interrupted" ? "failed" : job.outcome.kind;
+    if (jobOutcome && durableOutcome !== jobOutcome) {
+      return `Outcome mismatch · job ${job.status}, record ${job.outcome.kind}`;
+    }
+  }
+
+  return null;
+}
+
+function nextActionFor(
+  classified: ClassifiedInboxState,
+  hasSession: boolean
+): InboxNextAction {
+  if (!hasSession) return { kind: "open_job", label: "View job" };
+  if (classified.lane === "ready_review") {
+    return { kind: "review_changes", label: "Review changes" };
+  }
+  if (classified.reasonSource === "approval") {
+    return { kind: "open_session", label: "Review approval" };
+  }
+  if (classified.reasonSource === "diagnostic") {
+    return { kind: "open_session", label: "Inspect state" };
+  }
+  if (classified.reasonSource === "restore") {
+    return { kind: "open_session", label: "Recover" };
+  }
+  if (classified.lane === "failed") {
+    return { kind: "open_session", label: "Inspect failure" };
+  }
+  if (classified.reasonSource === "git") {
+    return { kind: "open_session", label: "Resolve" };
+  }
+  if (classified.lane === "running") {
+    return { kind: "open_session", label: "Monitor" };
+  }
+  if (classified.lane === "queued") {
+    return { kind: "open_session", label: "View queue" };
+  }
+  if (classified.lane === "finished") {
+    return { kind: "open_session", label: "View result" };
+  }
+  return { kind: "open_session", label: "Open" };
+}
+
 /**
  * Classify a single session into an inbox lane.
- * Priority: waiting > running > queued > failed > ready_review > idle
+ * Priority: waiting > running > queued > failed > ready_review > finished > idle
  */
 export function classifySessionLane(
   session: Session,
   job?: AutomationJob | null
-): { lane: InboxLane; reason: string } {
+): ClassifiedInboxState {
   const status = session.status;
   const conflicts = conflictCount(session);
   const files = countFilesChanged(session);
   const errors = session.metrics?.errorCount ?? 0;
 
+  const contradiction = describeLifecycleContradiction(session, job);
+  if (contradiction) {
+    return {
+      lane: "waiting",
+      reason: contradiction,
+      reasonSource: "diagnostic",
+    };
+  }
+
   if (session.restoreState === "unavailable") {
     return {
       lane: "waiting",
       reason: session.restoreError?.trim().slice(0, 64) || "Saved details unavailable",
+      reasonSource: "restore",
     };
   }
 
   if (session.restoreState === "restoring" || session.hydratePartial) {
-    return { lane: "waiting", reason: "Restoring saved details" };
+    return {
+      lane: "waiting",
+      reason: "Restoring saved details",
+      reasonSource: "restore",
+    };
   }
 
   if (job?.status === "waiting_approval") {
-    return { lane: "waiting", reason: "Waiting for approval" };
+    return {
+      lane: "waiting",
+      reason: "Waiting for approval",
+      reasonSource: "approval",
+    };
   }
 
   if (status === "paused") {
-    return { lane: "waiting", reason: "Paused" };
+    return { lane: "waiting", reason: "Paused", reasonSource: "session" };
   }
 
   if (conflicts > 0) {
@@ -247,6 +403,7 @@ export function classifySessionLane(
       lane: "waiting",
       reason:
         conflicts === 1 ? "1 merge conflict" : `${conflicts} merge conflicts`,
+      reasonSource: "git",
     };
   }
 
@@ -254,19 +411,32 @@ export function classifySessionLane(
     return {
       lane: "running",
       reason: status === "starting" ? "Starting…" : "Agent running",
+      reasonSource: "session",
     };
   }
 
   if (job?.status === "running") {
-    return { lane: "running", reason: "Background job running" };
+    return {
+      lane: "running",
+      reason: "Background job running",
+      reasonSource: "job",
+    };
   }
 
   if (job?.status === "starting") {
-    return { lane: "running", reason: "Preparing isolated workspace" };
+    return {
+      lane: "running",
+      reason: "Preparing isolated workspace",
+      reasonSource: "job",
+    };
   }
 
   if (job?.status === "queued") {
-    return { lane: "queued", reason: "Queued background job" };
+    return {
+      lane: "queued",
+      reason: "Queued background job",
+      reasonSource: "job",
+    };
   }
 
   if (status === "error" || job?.status === "failed") {
@@ -274,7 +444,11 @@ export function classifySessionLane(
       session.error?.trim().slice(0, 48) ||
       job?.error?.trim().slice(0, 48) ||
       (errors > 0 ? `${errors} error(s)` : "Run failed");
-    return { lane: "failed", reason: detail };
+    return {
+      lane: "failed",
+      reason: detail,
+      reasonSource: job?.status === "failed" ? "job" : "session",
+    };
   }
 
   if (hasReviewableWork(session)) {
@@ -282,6 +456,7 @@ export function classifySessionLane(
       return {
         lane: "ready_review",
         reason: files === 1 ? "1 file changed" : `${files} files changed`,
+        reasonSource: "review",
       };
     }
     const dirty = dirtyCount(session);
@@ -289,6 +464,7 @@ export function classifySessionLane(
       return {
         lane: "ready_review",
         reason: dirty === 1 ? "1 dirty path" : `${dirty} dirty paths`,
+        reasonSource: "git",
       };
     }
     const openComments = (session.reviewComments ?? []).filter(
@@ -301,41 +477,64 @@ export function classifySessionLane(
           openComments === 1
             ? "1 open review comment"
             : `${openComments} open review comments`,
+        reasonSource: "review",
       };
     }
-    return { lane: "ready_review", reason: "Ready for review" };
+    return {
+      lane: "ready_review",
+      reason: "Ready for review",
+      reasonSource: "review",
+    };
   }
 
   if (job?.status === "cancelled") {
-    return { lane: "idle", reason: "Background job cancelled" };
+    return {
+      lane: "finished",
+      reason: "Background job cancelled",
+      reasonSource: "job",
+    };
   }
   if (job?.status === "skipped") {
     return {
-      lane: "idle",
+      lane: "finished",
       reason: job.error?.trim().slice(0, 48) || "Background job skipped",
+      reasonSource: "job",
     };
   }
   if (job?.status === "completed") {
-    return { lane: "idle", reason: "Background job completed" };
+    return {
+      lane: "finished",
+      reason: "Background job completed",
+      reasonSource: "job",
+    };
   }
 
   if (status === "completed") {
-    return { lane: "idle", reason: "Completed" };
+    return { lane: "finished", reason: "Completed", reasonSource: "session" };
   }
   if (status === "stopped") {
-    return { lane: "idle", reason: "Stopped" };
+    return { lane: "finished", reason: "Stopped", reasonSource: "session" };
   }
   if (status === "ready") {
-    return { lane: "idle", reason: "Ready" };
+    return {
+      lane: "idle",
+      reason: "Ready for a new turn",
+      reasonSource: "session",
+    };
   }
-  return { lane: "idle", reason: "Idle" };
+  return {
+    lane: "idle",
+    reason: "Ready for a new turn",
+    reasonSource: "session",
+  };
 }
 
 export function toInboxEntry(
   session: Session,
   job?: AutomationJob | null
 ): InboxEntry {
-  const { lane, reason } = classifySessionLane(session, job);
+  const classified = classifySessionLane(session, job);
+  const { lane, reason, reasonSource } = classified;
   const laneRank = INBOX_LANE_META[lane].rank;
   // Within a lane: newer activity first; waiting/failed slightly prefer more errors.
   const urgencyBoost =
@@ -346,9 +545,12 @@ export function toInboxEntry(
   return {
     entryId: `session:${session.id}`,
     sessionId: session.id,
-    name: session.name,
+    name: missionDisplayName(session.name),
     lane,
     reason,
+    reasonSource,
+    nextAction: nextActionFor(classified, true),
+    lifecycleVersion: INBOX_LIFECYCLE_PRESENTATION_VERSION,
     status: session.status,
     cwd: session.config?.cwd ?? "",
     source: session.source,
@@ -370,14 +572,39 @@ export function toInboxEntry(
   };
 }
 
-function jobLane(job: AutomationJob): { lane: InboxLane; reason: string } {
+function jobLane(job: AutomationJob): ClassifiedInboxState {
+  if (job.outcome) {
+    const statusOutcome = jobTerminalOutcome(job.status);
+    const durableOutcome =
+      job.outcome.kind === "interrupted" ? "failed" : job.outcome.kind;
+    if (statusOutcome && durableOutcome !== statusOutcome) {
+      return {
+        lane: "waiting",
+        reason: `Outcome mismatch · job ${job.status}, record ${job.outcome.kind}`,
+        reasonSource: "diagnostic",
+      };
+    }
+  }
+
   switch (job.status) {
     case "waiting_approval":
-      return { lane: "waiting", reason: "Waiting for approval" };
+      return {
+        lane: "waiting",
+        reason: "Waiting for approval",
+        reasonSource: "approval",
+      };
     case "running":
-      return { lane: "running", reason: "Background job running" };
+      return {
+        lane: "running",
+        reason: "Background job running",
+        reasonSource: "job",
+      };
     case "starting":
-      return { lane: "running", reason: "Preparing isolated workspace" };
+      return {
+        lane: "running",
+        reason: "Preparing isolated workspace",
+        reasonSource: "job",
+      };
     case "queued":
       return {
         lane: "queued",
@@ -385,34 +612,50 @@ function jobLane(job: AutomationJob): { lane: InboxLane; reason: string } {
           job.priority === 0
             ? "Queued background job"
             : `Queued · priority ${job.priority}`,
+        reasonSource: "job",
       };
     case "failed":
       return {
         lane: "failed",
         reason: job.error?.trim().slice(0, 48) || "Background job failed",
+        reasonSource: "job",
       };
     case "cancelled":
-      return { lane: "idle", reason: "Background job cancelled" };
+      return {
+        lane: "finished",
+        reason: "Background job cancelled",
+        reasonSource: "job",
+      };
     case "skipped":
       return {
-        lane: "idle",
+        lane: "finished",
         reason: job.error?.trim().slice(0, 48) || "Background job skipped",
+        reasonSource: "job",
       };
     default:
-      return { lane: "idle", reason: "Background job completed" };
+      return {
+        lane: "finished",
+        reason: "Background job completed",
+        reasonSource: "job",
+      };
   }
 }
 
 /** Queue/history entry used before a background job has created a session. */
 export function jobToInboxEntry(job: AutomationJob): InboxEntry {
-  const { lane, reason } = jobLane(job);
-  const updatedAt = job.finishedAt ?? job.startedAt ?? job.createdAt;
+  const classified = jobLane(job);
+  const { lane, reason, reasonSource } = classified;
+  const updatedAt =
+    job.updatedAt ?? job.finishedAt ?? job.startedAt ?? job.createdAt;
   return {
     entryId: `job:${job.id}`,
     sessionId: "",
-    name: job.title,
+    name: missionDisplayName(job.title),
     lane,
     reason,
+    reasonSource,
+    nextAction: nextActionFor(classified, false),
+    lifecycleVersion: INBOX_LIFECYCLE_PRESENTATION_VERSION,
     status:
       job.status === "running"
         ? "running"
@@ -477,6 +720,7 @@ export function buildSessionInbox(
     queued: 0,
     failed: 0,
     ready_review: 0,
+    finished: 0,
     idle: 0,
   };
   for (const e of entries) byLane[e.lane]++;
@@ -519,10 +763,16 @@ export function buildSessionInbox(
     headline =
       byLane.queued === 1 ? "1 job queued" : `${byLane.queued} jobs queued`;
   } else {
+    const readyCount = byLane.idle;
+    const finishedCount = byLane.finished;
     headline =
-      entries.length === 1
-        ? "1 session idle"
-        : `${entries.length} sessions idle`;
+      readyCount > 0
+        ? readyCount === 1
+          ? "1 session ready"
+          : `${readyCount} sessions ready`
+        : finishedCount === 1
+          ? "1 finished item"
+          : `${finishedCount} finished items`;
   }
 
   return {

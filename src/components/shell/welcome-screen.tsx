@@ -13,6 +13,8 @@ import {
   AlertCircle,
   Loader2,
   Shield,
+  Rocket,
+  UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSpokStore } from "@/lib/store";
@@ -109,14 +111,14 @@ export function WelcomeScreen() {
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded border border-phosphor-green/25 bg-phosphor-green/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-phosphor-green/80">
             <Radio className="h-3 w-3" />
-            Grok Build workbench
+            Grok Build mission control
           </div>
           <h1 className="text-3xl font-semibold tracking-tight text-phosphor-green sm:text-4xl">
             SPOK
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-phosphor-green/55">
-            Open a repo to run Grok with a live thinking stream, linked diffs,
-            and review tools — or play a sample without installing the CLI.
+            Give Spok the outcome. Spok plans and leads real Grok agents,
+            keeps long work resumable, and brings back evidence you can review.
           </p>
         </div>
 
@@ -165,9 +167,9 @@ export function WelcomeScreen() {
 
         <div className="grid gap-3 sm:grid-cols-3">
           <Feature
-            icon={Eye}
-            title="Thinking + events"
-            desc="Readable thought stream with a full event graph one click away"
+            icon={UsersRound}
+            title="Spok leads"
+            desc="One accountable leader plans, delegates, integrates, and names the next safe action"
           />
           <Feature
             icon={GitBranch}
@@ -175,15 +177,24 @@ export function WelcomeScreen() {
             desc="Diffs linked to agent steps, stage/commit without leaving Spok"
           />
           <Feature
-            icon={Radio}
-            title="Live harness"
-            desc="Spawn Grok CLI, queue follow-ups, isolate background work"
+            icon={Eye}
+            title="Truthful progress"
+            desc="Real agent lanes, blockers, changes, checks, and durable checkpoints"
           />
         </div>
 
         <div className="flex flex-wrap gap-2">
           <Button
             size="lg"
+            onClick={() => setProductMode("enterprise")}
+            data-testid="welcome-start-mission"
+          >
+            <Rocket className="h-4 w-4" />
+            Start a mission
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
             onClick={() => setLaunchOpen(true)}
             data-testid="welcome-open-repo"
           >

@@ -2,7 +2,7 @@
 
 Date: 2026-07-12
 
-Spok is a privileged local harness for Grok Build. It can browse workspaces, run Git, start agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary.
+Spok is a privileged local harness and multi-agent leader for Grok Build. It can browse workspaces, run Git, start and supervise agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary. Leadership never implies unlimited authority: every mission, work item, agent run, and retry is bounded by repository, policy, budget, and explicit user intent.
 
 **Runtime extraction status:** shared privileged handlers live under `src/server/routes/*`. Core Next `src/app/api/**` routes are thin adapters, including the durable automation job ledger; schedules/channels, extensions, attachments, and secrets still have residual Next-hosted routes. `npm run dev:app` supervises the standalone loopback runtime and proxies extracted routes through the existing UI. Token, origin, workspace trust, policy, and audit expectations are unchanged for both hosts.
 
@@ -16,7 +16,9 @@ Spok is a privileged local harness for Grok Build. It can browse workspaces, run
 | Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. Trust is **durable** in `~/.spok/workspace-trust.json` (schema v1) and survives process restart. |
 | Background isolation | Concurrent/unattended jobs that request isolation must create, trust, and verify a Spok-managed linked worktree before process launch. Failure runs no agent process and never falls back to the main checkout. |
 | Job recovery | Active job records are sanitized and persisted before privileged preparation/process launch. On restart, stale in-flight work becomes an explicit interrupted failure; queued work resumes only while its workspace remains trusted. |
-| Enterprise missions | Enterprise adds sanitized, versioned team/turn/acceptance linkage to a normal durable background job. It grants no new command, filesystem, approval, or process authority; initial turns require verified isolation and follow-ups must re-verify the same managed worktree before Grok continuation. |
+| Spok-led missions | Current mission linkage adds sanitized, versioned team/turn/acceptance metadata to a normal durable background job. It grants no new command, filesystem, approval, or process authority; initial turns require verified isolation and follow-ups re-verify the same managed worktree. Future milestones/work items must carry their own bounded authority and budget receipt. |
+| Delegation | A child agent cannot broaden the leader’s policy, trusted roots, environment access, approval duration, destructive scope, or resource budget. Spok may narrow authority per work item; escalation returns to an explicit user decision. |
+| Long-project recovery | Checkpoints and restored mission data are authority-neutral. Restart drops pending approvals, reconciles active runs, and never turns an old plan or retry instruction into fresh execution authority. |
 | Concurrent approvals | Each pending approval is bound to one session/run and its abort signal. Cancelling a run denies/removes only its request; a later approval cannot supersede or revive another run. |
 | Client lifecycle | Browser/phone hide, unload, disconnect, freeze, navigation, and layout changes are not user authorization to stop a run. Cancellation requires an explicit scoped action and audit event. |
 | Restore/import | Restored or imported data is authority-neutral. It may be inspected without trust, but must never grant/re-grant workspace trust, approvals, command permission, or execution capability. |
@@ -84,6 +86,8 @@ Deny rules always win. Approval decisions and security-relevant state changes sh
 
 Client presentation must show the effective policy and its scope before launch or escalation. A compact provider flag selector or transient toast is not sufficient consent for `bypass`, `always approve`, global stop, or destructive cleanup.
 
+Mission launch and every material plan escalation must show the effective repository/worktree, permission mode, approval behavior, concurrency/resource budget, and destructive limits. A leader may schedule only work whose dependency, isolation, and authority requirements are currently satisfied.
+
 ## Desktop Boundary
 
 Current Tauri permissions should stay narrow:
@@ -107,7 +111,7 @@ Redaction should cover common credential file names, token-like values, high-ent
 
 ## Extension Risk
 
-MCP servers, hooks, skills, project rules, plugins, GitHub/GitLab connectors, IDE companions, and remote runners are privileged extension points. Before they are enabled broadly, each needs:
+MCP servers, hooks, skills, project rules, plugins, GitHub/GitLab connectors, IDE companions, remote runners, and future specialist-agent profiles are privileged extension points. Before they are enabled broadly, each needs:
 
 - A permission declaration.
 - A trust prompt.
@@ -134,6 +138,8 @@ Focused checks:
 8. Restore/import sessions after revoking trust and confirm they remain inspectable but cannot spawn, browse, or run Git until the user explicitly trusts the workspace again.
 9. Hide, reload, disconnect, freeze, or switch layout on phone/browser clients and confirm active host runs continue.
 10. Attempt scoped and global stop/cleanup actions and confirm authorization, impact preview, audit identity, and unrelated-run preservation.
+11. Delegate a work item and confirm its command, path, environment, approval, concurrency, and retry scope cannot exceed the mission receipt.
+12. Restart during a long mission and confirm checkpoints remain inspectable while pending approvals and execution authority do not revive.
 
 ## Residual Risks
 
@@ -146,3 +152,4 @@ Focused checks:
 - Redaction can miss novel secret formats.
 - Windows file permissions are best-effort.
 - Future MCP, hooks, plugins, and remote runners increase attack surface unless each permission boundary is explicit and tested.
+- Long-running autonomous retries can amplify mistakes or cost; work-item budgets, bounded retries, stall detection, and human escalation are required before unattended missions are promoted.

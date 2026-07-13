@@ -33,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { SAMPLES } from "@/lib/samples";
 import { playEvents } from "@/lib/playback";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { missionDisplayName } from "@/lib/product-modes";
 import type { LayoutPreference } from "@/lib/mobile-layout";
 import {
   buildSessionInbox,
@@ -210,8 +211,8 @@ export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
           <div className="text-sm font-semibold tracking-wide">SPOK</div>
           <div className="truncate text-[11px] text-phosphor-green/45">
             {session
-              ? session.name
-              : "Connected to host PC · phone layout"}
+              ? missionDisplayName(session.name)
+              : "Mission monitor · host owns execution"}
           </div>
         </div>
         {session && (
@@ -606,12 +607,12 @@ function MobileWelcome({
     >
       <div className="pt-4">
         <div className="mb-1 text-[11px] uppercase tracking-wider text-phosphor-green/45">
-          Phone · host PC
+          Mission monitor · host PC
         </div>
         <h1 className="text-2xl font-semibold text-phosphor-green">SPOK</h1>
         <p className="mt-2 text-sm leading-relaxed text-phosphor-green/55">
-          Prompts and thinking run on the host over Wi‑Fi. Use Refresh to check
-          for an active session.
+          Spok and Grok agents keep running on the host. Monitor progress,
+          approvals, and evidence here; hiding or disconnecting this phone never stops work.
         </p>
       </div>
 

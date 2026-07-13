@@ -1,6 +1,6 @@
 ---
 name: spok-stream-contracts
-description: Compatibility entry for the maintained Spok stream contracts skill. Read and follow the project skill under .agents for parsing, replay/import/export, raw events, trace/diff linking, and lifecycle-state provenance.
+description: Compatibility entry for the maintained Spok stream contracts skill. Read and follow the project skill under .agents for Grok parsing, multi-agent/mission provenance, checkpoints, replay/import/export, raw events, trace/diff linking, and lifecycle state.
 ---
 
 # Spok Stream Contracts

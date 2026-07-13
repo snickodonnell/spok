@@ -76,12 +76,13 @@ function newCrewMember(index = 0): EnterpriseCrewDraft {
 }
 
 function teamTitle(goal: string): string {
-  const first = goal.trim().split(/\r?\n/, 1)[0] || "Enterprise mission";
+  const first = goal.trim().split(/\r?\n/, 1)[0] || "Spok mission";
   return first.length > 54 ? `${first.slice(0, 53)}…` : first;
 }
 
 function statusVariant(status: EnterpriseTeam["status"]) {
   if (status === "complete") return "success" as const;
+  if (status === "ready_review") return "cyan" as const;
   if (status === "needs_attention") return "error" as const;
   if (status === "waiting") return "amber" as const;
   if (status === "working" || status === "launching") return "cyan" as const;
@@ -161,7 +162,7 @@ export function EnterpriseScreen() {
 
   const [draftMode, setDraftMode] = useState(false);
   const [goal, setGoal] = useState("");
-  const [crew, setCrew] = useState<EnterpriseCrewDraft[]>([newCrewMember()]);
+  const [crew, setCrew] = useState<EnterpriseCrewDraft[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [selectedPersonId, setSelectedPersonId] = useState("spok");
   const [followup, setFollowup] = useState("");
@@ -220,7 +221,7 @@ export function EnterpriseScreen() {
   const launchMission = () => {
     setSubmitted(true);
     if (!validation.ok) {
-      toast.error(validation.reason || "Enterprise mission is incomplete");
+      toast.error(validation.reason || "Mission brief is incomplete");
       return;
     }
     const assignedCrew = crew.filter(
@@ -228,7 +229,7 @@ export function EnterpriseScreen() {
     );
     const teamId = `ent-${nanoid(10)}`;
     enqueueBackgroundJob({
-      title: `Enterprise · ${teamTitle(goal)}`,
+      title: `Mission · ${teamTitle(goal)}`,
       prompt: buildEnterpriseMissionPrompt({ goal, crew: assignedCrew }),
       cwd: workspaceCwd,
       isolate: true,
@@ -247,9 +248,9 @@ export function EnterpriseScreen() {
     setActiveTeamId(teamId);
     setDraftMode(false);
     setSelectedPersonId("spok");
-    toast.success("Enterprise mission queued", {
+    toast.success("Spok mission queued", {
       description:
-        "Spok will coordinate real Grok subagents inside an isolated worktree.",
+        "Spok will plan and lead real Grok agents inside an isolated worktree.",
     });
   };
 
@@ -257,13 +258,13 @@ export function EnterpriseScreen() {
     if (!team || !followup.trim()) return;
     const prior = team.currentJob;
     if (!prior.worktreePath || !prior.mainCheckout) {
-      toast.error("The managed Enterprise worktree is unavailable", {
+      toast.error("The managed mission worktree is unavailable", {
         description: "Open the full session or retry the mission safely.",
       });
       return;
     }
     enqueueBackgroundJob({
-      title: `Enterprise follow-up · ${teamTitle(followup)}`,
+      title: `Mission follow-up · ${teamTitle(followup)}`,
       prompt: buildEnterpriseFollowupPrompt({
         team,
         followup,
@@ -310,11 +311,11 @@ export function EnterpriseScreen() {
         setViewMode("workspace");
       }
       setProductMode("run");
-      toast.success("Enterprise summary accepted", {
+      toast.success("Mission checkpoint accepted", {
         description: "The team session is open in the regular workspace.",
       });
     } catch (error) {
-      toast.error("Could not save Enterprise acceptance", {
+      toast.error("Could not save mission acceptance", {
         description:
           error instanceof Error ? error.message : "Durable save failed",
       });
@@ -364,7 +365,7 @@ export function EnterpriseScreen() {
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <Rocket className="h-9 w-9 text-phosphor-cyan/70" />
         <h1 className="text-lg font-semibold text-phosphor-green">
-          No Enterprise mission selected
+          No mission selected
         </h1>
         <Button onClick={() => setDraftMode(true)}>Create mission</Button>
       </div>
@@ -386,7 +387,7 @@ export function EnterpriseScreen() {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="font-mono text-sm font-semibold tracking-[0.18em] text-phosphor-cyan">
-                ENTERPRISE
+                MISSIONS
               </h1>
               <Badge variant={statusVariant(team.status)}>
                 <span aria-live="polite">{enterpriseStatusLabel(team.status)}</span>
@@ -396,14 +397,14 @@ export function EnterpriseScreen() {
               )}
             </div>
             <p className="truncate text-[10px] text-phosphor-green/40">
-              Coordinated Grok team mission · {team.cwd}
+              <span className="uppercase">{team.statusSource}</span> · {team.statusReason} · {team.cwd}
             </p>
           </div>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           {baseTeams.length > 1 && (
             <select
-              aria-label="Enterprise mission history"
+              aria-label="Mission history"
               value={team.id}
               onChange={(event) => setActiveTeamId(event.target.value)}
               className="h-8 max-w-52 rounded border border-phosphor-green/20 bg-black/40 px-2 font-mono text-[10px] text-phosphor-green outline-none focus:border-phosphor-cyan/50"
@@ -421,7 +422,7 @@ export function EnterpriseScreen() {
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setProductMode("run")}>
             <ArrowLeft className="h-3.5 w-3.5" />
-            Regular UI
+            Back to Run
           </Button>
         </div>
       </header>
@@ -440,11 +441,11 @@ export function EnterpriseScreen() {
           }}
         />
 
-        <main className="enterprise-center min-h-0 overflow-y-auto p-3" aria-label="Enterprise bridge">
+        <main className="enterprise-center min-h-0 overflow-y-auto p-3" aria-label="Spok mission control">
           <section className="mb-3 rounded-lg border border-phosphor-green/15 bg-black/25 p-3">
             <div className="mb-1 flex items-center gap-1.5 text-[9px] uppercase tracking-widest text-phosphor-green/40">
               <ShieldCheck className="h-3 w-3" />
-              Ultimate goal
+              Project outcome
             </div>
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-phosphor-green/80">
               {team.goal}
@@ -480,22 +481,14 @@ export function EnterpriseScreen() {
             </div>
           )}
 
-          <EnterpriseShip
-            team={team}
-            stations={stations}
-            session={selectedSession}
-            selectedPersonId={selectedPersonId}
-            onSelect={setSelectedPersonId}
-          />
-
           <section className="mt-3 rounded-lg border border-phosphor-green/15 bg-crt-panel p-3">
             <div className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 flex-1">
                 <h2 className="text-xs font-semibold text-phosphor-green">
-                  Spok mission summary
+                  Spok leader checkpoint
                 </h2>
                 <p className="mt-0.5 text-[10px] text-phosphor-green/40">
-                  Summary appears only from the leader&apos;s actual Grok output.
+                  Evidence appears only from the leader&apos;s actual Grok output and canonical lifecycle state.
                 </p>
               </div>
               {team.currentJob.branch && (
@@ -530,8 +523,8 @@ export function EnterpriseScreen() {
             ) : (
               <div className="mt-3 rounded border border-dashed border-phosphor-green/20 bg-black/20 px-3 py-4 text-center text-[11px] text-phosphor-green/45">
                 {active
-                  ? "Spok is coordinating the crew. A substantial final response will appear here."
-                  : "This turn ended without a substantial team summary. Open the full session or continue with a focused request."}
+                  ? "Spok is leading the mission. A durable checkpoint will appear here."
+                  : "This turn ended without a substantial leader checkpoint. Inspect the session or continue with a focused repair request."}
               </div>
             )}
 
@@ -547,7 +540,7 @@ export function EnterpriseScreen() {
                   rows={2}
                   placeholder={
                     canContinue
-                      ? "Ask Spok and the crew for another pass…"
+                      ? "Ask Spok to revise the plan or lead another pass…"
                       : active
                         ? "Available when this turn finishes"
                         : "Managed worktree unavailable"
@@ -617,6 +610,24 @@ export function EnterpriseScreen() {
               </div>
             </div>
           </section>
+
+          <details className="mt-3 rounded-lg border border-phosphor-green/15 bg-crt-panel">
+            <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium text-phosphor-green/75 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-phosphor-cyan/60">
+              Team activity map
+              <span className="ml-2 text-[11px] font-normal text-phosphor-green/45">
+                Optional visualization · status comes from evidence above
+              </span>
+            </summary>
+            <div className="border-t border-phosphor-green/10 p-3">
+              <EnterpriseShip
+                team={team}
+                stations={stations}
+                session={selectedSession}
+                selectedPersonId={selectedPersonId}
+                onSelect={setSelectedPersonId}
+              />
+            </div>
+          </details>
         </main>
 
         <EnterpriseInspector
@@ -672,13 +683,13 @@ function EnterpriseDraft({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="font-mono text-xl font-semibold tracking-[0.16em] text-phosphor-cyan">
-                ENTERPRISE
+                MISSIONS
               </h1>
-              <Badge variant="magenta">Grok crew mission</Badge>
+              <Badge variant="magenta">Spok leads</Badge>
             </div>
             <p className="mt-1 max-w-2xl text-sm leading-relaxed text-phosphor-green/55">
-              Give Spok the ultimate goal and brief the crew. Grok performs the
-              real coordination and emits the subagent lanes shown on the ship.
+              Give Spok the outcome and definition of done. Spok plans the work,
+              leads real Grok agents, integrates their evidence, and leaves a durable checkpoint.
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onBack}>
@@ -704,13 +715,13 @@ function EnterpriseDraft({
             </div>
             <label className="block">
               <span className="mb-1 block text-[10px] uppercase tracking-widest text-phosphor-green/45">
-                Ultimate goal
+                Project outcome
               </span>
               <textarea
                 value={goal}
                 onChange={(event) => setGoal(event.target.value)}
                 rows={9}
-                placeholder="What should the Enterprise team accomplish? Include constraints and the definition of done."
+                placeholder="What should Spok accomplish? Include constraints, risks, and the definition of done."
                 className="w-full resize-y rounded-lg border border-phosphor-green/20 bg-black/35 px-3 py-2.5 text-sm leading-relaxed text-phosphor-green outline-none placeholder:text-phosphor-green/25 focus:border-phosphor-cyan/50"
               />
             </label>
@@ -736,10 +747,10 @@ function EnterpriseDraft({
               <div>
                 <h2 className="flex items-center gap-1.5 text-sm font-semibold text-phosphor-green">
                   <UsersRound className="h-4 w-4 text-phosphor-magenta" />
-                  Crew briefs
+                  Specialist suggestions
                 </h2>
                 <p className="mt-0.5 text-[10px] text-phosphor-green/40">
-                  Spok plus up to {MAX_ENTERPRISE_CREW} crew. Names match only real provider lanes.
+                  Optional. Spok can design the team, or use up to {MAX_ENTERPRISE_CREW} suggested specialists. Names match only real provider lanes.
                 </p>
               </div>
               <Button
@@ -753,6 +764,11 @@ function EnterpriseDraft({
               </Button>
             </div>
             <div className="max-h-[30rem] space-y-2 overflow-y-auto pr-1">
+              {crew.length === 0 && (
+                <div className="rounded-lg border border-dashed border-phosphor-magenta/25 bg-black/20 p-4 text-center text-xs leading-relaxed text-phosphor-green/50">
+                  No specialists preset. Spok will decompose the outcome and choose the smallest useful Grok team.
+                </div>
+              )}
               {crew.map((member, index) => (
                 <div
                   key={member.id}
@@ -766,7 +782,7 @@ function EnterpriseDraft({
                       type="button"
                       className="ml-auto rounded p-1 text-phosphor-green/35 hover:bg-red-500/10 hover:text-red-400"
                       onClick={() => removeCrew(member.id)}
-                      aria-label={`Remove ${member.name || "crew member"}`}
+                      aria-label={`Remove ${member.name || "specialist suggestion"}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -799,16 +815,16 @@ function EnterpriseDraft({
         <footer className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-phosphor-cyan/20 bg-phosphor-cyan/5 px-4 py-3">
           <ShieldCheck className="h-4 w-4 shrink-0 text-phosphor-cyan" />
           <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-phosphor-green/55">
-            Enterprise launches one isolated leader run. Spok decides how to
-            coordinate real Grok subagents; isolation or trust failure launches no
-            agent process.
+            A mission launches one isolated Spok leader run. Spok plans and
+            coordinates real Grok agents; isolation or trust failure launches no
+            process, and requested specialists never count as running without provider evidence.
           </p>
           {submitted && validationReason && (
             <span className="text-[11px] text-red-400">{validationReason}</span>
           )}
           <Button onClick={onLaunch}>
             <Rocket className="h-4 w-4" />
-            Launch Enterprise
+            Launch mission
           </Button>
         </footer>
       </div>
@@ -841,13 +857,14 @@ function MissionTelemetry({
   return (
     <section
       className="mb-3 rounded-lg border border-phosphor-cyan/15 bg-crt-panel/80 p-3"
-      aria-label="Mission telemetry"
+      aria-label="Mission evidence summary"
     >
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
         <TelemetryValue label="Mission turn" value={`${enterpriseTurn(job)} / ${Math.max(...team.jobs.map(enterpriseTurn))}`} />
         <TelemetryValue label="Actual lanes" value={`${laneCount} emitted`} />
         <TelemetryValue label="Visible evidence" value={`${traceCount} events`} />
         <TelemetryValue label="Safety" value={job.isolate ? "Isolated worktree" : "Isolation off"} />
+        <TelemetryValue label="Next action" value={team.nextAction.label} />
       </div>
       <ol className="mt-3 grid grid-cols-4 gap-1" aria-label="Mission progress">
         {stages.map((stage, index) => (
@@ -859,7 +876,7 @@ function MissionTelemetry({
                 stage.active && "enterprise-progress-active bg-phosphor-cyan/70"
               )}
             />
-            <span className="mt-1 block truncate text-[8px] uppercase tracking-wider text-phosphor-green/35">
+            <span className="mt-1 block truncate text-[10px] uppercase tracking-wider text-phosphor-green/50">
               {index + 1}. {stage.label}
             </span>
           </li>
@@ -872,10 +889,10 @@ function MissionTelemetry({
 function TelemetryValue({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded border border-phosphor-green/10 bg-black/20 px-2.5 py-2">
-      <span className="block text-[8px] uppercase tracking-widest text-phosphor-green/30">
+      <span className="block text-[10px] uppercase tracking-widest text-phosphor-green/45">
         {label}
       </span>
-      <span className="mt-0.5 block truncate font-mono text-[10px] text-phosphor-green/65">
+      <span className="mt-0.5 block truncate font-mono text-xs text-phosphor-green/75">
         {value}
       </span>
     </div>
@@ -905,7 +922,7 @@ function EnterpriseRoster({
         <History className="h-3 w-3" />
         Mission turns
       </div>
-      <div className="mb-3 space-y-1" aria-label="Enterprise turn history">
+      <div className="mb-3 space-y-1" aria-label="Mission turn history">
         {team.jobs.map((turnJob, index) => (
           <button
             key={turnJob.id}
@@ -949,7 +966,7 @@ function EnterpriseRoster({
       </div>
       <div className="mb-2 flex items-center gap-1.5 px-1 text-[9px] uppercase tracking-widest text-phosphor-green/40">
         <UsersRound className="h-3 w-3" />
-        Crew roster
+        Specialists
         <Badge variant="muted" className="ml-auto text-[8px]">
           {stations.length + 1}
         </Badge>
@@ -971,7 +988,7 @@ function EnterpriseRoster({
               Spok
             </span>
             <span className="block truncate text-[9px] text-phosphor-cyan/60">
-              Grok coordinator · helm
+              Accountable leader · mission control
             </span>
           </span>
           {ACTIVE_JOB_STATUSES.has(job.status) && (
@@ -1095,7 +1112,7 @@ function EnterpriseShip({
     <section
       className="enterprise-ship relative min-h-[24rem] overflow-hidden rounded-xl border border-phosphor-cyan/25 bg-black/55"
       data-testid="enterprise-ship"
-      aria-label="Enterprise ship map"
+      aria-label="Optional mission team map"
     >
       <pre
         aria-hidden="true"
@@ -1186,7 +1203,7 @@ function EnterpriseShip({
           </div>
         ) : (
           <p className="font-mono text-[9px] text-phosphor-green/35">
-            No provider task or message events yet; crew hold at their briefed task stations.
+            No provider task or message events yet; suggested specialists are not running agents.
           </p>
         )}
       </div>
@@ -1257,7 +1274,7 @@ function EnterpriseInspector({
           </Button>
         </div>
         <div className="mt-2 rounded border border-phosphor-green/10 bg-black/25 p-2 text-[10px] leading-relaxed text-phosphor-green/50">
-          {station?.assignment || "Coordinates the ultimate goal and the actual Grok subagent crew."}
+          {station?.assignment || "Owns the mission plan, delegation, integration, evidence, and next safe action."}
         </div>
         {station?.lane?.summary && (
           <div className="mt-2 max-h-24 overflow-y-auto rounded border border-phosphor-magenta/15 bg-phosphor-magenta/5 p-2 text-[10px] leading-relaxed text-phosphor-green/60">

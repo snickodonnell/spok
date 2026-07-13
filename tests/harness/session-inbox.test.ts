@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   buildSessionInbox,
   classifySessionLane,
+  describeLifecycleContradiction,
   INBOX_LANE_ORDER,
   toInboxEntry,
 } from "../../src/lib/session-inbox";
@@ -160,6 +161,31 @@ describe("classifySessionLane", () => {
     );
   });
 
+  it("separates terminal work from sessions ready for another turn", () => {
+    const completed = classifySessionLane(
+      baseSession({ status: "completed" })
+    );
+    assert.equal(completed.lane, "finished");
+    assert.equal(completed.reasonSource, "session");
+  });
+
+  it("renders contradictory session and job claims as diagnostics", () => {
+    const session = baseSession({ status: "completed" });
+    const linkedJob = job({
+      id: "j-running",
+      sessionId: session.id,
+      status: "running",
+    });
+
+    assert.match(
+      describeLifecycleContradiction(session, linkedJob) ?? "",
+      /state mismatch/i
+    );
+    const classified = classifySessionLane(session, linkedJob);
+    assert.equal(classified.lane, "waiting");
+    assert.equal(classified.reasonSource, "diagnostic");
+  });
+
   it("maps queued jobs", () => {
     const r = classifySessionLane(
       baseSession({ status: "idle" }),
@@ -224,6 +250,7 @@ describe("buildSessionInbox", () => {
     assert.equal(inbox.summary.byLane.running, 1);
     assert.equal(inbox.summary.byLane.failed, 1);
     assert.equal(inbox.summary.byLane.ready_review, 1);
+    assert.equal(inbox.summary.byLane.finished, 0);
     assert.equal(inbox.summary.byLane.idle, 1);
     assert.equal(inbox.summary.attentionCount, 1);
     assert.equal(inbox.summary.activeCount, 1);
@@ -277,7 +304,55 @@ describe("buildSessionInbox", () => {
     assert.equal(inbox.entries[0].jobId, "j-queued");
     assert.equal(inbox.entries[0].jobPriority, 3);
     assert.equal(inbox.entries[0].jobActions?.priority_up, true);
+    assert.deepEqual(inbox.entries[0].nextAction, {
+      kind: "open_job",
+      label: "View job",
+    });
+    assert.equal(inbox.entries[0].reasonSource, "job");
     assert.match(inbox.entries[0].reason, /next to start/i);
+  });
+
+  it("keeps completed job-only records out of the Ready lane", () => {
+    const inbox = buildSessionInbox([], {
+      jobs: [job({ id: "j-complete", status: "completed" })],
+    });
+
+    assert.equal(inbox.entries[0].lane, "finished");
+    assert.equal(inbox.summary.byLane.finished, 1);
+    assert.equal(inbox.summary.byLane.idle, 0);
+    assert.match(inbox.summary.headline, /finished/i);
+  });
+
+  it("makes review readiness the primary session action", () => {
+    const entry = toInboxEntry(
+      baseSession({
+        status: "completed",
+        metrics: { ...baseSession().metrics, filesChanged: 2 },
+      })
+    );
+
+    assert.equal(entry.lane, "ready_review");
+    assert.equal(entry.reasonSource, "review");
+    assert.deepEqual(entry.nextAction, {
+      kind: "review_changes",
+      label: "Review changes",
+    });
+  });
+
+  it("diagnoses a durable job outcome that contradicts its status", () => {
+    const inbox = buildSessionInbox([], {
+      jobs: [
+        job({
+          id: "j-conflict",
+          status: "completed",
+          outcome: { kind: "failed", at: 10 },
+        }),
+      ],
+    });
+
+    assert.equal(inbox.entries[0].lane, "waiting");
+    assert.equal(inbox.entries[0].reasonSource, "diagnostic");
+    assert.match(inbox.entries[0].reason, /outcome mismatch/i);
   });
 
   it("explains queued rows when all fleet slots are occupied", () => {

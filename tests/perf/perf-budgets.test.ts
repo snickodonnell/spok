@@ -9,6 +9,12 @@ import {
   startMark,
 } from "../../src/lib/perf";
 import { reduceStreamEvents } from "../../src/lib/session-reduce";
+import { buildSessionInbox } from "../../src/lib/session-inbox";
+import {
+  buildEnterpriseMissionPrompt,
+  buildEnterpriseTeams,
+} from "../../src/lib/enterprise";
+import type { AutomationJob } from "../../src/lib/automation/types";
 import type { Session, StreamEvent } from "../../src/lib/types";
 
 function emptySession(id: string): Session {
@@ -106,6 +112,61 @@ describe("perf telemetry", () => {
     assert.ok(
       ms < PERF_BUDGETS.fixtureReplayMs * 3,
       `replay took ${ms.toFixed(1)}ms (hard ceiling 3x budget)`
+    );
+  });
+
+  it("projects a 100-job mission control fleet within one frame", () => {
+    const jobs: AutomationJob[] = Array.from({ length: 100 }, (_, index) => ({
+      id: `perf-job-${index}`,
+      kind: "background" as const,
+      title: `Mission ${index}`,
+      prompt: buildEnterpriseMissionPrompt({
+        goal: `Deliver milestone ${index}`,
+        crew: [],
+      }),
+      cwd: "C:\\repo",
+      isolate: true,
+      status: index % 5 === 0 ? "running" as const : "queued" as const,
+      priority: index % 7,
+      createdAt: index,
+      updatedAt: index + 1,
+      enterprise: {
+        version: 1,
+        teamId: `mission-${Math.floor(index / 5)}`,
+        role: "leader" as const,
+        phase: index % 5 === 0 ? "mission" as const : "followup" as const,
+        turn: (index % 5) + 1,
+        memberId: "spok",
+        memberName: "Spok",
+      },
+    }));
+
+    // Warm the projection paths before measuring the representative update.
+    buildSessionInbox([], { jobs, maxConcurrentBackground: 8 });
+    buildEnterpriseTeams(jobs, {});
+
+    const inboxStart = performance.now();
+    const inbox = buildSessionInbox([], {
+      jobs,
+      maxConcurrentBackground: 8,
+    });
+    const inboxMs = performance.now() - inboxStart;
+    recordPerf("inbox_projection", inboxMs, { jobs: jobs.length });
+
+    const missionStart = performance.now();
+    const missions = buildEnterpriseTeams(jobs, {});
+    const missionMs = performance.now() - missionStart;
+    recordPerf("mission_projection", missionMs, { jobs: jobs.length });
+
+    assert.equal(inbox.entries.length, 100);
+    assert.equal(missions.length, 20);
+    assert.ok(
+      inboxMs < PERF_BUDGETS.missionControlProjectionMs,
+      `inbox projection took ${inboxMs.toFixed(1)}ms`
+    );
+    assert.ok(
+      missionMs < PERF_BUDGETS.missionControlProjectionMs,
+      `mission projection took ${missionMs.toFixed(1)}ms`
     );
   });
 });

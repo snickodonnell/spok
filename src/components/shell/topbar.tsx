@@ -33,10 +33,10 @@ import {
 import { cn } from "@/lib/utils";
 
 const PRODUCT_MODES: ProductMode[] = [
+  "enterprise",
   "run",
   "review",
   "automate",
-  "enterprise",
   "extend",
 ];
 
@@ -134,7 +134,7 @@ export function Topbar() {
         </span>
         <nav
           className="ml-1 flex items-center rounded-md border border-phosphor-green/15 bg-black/25 p-0.5"
-          aria-label="Product mode"
+          aria-label="Primary destinations"
           data-testid="product-mode-nav"
         >
           {PRODUCT_MODES.map((mode) => {
@@ -155,6 +155,7 @@ export function Topbar() {
                     ? "bg-phosphor-green/15 text-phosphor-green"
                     : "text-phosphor-green/45 hover:text-phosphor-green/80"
                 )}
+                aria-current={active ? "page" : undefined}
               >
                 {meta.short}
                 {mode === "automate" && activeJobs > 0 && (

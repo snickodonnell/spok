@@ -1,6 +1,6 @@
 # Spok Runtime And Native Desktop Architecture
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 Status: the shared Node runtime and supervised contributor dogfood path are operational. The end-user native Windows UI has not started.
 
@@ -11,7 +11,7 @@ This document defines the current runtime boundary and the migration from the Re
 | Area | Decision |
 | --- | --- |
 | Product platform | Windows first; macOS/Linux later. |
-| End-user UI | Native Windows UI, provisionally WinUI 3/C#. No permanent browser, WebView, Electron, or Tauri product shell. |
+| End-user UI | Native Windows UI, provisionally WinUI 3/C#. Missions is the primary destination. No permanent browser, WebView, Electron, or Tauri product shell. |
 | Privileged runtime | TypeScript on Node 20. Do not rewrite spawn, Git, policy, sessions, stream, or automation domain logic in native code. |
 | Client/runtime transport | Loopback HTTP with an in-memory capability token and versioned JSON/NDJSON contracts. |
 | Current contributor UI | Existing Next/React application. Tauri remains an interim internal shell only. |
@@ -33,7 +33,7 @@ flowchart LR
   NATIVE["Future native Windows UI"] -.->|"loopback + token"| RT
 ```
 
-The current UI is capability-rich but is not a quality or interaction reference until the P0/P1 findings in `docs/UX_AUDIT.md` close. `npm run dev:app` dogfoods the standalone runtime behind that UI; `npm run dev` continues to use Next-hosted adapters directly. Native work must reuse stable domain and UX contracts, not copy the current navigation, modal hierarchy, status vocabulary, passive mobile cancellation, or dense visual treatment.
+The current UI is capability-rich but is not a quality or interaction reference until the P0/P1 findings in `docs/UX_AUDIT.md` close. `npm run dev:app` dogfoods the standalone runtime behind that UI; `npm run dev` continues to use Next-hosted adapters directly. Native work must reuse stable domain and UX contracts, not copy the current navigation, modal hierarchy, status vocabulary, passive mobile cancellation, dense visual treatment, or decorative mission deck. The product hierarchy is stable even while implementation names migrate: Missions is the control room, Spok is the leader, and evidence precedes visualization.
 
 ### Runtime-owned routes
 
@@ -104,6 +104,8 @@ The current JavaScript dogfood launcher is a precursor, not the final Windows su
 The runtime, React client, and future native client share these durable identities:
 
 - workspace/trusted root;
+- project and Spok-led mission;
+- milestone, work item, dependency, checkpoint, and resource/authority budget;
 - automation job;
 - session;
 - process run and prompt turn;
@@ -112,6 +114,8 @@ The runtime, React client, and future native client share these durable identiti
 - normalized event and raw provider event;
 - validation run/artifact;
 - Git handoff and terminal outcome.
+
+The runtime owns mission truth. Clients receive versioned projections and may request explicit actions, but UI state cannot create completion, authority, dependencies, or agent-lane evidence. Mission checkpoints reference append-only event/evidence records and a compact materialized snapshot so reopening a long project does not require replaying its entire history.
 
 Session formats remain versioned under `~/.spok/sessions`. Runtime API changes must not require a native client to understand the private filesystem layout. Import/export/replay schemas must preserve unknown provider events.
 
@@ -131,10 +135,11 @@ Before native UI implementation expands, add a capability response containing:
 Before native product UI expansion:
 
 1. Define canonical job/session/run/turn/review/handoff states and legal transitions.
-2. Define startup/recovery, stale/disconnected, trust, effective policy, approval, stop, archive, and cleanup interaction contracts.
-3. Guarantee that client hide/disconnect/reload/layout changes cannot stop host work.
-4. Make restore/import authority-neutral and require explicit trust renewal for privileged actions.
-5. Establish navigation, keyboard, screen-reader, contrast, zoom, and compact/standard/wide acceptance tests independent of React component structure.
+2. Define the project/mission/milestone/work-item hierarchy, Spok leader accountability, agent-evidence rules, and checkpoint contract.
+3. Define startup/recovery, stale/disconnected, trust, effective policy, approval, stop, archive, and cleanup interaction contracts.
+4. Guarantee that client hide/disconnect/reload/layout changes cannot stop host work.
+5. Make restore/import authority-neutral and require explicit trust renewal for privileged actions.
+6. Establish navigation, keyboard, screen-reader, contrast, zoom, and compact/standard/wide acceptance tests independent of React component structure.
 
 Exit: the React dogfood surface passes the P0/P1 outcomes in `docs/UX_AUDIT.md`, and the contracts are testable by any future client.
 
@@ -158,21 +163,21 @@ Exit: a minimal host can start, health-check, stop, restart, and upgrade the run
 
 ### N0 — Native shell proof
 
-Build a small WinUI host that supervises the packaged runtime and implements repository selection/trust, recoverable startup, canonical session inbox states/next actions, settings bootstrap, keyboard navigation, theming, accessibility, and diagnostics.
+Build a small WinUI host that supervises the packaged runtime and implements repository selection/trust, recoverable startup, a Missions inbox with canonical state reasons/next actions, settings bootstrap, keyboard navigation, theming, accessibility, and diagnostics.
 
 This is a quality/architecture proof, not a second feature roadmap. Stop if startup, memory, accessibility, or developer velocity do not justify the native track.
 
 ### N1 — Core agent loop
 
-Implement new task launch, policy mode, NDJSON stream, stop, approvals, thinking/events, session restore, and worktree identity. Use virtualized native controls from the start.
+Implement mission/task launch, Spok leader identity, policy mode, NDJSON stream, stop, approvals, thinking/events, session/checkpoint restore, and worktree identity. Use virtualized native controls from the start.
 
 ### N2 — Review and validation
 
 Implement high-quality unified/split diff, risk/issue markers, causal navigation, validation results/artifacts, inline comments, Git staging/commit/push/PR, and review-ready handoff.
 
-### N3 — Mission control and extensibility
+### N3 — Long-project orchestration and extensibility
 
-Implement multi-session fleet controls, schedules/notifications, mobile handoff, skills/hooks/MCP management, and remaining settings only after the core loop meets parity.
+Implement milestone/work-item planning, dependency/capacity scheduling, agent supervision, checkpoint recovery, multi-session fleet controls, schedules/notifications, mobile handoff, skills/hooks/MCP management, and remaining settings only after the core loop meets parity.
 
 ### N4 — Product cutover
 
@@ -184,6 +189,7 @@ Package, sign, update, migrate, and soak the native product. Keep the React UI a
 | --- | --- |
 | Repository open/trust and policy selection | Yes |
 | Multiple isolated sessions and durable recovery | Yes |
+| Spok-led mission hierarchy, checkpoints, and real-agent evidence | Yes |
 | Live stream, stop, approval, and error handling | Yes |
 | Client disconnect never implies stop; cancellation scope is explicit | Yes |
 | Canonical job/session/run/review/handoff state and provenance | Yes |
@@ -210,8 +216,11 @@ Measure on a representative release-build Windows laptop.
 | Stream reducer work per burst | 8 ms | 16 ms |
 | Common diff open/tab switch | 150 ms | 300 ms |
 | 10k-event navigation | No visible dropped interaction frames | No multi-second stall |
+| Inbox projection with 100 jobs | 8 ms | 16 ms |
+| Common mission destination/tab switch | 100 ms | 250 ms |
+| Long-project restore | Checkpoint-first, bounded hot state | No full-history blocking replay |
 
-Current React budgets remain enforced by `tests/perf` until native cutover.
+Current React budgets remain enforced by `tests/perf` until native cutover. Both clients must subscribe to versioned projections or stable fingerprints for high-frequency state, virtualize rendered history, keep append-only cold evidence off the hot render path, and load details on demand.
 
 ## Verification Gates
 
@@ -240,4 +249,5 @@ For native work:
 - Introducing Hono, Vite, or another framework solely to satisfy an obsolete intermediate plan.
 - Starting two independent product designs before shared lifecycle/API contracts stabilize.
 - Treating the current React navigation, modal structure, status labels, or Enterprise visualization as native requirements before the UX audit closes.
+- Treating an agent report, process exit, or leader summary as mission completion without review/validation provenance.
 - Sacrificing trace, diff, validation, accessibility, or review quality to claim a native shell is “done.”

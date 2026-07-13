@@ -1,8 +1,8 @@
 # Spok
 
-Spok is a local-first harness for Grok Build. It turns agent runs into an inspectable workspace with transcript, thinking, events, diffs, review, validation, Git context, mobile/LAN control, and policy-aware local execution.
+Spok is a local-first mission-control harness for Grok Build (Grok 4.5). Spok leads long-running, multi-agent engineering projects: it plans work, delegates bounded assignments to real Grok agents, monitors dependencies and approvals, integrates results, gathers validation evidence, and keeps the project resumable through review and Git handoff.
 
-The product goal is a world-class Grok Build control room that can compete with Cursor and Claude Code on speed, review ergonomics, multi-session orchestration, and safe extensibility.
+The product goal is to be the most useful, user-friendly, and performant Grok Build harness in the world. The core promise is: state the outcome, understand Spok’s plan, leave safely, return to truthful progress, and review an evidence-backed result.
 
 ## Current Plan
 
@@ -13,13 +13,14 @@ The product goal is a world-class Grok Build control room that can compete with 
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
-The fast local harness and Review Workbench foundations are implemented: batched/virtualized streams, snapshot-first persistence, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, isolated background launch, a durable job ledger, concurrent approvals, fleet controls, Enterprise mission experiments, and a guided Git handoff path. Direct dogfood testing found release-blocking UX and lifecycle defects, including recoverability, passive phone cancellation, global folder-stop behavior, contradictory state language, fragmented navigation/authority, and accessibility gaps. The current product milestone is UX recovery and lifecycle coherence; audited IDE launch and unified archive/worktree cleanup follow that gate.
+The fast local harness and Review Workbench foundations are implemented: batched/virtualized streams, snapshot-first persistence, durable trust, trace-linked diffs, isolated background launch, a durable job ledger, concurrent approvals, fleet controls, an experimental Spok-led mission flow, and guided Git handoff. Direct dogfood testing also found release-blocking lifecycle, navigation, authority, accessibility, and adaptive-layout defects. The current milestone makes mission control truthful, fast, and usable before expanding the long-project engine.
 
 ## Why Spok
 
 | Area | What Spok Provides |
 | --- | --- |
 | Grok Build sessions | Local session launch, live stream ingestion, durable session state, progressive restore, replay/import fixtures. |
+| Spok-led missions | One accountable leader, real provider-emitted agent lanes, isolated execution, durable turns, evidence-first status, and same-worktree continuation. |
 | Thinking and events | Human-readable thinking plus raw event inspection for trace debugging and parser regression work. |
 | Changes and review | Diff, review, and Git surfaces built into the harness instead of left to a terminal scrollback. |
 | Validation | First-class **Validation** tab: tools, tests, builds, run outcomes, approvals, and policy denials in time order with jump-to-event/file. |
@@ -93,7 +94,7 @@ Use `npm run dev:lan` when testing from a phone or another device on the same ne
 - Workspaces: trusted roots, workspace navigation, Git context, and project-oriented workflows.
 - Harness: live Grok Build session control with transcript, thinking, events, changes, review, validation, and artifacts.
 - Automations: recurring or scheduled harness work (monitor + schedules).
-- Enterprise: ultimate-goal and crew briefing, a live ASCII mission deck backed by actual Grok subagent lanes, filterable person traces, durable turn history, team summary, and same-worktree continuation.
+- Missions: Spok-led outcomes, real Grok agent evidence, durable turns, isolated continuation, leader summaries, blockers, review readiness, and one safe next action. The optional team map is secondary to operational evidence.
 - Extensions: skills, hooks, MCP registry, and future plugins.
 
 ## Architecture
@@ -125,4 +126,4 @@ Daily driver commands today: `npm run dev:app` (standalone runtime + browser UI)
 
 ## Documentation Policy
 
-Documentation should stay current and compact. Product direction belongs in the roadmap, runtime details in the low-overhead architecture plan, security details in the posture document, and release steps in the checklist. Snapshot handoff docs and completed milestone trackers should be removed or archived outside active docs.
+Documentation should stay current and compact. Product direction and performance budgets belong in the roadmap, interaction defects in the UX audit, runtime details in the low-overhead architecture plan, delegation/security controls in the posture document, and release steps in the checklist. Snapshot handoff docs and completed milestone trackers should be removed or archived outside active docs.

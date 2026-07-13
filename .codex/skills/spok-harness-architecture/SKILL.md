@@ -1,6 +1,6 @@
 ---
 name: spok-harness-architecture
-description: Compatibility entry for the maintained Spok harness architecture skill. Use for roadmap, agent lifecycle, mission-control UX, session/job/worktree flows, automations, runtime migration, and other cross-cutting product work.
+description: Compatibility entry for the maintained Spok harness architecture skill. Use for Spok-led long-project missions, multi-agent orchestration, mission-control UX, performance, roadmap, lifecycle, runtime migration, and cross-cutting product work.
 ---
 
 # Spok Harness Architecture

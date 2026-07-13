@@ -93,6 +93,7 @@ function JobStatusBadge({ status }: { status: AutomationJob["status"] }) {
 export function MonitorPanel() {
   const open = useSpokStore((s) => s.monitorOpen);
   const setOpen = useSpokStore((s) => s.setMonitorOpen);
+  const selectedJobId = useSpokStore((s) => s.monitorSelectedJobId);
   const jobs = useSpokStore((s) => s.automationJobs);
   const maxConcurrentBackground = useSpokStore(
     (s) => s.automationMaxConcurrent
@@ -116,6 +117,17 @@ export function MonitorPanel() {
   const [loading, setLoading] = useState(false);
   const [bundle, setBundle] = useState<AutomationBundleResponse | null>(null);
   const [capacitySaving, setCapacitySaving] = useState(false);
+
+  useEffect(() => {
+    if (!open || !selectedJobId) return;
+    setTab("queue");
+    const timer = window.setTimeout(() => {
+      const card = document.getElementById(`monitor-job-${selectedJobId}`);
+      card?.scrollIntoView({ block: "center", behavior: "smooth" });
+      card?.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, selectedJobId]);
 
   // Quick queue form
   const [bgTitle, setBgTitle] = useState("");
@@ -525,6 +537,7 @@ export function MonitorPanel() {
                       <JobCard
                         key={job.id}
                         job={job}
+                        selected={selectedJobId === job.id}
                         onOpen={
                           job.sessionId
                             ? () => openSession(job.sessionId!)
@@ -571,6 +584,7 @@ export function MonitorPanel() {
                       <JobCard
                         key={job.id}
                         job={job}
+                        selected={selectedJobId === job.id}
                         onOpen={
                           job.sessionId
                             ? () => openSession(job.sessionId!)
@@ -958,17 +972,30 @@ export function MonitorPanel() {
 
 function JobCard({
   job,
+  selected = false,
   onOpen,
   onCancel,
   queueReason,
 }: {
   job: AutomationJob;
+  selected?: boolean;
   onOpen?: () => void;
   onCancel?: () => void;
   queueReason?: string;
 }) {
   return (
-    <div className="rounded-lg border border-phosphor-green/15 bg-black/30 p-3">
+    <div
+      id={`monitor-job-${job.id}`}
+      tabIndex={selected ? -1 : undefined}
+      aria-label={selected ? `Selected job: ${job.title}` : undefined}
+      data-selected={selected ? "true" : undefined}
+      className={cn(
+        "rounded-lg border bg-black/30 p-3 outline-none transition-colors",
+        selected
+          ? "border-phosphor-cyan/60 bg-phosphor-cyan/10 ring-1 ring-phosphor-cyan/30"
+          : "border-phosphor-green/15"
+      )}
+    >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">

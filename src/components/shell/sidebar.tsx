@@ -19,6 +19,7 @@ import {
   Layers,
   Bell,
   Inbox,
+  Rocket,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import type { ViewMode } from "@/lib/types";
@@ -51,6 +52,7 @@ export function Sidebar() {
   const open = useSpokStore((s) => s.sidebarOpen);
   const viewMode = useSpokStore((s) => s.viewMode);
   const setViewMode = useSpokStore((s) => s.setViewMode);
+  const setProductMode = useSpokStore((s) => s.setProductMode);
 
   // Fingerprint operational fields only — avoid stream-tick re-renders (tokens).
   const sessionListKey = useSpokStore((s) =>
@@ -83,6 +85,9 @@ export function Sidebar() {
   const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
   const setExtensionsOpen = useSpokStore((s) => s.setExtensionsOpen);
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
+  const setMonitorSelectedJobId = useSpokStore(
+    (s) => s.setMonitorSelectedJobId
+  );
   const setNotificationsOpen = useSpokStore((s) => s.setNotificationsOpen);
   const activeJobs = useSpokStore(
     (s) =>
@@ -134,7 +139,7 @@ export function Sidebar() {
               SPOK
             </div>
             <div className="text-[9px] uppercase tracking-[0.18em] text-phosphor-green/40">
-              Grok Build workbench
+              Grok Build mission control
             </div>
           </div>
         </div>
@@ -143,6 +148,16 @@ export function Sidebar() {
       <div className="space-y-1 border-b border-phosphor-green/15 p-2">
         <Button
           variant="default"
+          size="sm"
+          className="w-full justify-start"
+          onClick={() => setProductMode("enterprise")}
+        >
+          <Rocket className="h-3.5 w-3.5" />
+          Missions
+          <span className="ml-auto text-[9px] text-phosphor-green/60">Spok leads</span>
+        </Button>
+        <Button
+          variant="outline"
           size="sm"
           className="w-full justify-start"
           onClick={() => setLaunchOpen(true)}
@@ -167,7 +182,7 @@ export function Sidebar() {
         >
           <Command className="h-3.5 w-3.5" />
           Commands
-          <span className="ml-auto text-[10px] text-phosphor-green/35">⌘K</span>
+          <span className="ml-auto text-[10px] text-phosphor-green/35">Ctrl+K</span>
         </Button>
         <Button
           variant="ghost"
@@ -278,9 +293,15 @@ export function Sidebar() {
         <SessionInboxPanel
           inbox={inbox}
           activeSessionId={activeSessionId}
-          onSelect={(id) => {
+          onSelect={(id, action) => {
             setActiveSession(id);
-            setViewMode("workspace");
+            setViewMode(
+              action.kind === "review_changes" ? "diff" : "workspace"
+            );
+          }}
+          onOpenJob={(jobId) => {
+            setMonitorSelectedJobId(jobId);
+            setMonitorOpen(true);
           }}
           onDelete={(id) => deleteSession(id)}
           onJobAction={(jobId, action) => {

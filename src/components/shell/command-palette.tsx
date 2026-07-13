@@ -243,7 +243,7 @@ export function CommandPalette() {
             />
             <Item
               icon={UsersRound}
-              label="Mode · Enterprise (Crew)"
+              label="Missions · Spok leads Grok teams"
               onSelect={() => {
                 setProductMode("enterprise");
                 setOpen(false);

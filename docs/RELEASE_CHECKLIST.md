@@ -1,6 +1,6 @@
 # Spok Release Checklist
 
-Date: 2026-07-12
+Date: 2026-07-13
 
 This checklist covers the current internal web/Tauri packaging path and the future native Windows product path. Tauri is acceptable for dogfood and updater experiments. The end-user performance target is a native Windows UI supervising the shared local runtime.
 
@@ -25,6 +25,7 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Opening/changing a repository never stops unrelated sessions or jobs; any conflict decision previews the exact affected run.
 - [ ] Restoring or importing session data grants no workspace trust or execution authority.
 - [ ] Job, session, run, turn, review, and handoff labels use the canonical state contract and do not contradict one another.
+- [ ] Missions is the visible core destination; Spok is identified as the accountable leader, requested agents never masquerade as running, and evidence/next action precede optional visualization.
 - [ ] Session/job/schedule archive or deletion and worktree cleanup preview impact; irreversible paths require explicit confirmation and are keyboard accessible.
 - [ ] Slash catalog verification green when slash command docs or catalog code changed.
 - [ ] Diagnostics bundle downloaded and scanned for secrets.
@@ -36,11 +37,13 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Isolated background jobs create/verify a managed worktree and fail closed before process launch if isolation cannot be established.
 - [ ] Durable automation ledger roundtrip, overwrite, redaction, trust denial, corrupt input, and interrupted-run reconciliation tests pass.
 - [ ] Fleet capacity persists across restart; lowering it does not cancel active work, and queued rows explain capacity plus priority/FIFO position.
-- [ ] Enterprise mission metadata, ordered turns, and accepted state roundtrip safely; requested crew never masquerade as emitted lanes; historical person traces remain inspectable; follow-up re-verifies the existing managed worktree and uses Grok continuation.
+- [ ] Mission metadata, ordered turns, and accepted state roundtrip safely; requested specialists never masquerade as emitted lanes; historical person traces remain inspectable; follow-up re-verifies the existing managed worktree and uses Grok continuation.
+- [ ] Long-project fixture/checkpoint restore shows useful mission state without replaying the full history; hot memory and rendered DOM remain bounded.
 - [ ] Cancelling a run while it waits for approval removes that exact request and cannot later launch the process.
 - [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log), actionable restore failure, and live stream responsiveness.
 - [ ] Core loop passes keyboard-only use, visible selected/focus semantics, AA contrast in every theme, reduced motion, 200% zoom, and screen-reader smoke.
 - [ ] Compact, standard, and wide layouts are checked at 390, 768, 1024, and 1440 px without losing safety state or task context.
+- [ ] Representative mission-control budgets pass: 100 jobs, 10 active agent lanes, 10k hot events, common destination switch under 250 ms, and inbox projection under 16 ms.
 
 ## Internal Tauri Build
 
@@ -97,8 +100,8 @@ Internal builds can link to release notes and instruct users to install the new 
 
 1. Launch the selected build type.
 2. Open a trusted workspace.
-3. Start or replay a Grok Build session.
-4. Inspect transcript, thinking, events, changes, review, and artifacts.
+3. Start or reopen a Spok-led mission and verify its goal, state reason, real agent evidence, isolation, and single safest next action.
+4. Inspect plan/turn history, transcript, thinking, events, changes, review, and artifacts; optional team visualization must not be the only source of status.
 5. Run validation or replay commands relevant to the change.
 6. Confirm denied operations are visible and understandable.
 7. Export diagnostics and confirm redaction.
@@ -107,6 +110,7 @@ Internal builds can link to release notes and instruct users to install the new 
 10. Test mobile/LAN only when LAN mode is intentionally enabled, including stale/disconnected recovery and safe repository switching.
 11. Complete the core loop by keyboard at 200% zoom and verify operational contrast in all themes.
 12. Confirm release notes match the shipped behavior.
+13. Restart the client during active host work and confirm the mission continues; reopen from the latest durable checkpoint and verify pending approvals did not revive.
 
 ## Rollback
 

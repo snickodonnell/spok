@@ -1,4 +1,4 @@
 interface:
   display_name: "Spok Harness Architecture"
-  short_description: "Plan and implement Spok harness roadmap work"
-  default_prompt: "Use -harness-architecture to plan the next Spok harness milestone."
+  short_description: "Build Spok-led long-project mission control"
+  default_prompt: "Use $spok-harness-architecture to plan and implement the next Spok-led Grok mission-control milestone."

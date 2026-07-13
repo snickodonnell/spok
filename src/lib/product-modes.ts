@@ -1,6 +1,7 @@
 /**
  * Product-level workspace modes (UI/UX Harness Plan Horizon 1).
- * Run is the default daily loop; Review / Automate / Extend are progressive power surfaces.
+ * Missions is the product core. The `enterprise` key is retained temporarily
+ * for durable/UI migration compatibility; user-facing vocabulary is Missions.
  */
 
 export type ProductMode =
@@ -41,9 +42,9 @@ export const PRODUCT_MODE_META: Record<
     description: "Queue, schedules, lanes",
   },
   enterprise: {
-    label: "Enterprise",
-    short: "Enterprise",
-    description: "Coordinate a Grok-led subagent crew",
+    label: "Missions",
+    short: "Missions",
+    description: "Spok leads long-running, multi-agent Grok projects",
   },
   extend: {
     label: "Extend",
@@ -102,4 +103,11 @@ export function isWorkspaceRightTab(v: unknown): v is WorkspaceRightTab {
     v === "events" ||
     v === "health"
   );
+}
+
+/** User-facing migration for durable records written before Missions naming. */
+export function missionDisplayName(value: string): string {
+  return value
+    .replace(/^Enterprise follow-up\s*·/i, "Mission follow-up ·")
+    .replace(/^Enterprise\s*·/i, "Mission ·");
 }

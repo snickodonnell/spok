@@ -6,7 +6,7 @@ Spok should keep three layers separate:
 2. Normalized `StreamEvent`: versioned app event used by reducers, replay, import/export, and tests.
 3. Materialized UI state: `Session`, `TraceNode`, `FileDiff`, metrics, selections, and file tree.
 
-Materialized state must also expose lifecycle provenance. Job status, session availability, process run status, task outcome, review readiness, and Git handoff are different dimensions; clients must not collapse them into a single optimistic `completed` flag.
+Materialized state must also expose lifecycle provenance. Project/mission state, milestone/work-item dependencies, agent lane, job status, session availability, process run status, task outcome, review readiness, and Git handoff are different dimensions; clients must not collapse them into a single optimistic `completed` flag.
 
 ## Current Normalized Event Fields
 
@@ -41,6 +41,8 @@ Defined in `src/lib/types.ts`:
 - `lifecycle`: versioned transition record with dimension (`job`, `session`, `run`, `turn`, `task`, `review`, `handoff`), from/to state, reason, source event id, and timestamp.
 - `terminalOutcome`: `succeeded` | `failed` | `cancelled` | `interrupted` | `inconclusive`, distinct from process exit and review readiness.
 - `reviewReadiness`: `not_ready` | `needs_attention` | `ready` | `accepted`, with validation/finding provenance.
+- mission identities: `projectId`, `missionId`, `milestoneId`, `workItemId`, `checkpointId`, and `agentRunId` where applicable.
+- work-item transition evidence: dependency state, owner, authority/budget receipt, retry/replace reason, and Spok decision provenance.
 
 ## Reducer Invariants
 
@@ -51,5 +53,7 @@ Defined in `src/lib/types.ts`:
 - Import/replay/live mode should flow through the same reducer.
 - A process exit must not set task success, review readiness, mission acceptance, or handoff success without the required evidence for that dimension.
 - Requested/briefed subagents are metadata, not provider lanes; lane state begins only with a provider task/message/report event.
+- Agent completion/report events are evidence only; Spok emits or records the separate work-item/milestone transition after reconciliation.
 - Contradictory transitions preserve both inputs, emit a diagnostic, and choose a safe `needs_attention`/`inconclusive` materialization.
 - Imported/restored events preserve source/provenance but confer no trust, approval, or execution authority.
+- Checkpoint-first restore may materialize a bounded hot window, but source offsets/hashes and cold raw events remain addressable for replay and diagnosis.

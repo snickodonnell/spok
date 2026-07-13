@@ -123,7 +123,7 @@ interface SpokState {
   sessions: Record<string, Session>;
   activeSessionId: string | null;
   viewMode: ViewMode;
-  /** Primary product mode: Run / Review / Automate / Enterprise / Extend */
+  /** Primary destination. `enterprise` is the migration key for Missions. */
   productMode: ProductMode;
   /** Right pane task tab inside workspace (Changes / Review / Events / Health) */
   workspaceRightTab: WorkspaceRightTab;
@@ -265,8 +265,10 @@ interface SpokState {
 
   // Phase 5 — automation / parallel
   monitorOpen: boolean;
+  monitorSelectedJobId: string | null;
   notificationsOpen: boolean;
   setMonitorOpen: (open: boolean) => void;
+  setMonitorSelectedJobId: (jobId: string | null) => void;
   setNotificationsOpen: (open: boolean) => void;
   automationJobs: import("./automation/types").AutomationJob[];
   automationMaxConcurrent: number;
@@ -312,6 +314,7 @@ export const useSpokStore = create<SpokState>((set, get) => ({
   selectedAgentId: null,
   appPermissionMode: cachedUi?.permissionMode ?? "manual",
   monitorOpen: false,
+  monitorSelectedJobId: null,
   notificationsOpen: false,
   automationJobs: [],
   automationMaxConcurrent: AUTOMATION_DEFAULTS.maxConcurrentBackground,
@@ -958,7 +961,13 @@ export const useSpokStore = create<SpokState>((set, get) => ({
       };
     }),
 
-  setMonitorOpen: (open) => set({ monitorOpen: open }),
+  setMonitorOpen: (open) =>
+    set(
+      open
+        ? { monitorOpen: true }
+        : { monitorOpen: false, monitorSelectedJobId: null }
+    ),
+  setMonitorSelectedJobId: (jobId) => set({ monitorSelectedJobId: jobId }),
   setNotificationsOpen: (open) => set({ notificationsOpen: open }),
   setAutomationMaxConcurrent: (value) =>
     set({ automationMaxConcurrent: clampAutomationConcurrency(value) }),

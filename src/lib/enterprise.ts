@@ -1,6 +1,11 @@
 import { extractSubagentLanes } from "./automation/subagent-lanes";
 import type { AutomationJob, SubagentLane } from "./automation/types";
 import { collectThoughtBlocks } from "./trace-text";
+import {
+  toInboxEntry,
+  type InboxNextAction,
+  type InboxReasonSource,
+} from "./session-inbox";
 import type { Session, TraceNode } from "./types";
 
 const GOAL_START = "[SPOK_ENTERPRISE_GOAL]";
@@ -21,6 +26,7 @@ export type EnterpriseTeamStatus =
   | "launching"
   | "working"
   | "waiting"
+  | "ready_review"
   | "complete"
   | "needs_attention";
 
@@ -33,6 +39,9 @@ export type EnterpriseTeam = {
   currentJob: AutomationJob;
   requestedCrew: EnterpriseCrewDraft[];
   status: EnterpriseTeamStatus;
+  statusReason: string;
+  statusSource: InboxReasonSource;
+  nextAction: InboxNextAction;
   summary: string;
   acceptedAt?: number;
 };
@@ -135,7 +144,7 @@ export function validateEnterpriseDraft(input: {
   cwd?: string;
 }): { ok: boolean; reason?: string } {
   if (!input.cwd?.trim()) {
-    return { ok: false, reason: "Open a repository before launching Enterprise." };
+    return { ok: false, reason: "Open a repository before launching a mission." };
   }
   if (!input.goal.trim()) {
     return { ok: false, reason: "Add the ultimate goal for Spok." };
@@ -143,9 +152,6 @@ export function validateEnterpriseDraft(input: {
   const assigned = input.crew.filter(
     (member) => member.name.trim() && member.assignment.trim()
   );
-  if (assigned.length === 0) {
-    return { ok: false, reason: "Add at least one crew assignment." };
-  }
   if (assigned.length > MAX_ENTERPRISE_CREW) {
     return {
       ok: false,
@@ -170,27 +176,33 @@ export function buildEnterpriseMissionPrompt(input: {
   const crew = input.crew.filter(
     (member) => member.name.trim() && member.assignment.trim()
   );
-  const manifest = crew
-    .map(
-      (member, index) =>
-        `${index + 1}. ${member.name.trim()} — ${member.assignment.trim()}`
-    )
-    .join("\n");
+  const manifest = crew.length
+    ? crew
+        .map(
+          (member, index) =>
+            `${index + 1}. ${member.name.trim()} — ${member.assignment.trim()}`
+        )
+        .join("\n")
+    : "No specialists are preset. Design the smallest useful team from the goal.";
   return [
-    "You are Spok at the helm of an Enterprise engineering mission.",
+    "You are Spok, the accountable leader of a long-running Grok engineering mission.",
     goalBlock(input.goal),
     crewBlock(crew),
-    "Requested crew assignments:",
+    "Optional specialist suggestions:",
     manifest,
-    "Coordinate this mission using your native subagent capabilities:",
-    "- create and lead subagents for the requested assignments; preserve their names when the provider allows it;",
-    `- keep the active crew to at most ${MAX_ENTERPRISE_CREW} subagents so the ship remains legible;`,
-    "- identify dependencies and exchange only the context each specialist needs;",
+    "Lead this mission using your native subagent capabilities:",
+    "- restate the outcome, constraints, definition of done, risks, and the next meaningful checkpoint before delegating;",
+    "- create bounded work items, identify dependencies, and parallelize only independent work;",
+    "- create and lead real subagents for useful specialist assignments; preserve suggested names when the provider allows it;",
+    `- keep the active team to at most ${MAX_ENTERPRISE_CREW} subagents and prefer the smallest effective team;`,
+    "- give each agent the smallest sufficient context, expected evidence, and a clear return condition;",
     "- keep work inside the isolated worktree Spok provides;",
-    "- integrate and review crew results yourself rather than merely listing them;",
+    "- supervise blockers and failed work, but do not retry indefinitely or broaden authority;",
+    "- integrate and review agent results yourself rather than merely listing them;",
     "- validate the smallest useful scope and surface conflicts or policy blocks;",
-    "- do not claim a crew member ran unless a real subagent lane exists;",
-    "- finish with one substantial team summary covering outcome, contributions, changes, checks, blockers, and safest next actions.",
+    "- do not claim an agent ran unless a real provider-emitted subagent lane exists;",
+    "- do not equate process exit or an agent report with review readiness;",
+    "- finish with a durable checkpoint summary covering completed work, active or blocked work, agent contributions, changes, checks, evidence gaps, risks, and the safest next action.",
   ].join("\n\n");
 }
 
@@ -383,20 +395,92 @@ export function enterpriseSummary(
   return blocks.filter((block) => block.kind === "summary").at(-1)?.text ?? "";
 }
 
-function statusFor(job: AutomationJob, summary: string): EnterpriseTeamStatus {
+type EnterpriseLifecycleProjection = {
+  status: EnterpriseTeamStatus;
+  reason: string;
+  source: InboxReasonSource;
+  nextAction: InboxNextAction;
+};
+
+function statusFor(
+  job: AutomationJob,
+  summary: string,
+  session?: Session
+): EnterpriseLifecycleProjection {
+  if (session) {
+    const entry = toInboxEntry(session, job);
+    const status: EnterpriseTeamStatus =
+      entry.lane === "running"
+        ? "working"
+        : entry.lane === "queued"
+          ? "queued"
+          : entry.lane === "ready_review"
+            ? "ready_review"
+            : entry.lane === "finished" || entry.lane === "idle"
+              ? summary
+                ? "complete"
+                : "needs_attention"
+              : entry.lane === "waiting" && entry.reasonSource === "approval"
+                ? "waiting"
+                : "needs_attention";
+    return {
+      status,
+      reason: entry.reason,
+      source: entry.reasonSource,
+      nextAction: entry.nextAction,
+    };
+  }
+
   switch (job.status) {
     case "queued":
-      return "queued";
+      return {
+        status: "queued",
+        reason: "Background job queued",
+        source: "job",
+        nextAction: { kind: "open_job", label: "View job" },
+      };
     case "starting":
-      return "launching";
+      return {
+        status: "launching",
+        reason: "Preparing isolated workspace",
+        source: "job",
+        nextAction: { kind: "open_job", label: "View job" },
+      };
     case "running":
-      return "working";
+      return {
+        status: "working",
+        reason: "Spok leader run active",
+        source: "job",
+        nextAction: { kind: "open_job", label: "Monitor" },
+      };
     case "waiting_approval":
-      return "waiting";
+      return {
+        status: "waiting",
+        reason: "Waiting for approval",
+        source: "approval",
+        nextAction: { kind: "open_job", label: "Review approval" },
+      };
     case "completed":
-      return summary ? "complete" : "needs_attention";
+      return summary
+        ? {
+            status: "complete",
+            reason: "Leader checkpoint ready",
+            source: "review",
+            nextAction: { kind: "open_job", label: "Review outcome" },
+          }
+        : {
+            status: "needs_attention",
+            reason: "Job completed without a leader checkpoint",
+            source: "diagnostic",
+            nextAction: { kind: "open_job", label: "Inspect state" },
+          };
     default:
-      return "needs_attention";
+      return {
+        status: "needs_attention",
+        reason: job.error?.trim() || `Job ${job.status.replace(/_/g, " ")}`,
+        source: job.status === "failed" ? "job" : "diagnostic",
+        nextAction: { kind: "open_job", label: "Inspect state" },
+      };
   }
 }
 
@@ -422,6 +506,11 @@ export function buildEnterpriseTeams(
       ordered.find((job) => job.enterprise?.phase === "mission") ?? ordered[0];
     const currentJob = ordered.at(-1)!;
     const summary = enterpriseSummary(currentJob, sessions);
+    const lifecycle = statusFor(
+      currentJob,
+      summary,
+      currentSession(currentJob, sessions)
+    );
     teams.push({
       id,
       goal: extractEnterpriseGoal(initial.prompt),
@@ -430,7 +519,10 @@ export function buildEnterpriseTeams(
       jobs: ordered,
       currentJob,
       requestedCrew: extractEnterpriseCrew(initial.prompt),
-      status: statusFor(currentJob, summary),
+      status: lifecycle.status,
+      statusReason: lifecycle.reason,
+      statusSource: lifecycle.source,
+      nextAction: lifecycle.nextAction,
       summary,
       acceptedAt: currentJob.enterprise?.acceptedAt,
     });
@@ -497,7 +589,7 @@ export function buildEnterpriseFollowupPrompt(input: {
         .join("\n")
     : "No provider-emitted subagent lanes were captured in the previous turn.";
   return [
-    "Continue the Enterprise team mission as Spok, using the most recent Grok session in this same isolated worktree.",
+    "Continue the Spok-led Grok mission using the most recent session in this same isolated worktree.",
     goalBlock(input.team.goal),
     crewBlock(input.team.requestedCrew),
     input.team.summary
@@ -505,7 +597,7 @@ export function buildEnterpriseFollowupPrompt(input: {
       : "The prior turn ended without a substantial team summary.",
     `Previous crew evidence:\n${laneEvidence}`,
     `Captain's follow-up:\n${input.followup.trim()}`,
-    "Coordinate real subagents again when the request benefits from them. Finish with an updated team summary and distinguish new evidence from prior work.",
+    "Re-plan dependencies before delegating. Coordinate real subagents only when the request benefits from them. Finish with an updated durable checkpoint that distinguishes new evidence from prior work and names the safest next action.",
   ].join("\n\n");
 }
 
@@ -514,13 +606,15 @@ export function enterpriseStatusLabel(status: EnterpriseTeamStatus): string {
     case "queued":
       return "Awaiting launch";
     case "launching":
-      return "Preparing ship";
+      return "Preparing workspace";
     case "working":
-      return "Crew underway";
+      return "Spok leading";
     case "waiting":
       return "Needs approval";
+    case "ready_review":
+      return "Ready for review";
     case "complete":
-      return "Summary ready";
+      return "Checkpoint ready";
     case "needs_attention":
       return "Needs attention";
   }

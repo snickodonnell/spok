@@ -109,7 +109,7 @@ function session(nodes: TraceNode[], id = "session-enterprise"): Session {
   };
 }
 
-describe("Enterprise mission contract", () => {
+describe("Spok mission contract", () => {
   it("roundtrips the ultimate goal and requested crew through one leader prompt", () => {
     const prompt = buildEnterpriseMissionPrompt({
       goal: "Deliver a polished mission control surface",
@@ -122,8 +122,9 @@ describe("Enterprise mission contract", () => {
     );
     assert.deepEqual(extractEnterpriseCrew(prompt), crew);
     assert.match(prompt, /native subagent capabilities/i);
-    assert.match(prompt, /do not claim a crew member ran/i);
+    assert.match(prompt, /do not claim an agent ran/i);
     assert.match(prompt, /at most 4 subagents/i);
+    assert.match(prompt, /durable checkpoint/i);
   });
 
   it("validates repository, assignments, capacity, and unique names", () => {
@@ -134,6 +135,10 @@ describe("Enterprise mission contract", () => {
     assert.match(
       validateEnterpriseDraft({ goal: "Goal", crew, cwd: "" }).reason ?? "",
       /repository/i
+    );
+    assert.equal(
+      validateEnterpriseDraft({ goal: "Goal", crew: [], cwd: "C:\\repo" }).ok,
+      true
     );
     assert.match(
       validateEnterpriseDraft({
@@ -178,7 +183,12 @@ describe("Enterprise mission contract", () => {
     });
 
     assert.equal(teams.length, 1);
-    assert.equal(teams[0].status, "complete");
+    assert.equal(teams[0].status, "ready_review");
+    assert.equal(teams[0].statusSource, "review");
+    assert.deepEqual(teams[0].nextAction, {
+      kind: "review_changes",
+      label: "Review changes",
+    });
     assert.match(teams[0].summary, /crew completed/i);
     assert.equal(teams[0].requestedCrew.length, 2);
   });
@@ -326,9 +336,29 @@ describe("Enterprise mission contract", () => {
       lanes: [],
     });
 
-    assert.match(prompt, /Continue the Enterprise team mission/i);
+    assert.match(prompt, /Continue the Spok-led Grok mission/i);
     assert.match(prompt, /close the validation gaps/i);
     assert.match(prompt, /No provider-emitted subagent lanes/i);
+  });
+
+  it("renders contradictory job and session states as mission diagnostics", () => {
+    const completedJob = job({
+      status: "completed",
+      sessionId: "session-contradiction",
+    });
+    const activeSession = {
+      ...session([], "session-contradiction"),
+      status: "running" as const,
+    };
+
+    const team = buildEnterpriseTeams([completedJob], {
+      [activeSession.id]: activeSession,
+    })[0];
+
+    assert.equal(team.status, "needs_attention");
+    assert.equal(team.statusSource, "diagnostic");
+    assert.match(team.statusReason, /state mismatch/i);
+    assert.equal(team.nextAction.label, "Inspect state");
   });
 
   it("orders durable turns, keeps current summary truth, and restores acceptance", () => {

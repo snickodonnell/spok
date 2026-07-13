@@ -1,6 +1,6 @@
 ---
 name: spok-secure-runtime
-description: Compatibility entry for the maintained Spok secure runtime skill. Read and follow the project skill under .agents for privileged routes, lifecycle control, trust, permissions, and security-sensitive UX.
+description: Compatibility entry for the maintained Spok secure runtime skill. Read and follow the project skill under .agents for privileged routes, delegated agent authority/budgets, lifecycle control, trust, permissions, and security-sensitive UX.
 ---
 
 # Spok Secure Runtime

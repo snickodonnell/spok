@@ -15,6 +15,8 @@ export const PERF_BUDGETS = {
   streamIngestBurstMs: 16,
   /** Diff tab switch for common repos (ms) */
   diffTabSwitchMs: 300,
+  /** Mission-control projection for 100 jobs (ms) */
+  missionControlProjectionMs: 16,
   /** Fixture replay of a mid-size session (ms) */
   fixtureReplayMs: 2000,
   /** Stream events reduced per second (throughput floor in tests) */
@@ -29,6 +31,8 @@ export type PerfMetricName =
   | "reduce_batch"
   | "trace_render"
   | "diff_tab_switch"
+  | "inbox_projection"
+  | "mission_projection"
   | "fixture_replay"
   | "memory_heap";
 
@@ -70,6 +74,9 @@ function budgetFor(name: string): number | undefined {
       return PERF_BUDGETS.streamIngestBurstMs;
     case "diff_tab_switch":
       return PERF_BUDGETS.diffTabSwitchMs;
+    case "inbox_projection":
+    case "mission_projection":
+      return PERF_BUDGETS.missionControlProjectionMs;
     case "fixture_replay":
       return PERF_BUDGETS.fixtureReplayMs;
     default:

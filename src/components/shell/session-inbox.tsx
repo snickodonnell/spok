@@ -10,7 +10,9 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
+  CheckCircle2,
   Circle,
   Copy,
   GitBranch,
@@ -31,6 +33,7 @@ import {
   INBOX_LANE_META,
   type InboxEntry,
   type InboxLane,
+  type InboxNextAction,
   type SessionInbox,
 } from "@/lib/session-inbox";
 import type { InboxJobAction } from "@/lib/automation/job-actions";
@@ -42,6 +45,7 @@ const LANE_DOT: Record<InboxLane, string> = {
   queued: "text-phosphor-cyan/80 fill-phosphor-cyan/80",
   failed: "text-red-400 fill-red-400",
   ready_review: "text-phosphor-cyan fill-phosphor-cyan",
+  finished: "text-phosphor-green/55 fill-phosphor-green/55",
   idle: "text-phosphor-green/30 fill-phosphor-green/30",
 };
 
@@ -51,6 +55,7 @@ const LANE_HEADER: Record<InboxLane, string> = {
   queued: "text-phosphor-cyan/70",
   failed: "text-red-400/90",
   ready_review: "text-phosphor-cyan/85",
+  finished: "text-phosphor-green/60",
   idle: "text-phosphor-green/40",
 };
 
@@ -88,6 +93,9 @@ function LaneIcon({ lane, className }: { lane: InboxLane; className?: string }) 
   if (lane === "ready_review") {
     return <Inbox className={cn("h-3 w-3", className)} />;
   }
+  if (lane === "finished") {
+    return <CheckCircle2 className={cn("h-3 w-3", className)} />;
+  }
   return <Circle className={cn("h-2 w-2 fill-current", className)} />;
 }
 
@@ -95,17 +103,19 @@ export function SessionInboxPanel({
   inbox,
   activeSessionId,
   onSelect,
+  onOpenJob,
   onDelete,
   onJobAction,
   emptyHint,
   className,
-  /** Collapse idle group when there is other work (default true). */
+  /** Collapse finished/ready groups when there is other work (default true). */
   collapseIdleWhenBusy = true,
   testId = "session-inbox",
 }: {
   inbox: SessionInbox;
   activeSessionId: string | null;
-  onSelect: (sessionId: string) => void;
+  onSelect: (sessionId: string, action: InboxNextAction) => void;
+  onOpenJob?: (jobId: string) => void;
   onDelete?: (sessionId: string) => void;
   onJobAction?: (jobId: string, action: InboxJobAction) => void;
   emptyHint?: string;
@@ -132,8 +142,9 @@ export function SessionInboxPanel({
       const next = { ...prev };
       for (const lane of lanes) {
         if (next[lane] !== undefined) continue;
+        const quietLane = lane === "finished" || lane === "idle";
         const open =
-          lane !== "idle" || !collapseIdleWhenBusy || !busyElsewhere;
+          !quietLane || !collapseIdleWhenBusy || !busyElsewhere;
         next[lane] = open;
         changed = true;
       }
@@ -174,9 +185,10 @@ export function SessionInboxPanel({
         <div className="space-y-2 pr-1">
           {groups.map(({ lane, entries }) => {
             const meta = INBOX_LANE_META[lane];
+            const quietLane = lane === "finished" || lane === "idle";
             const isOpen =
               openLanes[lane] ??
-              (lane !== "idle" || !collapseIdleWhenBusy || !busyElsewhere);
+              (!quietLane || !collapseIdleWhenBusy || !busyElsewhere);
 
             return (
               <div
@@ -217,7 +229,12 @@ export function SessionInboxPanel({
                           }
                           onSelect={
                             entry.sessionId
-                              ? () => onSelect(entry.sessionId)
+                              ? () => onSelect(entry.sessionId, entry.nextAction)
+                              : undefined
+                          }
+                          onOpenJob={
+                            onOpenJob && entry.jobId && !entry.sessionId
+                              ? () => onOpenJob(entry.jobId!)
                               : undefined
                           }
                           onDelete={
@@ -249,16 +266,19 @@ function InboxRow({
   entry,
   active,
   onSelect,
+  onOpenJob,
   onDelete,
   onJobAction,
 }: {
   entry: InboxEntry;
   active: boolean;
   onSelect?: () => void;
+  onOpenJob?: () => void;
   onDelete?: () => void;
   onJobAction?: (action: InboxJobAction) => void;
 }) {
   const src = sourceLabel(entry.source);
+  const onPrimaryAction = onSelect ?? onOpenJob;
 
   return (
     <div
@@ -270,16 +290,18 @@ function InboxRow({
       )}
       data-testid={`inbox-row-${entry.entryId.replace(/:/g, "-")}`}
       data-lane={entry.lane}
+      data-lifecycle-version={entry.lifecycleVersion}
+      aria-current={active ? "page" : undefined}
     >
       <div className="flex items-center gap-1">
         <button
           type="button"
           className={cn(
             "flex min-w-0 flex-1 items-center gap-1.5 text-left",
-            !onSelect && "cursor-default"
+            !onPrimaryAction && "cursor-default"
           )}
-          onClick={onSelect}
-          disabled={!onSelect}
+          onClick={onPrimaryAction}
+          disabled={!onPrimaryAction}
           title={entry.cwd || entry.name}
         >
           <Circle
@@ -309,16 +331,16 @@ function InboxRow({
 
       <button
         type="button"
-        onClick={onSelect}
-        disabled={!onSelect}
+        onClick={onPrimaryAction}
+        disabled={!onPrimaryAction}
         className={cn(
           "mt-0.5 flex w-full flex-wrap items-center gap-1 pl-3.5 text-left",
-          !onSelect && "cursor-default"
+          !onPrimaryAction && "cursor-default"
         )}
       >
         <span
           className={cn(
-            "truncate font-mono text-[9px]",
+            "truncate font-mono text-[11px]",
             entry.lane === "waiting" || entry.lane === "failed"
               ? "text-phosphor-amber/80"
               : entry.lane === "ready_review"
@@ -327,9 +349,13 @@ function InboxRow({
           )}
           title={entry.reason}
         >
+          <span className="uppercase text-phosphor-green/55">
+            {entry.reasonSource}
+          </span>
+          <span aria-hidden> · </span>
           {entry.reason}
         </span>
-        <span className="ml-auto shrink-0 font-mono text-[9px] text-phosphor-green/25">
+        <span className="ml-auto shrink-0 font-mono text-[10px] text-phosphor-green/45">
           {formatRelativeTime(entry.updatedAt)}
         </span>
       </button>
@@ -337,7 +363,7 @@ function InboxRow({
       <div className="mt-0.5 flex flex-wrap items-center gap-1 pl-3.5">
         <Badge
           variant={entry.source === "resume" ? "cyan" : "muted"}
-          className="h-4 px-1 text-[8px] uppercase"
+          className="h-5 px-1.5 text-[10px] uppercase"
         >
           {entry.source === "resume" ? (
             <span className="inline-flex items-center gap-0.5">
@@ -350,20 +376,24 @@ function InboxRow({
         </Badge>
         {entry.durable &&
           (entry.source === "live" || entry.source === "resume") && (
-            <Badge variant="muted" className="h-4 px-1 text-[8px]">
+            <Badge variant="muted" className="h-5 px-1.5 text-[10px]">
               <HardDrive className="mr-0.5 inline h-2 w-2" />
               disk
             </Badge>
           )}
         {entry.backgroundJob && entry.source !== "job" && (
-          <Badge variant="muted" className="h-4 px-1 text-[8px]">
+          <Badge variant="muted" className="h-5 px-1.5 text-[10px]">
             <Layers className="mr-0.5 inline h-2 w-2" />
             job
           </Badge>
         )}
+        <span className="inline-flex items-center gap-0.5 font-mono text-[10px] text-phosphor-green/55">
+          <HardDrive className="h-2 w-2" />
+          {entry.isWorktree ? "worktree" : "workspace"}
+        </span>
         {entry.jobStatus === "queued" && entry.jobPriority !== 0 && (
           <span
-            className="font-mono text-[9px] text-phosphor-cyan/55"
+            className="font-mono text-[10px] text-phosphor-cyan/65"
             title={`Queue priority ${entry.jobPriority}`}
           >
             p{entry.jobPriority}
@@ -371,7 +401,7 @@ function InboxRow({
         )}
         {entry.branch && (
           <span
-            className="inline-flex max-w-[7rem] items-center gap-0.5 truncate font-mono text-[9px] text-phosphor-green/30"
+            className="inline-flex max-w-[7rem] items-center gap-0.5 truncate font-mono text-[10px] text-phosphor-green/50"
             title={entry.branch}
           >
             <GitBranch className="h-2 w-2 shrink-0" />
@@ -379,7 +409,7 @@ function InboxRow({
           </span>
         )}
         {entry.filesChanged > 0 && (
-          <span className="font-mono text-[9px] text-phosphor-green/30">
+          <span className="font-mono text-[10px] text-phosphor-green/50">
             {entry.filesChanged} file{entry.filesChanged === 1 ? "" : "s"}
           </span>
         )}
@@ -387,11 +417,24 @@ function InboxRow({
 
       {entry.cwd && (
         <div
-          className="mt-0.5 truncate pl-3.5 font-mono text-[9px] text-phosphor-green/25"
+          className="mt-0.5 truncate pl-3.5 font-mono text-[10px] text-phosphor-green/45"
           title={entry.cwd}
         >
           {entry.cwd}
         </div>
+      )}
+
+      {onPrimaryAction && (
+        <button
+          type="button"
+          onClick={onPrimaryAction}
+          className="mt-1 ml-3.5 inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs font-medium text-phosphor-cyan/90 hover:bg-phosphor-cyan/10 hover:text-phosphor-cyan focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-cyan/60"
+          aria-label={`${entry.nextAction.label}: ${entry.name}`}
+          data-testid={`inbox-primary-action-${entry.entryId.replace(/:/g, "-")}`}
+        >
+          {entry.nextAction.label}
+          <ArrowRight className="h-3 w-3" />
+        </button>
       )}
     </div>
   );

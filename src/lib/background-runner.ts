@@ -267,14 +267,14 @@ export function enqueueBackgroundJob(opts: {
   return job.id;
 }
 
-/** Durably record that the captain accepted an Enterprise leader turn. */
+/** Durably record that the user accepted a Spok leader mission turn. */
 export async function acceptEnterpriseTurn(jobId: string): Promise<void> {
   const job = useSpokStore
     .getState()
     .automationJobs.find((candidate) => candidate.id === jobId);
-  if (!job?.enterprise) throw new Error("Enterprise turn is unavailable");
+  if (!job?.enterprise) throw new Error("Mission turn is unavailable");
   if (["queued", "starting", "running", "waiting_approval"].includes(job.status)) {
-    throw new Error("Enterprise turn is still active");
+    throw new Error("Mission turn is still active");
   }
   const previous = job.enterprise;
   patchJobState(jobId, {
@@ -539,7 +539,7 @@ async function runJob(jobId: string): Promise<void> {
   const sessionId = store.createSession(
     {
       name: job.enterprise
-        ? `Enterprise · ${job.enterprise.memberName}`.slice(0, 64)
+        ? `Mission · ${job.enterprise.memberName}`.slice(0, 64)
         : `BG · ${job.title}`.slice(0, 64),
       source: "live",
       status: "ready",

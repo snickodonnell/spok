@@ -1,6 +1,6 @@
 # Desktop, Notifications, And Updater
 
-Date: 2026-07-10
+Date: 2026-07-13
 
 This document describes the current desktop glue and the updater plan. It should be read with `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`: Tauri is an interim packaging shell, while the product target is native Windows UI plus the shared local runtime.
 
@@ -30,7 +30,9 @@ This document describes the current desktop glue and the updater plan. It should
 
 ## Product Direction
 
-The final desktop product should not depend on a browser tab, WebView, or Tauri as the primary UI surface. The native UI should supervise the local runtime and communicate over loopback HTTP or equivalent local IPC with the same capability-token and policy model.
+The final desktop product should not depend on a browser tab, WebView, or Tauri as the primary UI surface. The native UI should supervise the local runtime and communicate over loopback HTTP or equivalent local IPC with the same capability-token and policy model. Its primary destination is Missions: a fast, durable control room where Spok leads long-running Grok work and the user sees plan, blockers, evidence, budget pressure, and the next safe action.
+
+Closing or updating any client must not own or stop a mission. Before an update, the supervisor records mission/run state, reconciles pending approvals as interrupted rather than approved, and preserves managed worktrees. After restart, checkpoint-first recovery must show useful project state without replaying the entire event history.
 
 Tauri can continue to be used for:
 
@@ -52,7 +54,8 @@ import { isDesktopRuntime, pickFolderNative } from "@/lib/desktop";
 - The in-app notification drawer should always work.
 - OS notifications require the user-facing setting to be enabled.
 - Browser fallback uses the `Notification` API only if permission was already granted.
-- Important automation, validation, and review-ready events should be notification candidates once the event model is stable.
+- Notifications are attention-ranked: approval/authority changes, blocked critical-path work, budget pressure, failed recovery, and review-ready outcomes outrank ordinary agent progress.
+- Long missions coalesce routine progress; one agent event must not produce one OS notification.
 
 ## Protocol
 
@@ -73,6 +76,7 @@ Required before enabling:
 - Embedded updater verification key or platform-equivalent signature verification.
 - Rollback plan.
 - User-visible release notes.
+- Mission/runtime compatibility metadata and a tested checkpoint-first restart path.
 
 Internal builds should use manual install/update and clearly state when they are unsigned.
 
@@ -83,3 +87,4 @@ Internal builds should use manual install/update and clearly state when they are
 - Reduced motion: honors OS and in-app preferences.
 - Permission mode: `manual`.
 - LAN access: off unless explicitly enabled.
+- Background missions: host-runtime owned; client hide/disconnect/update is never stop intent.
