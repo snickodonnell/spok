@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  MAX_HOT_NODES,
   reduceStreamEvent,
   reduceStreamEvents,
   recomputeSessionMetrics,
@@ -179,6 +180,27 @@ describe("session reduce batching", () => {
       (n) => n.type === "thinking" || n.type === "reasoning"
     );
     assert.equal(thoughts.length, 2);
+  });
+
+  it("bounds hot nodes above MAX_HOT_NODES while preserving eventCount", () => {
+    const over = MAX_HOT_NODES + 25;
+    const events: StreamEvent[] = [];
+    for (let i = 0; i < over; i++) {
+      events.push(
+        ev({
+          type: "thinking",
+          id: `bound-${i}`,
+          timestamp: 1_000 + i,
+          content: `c${i}`,
+          status: "success",
+        })
+      );
+    }
+    const r = reduceStreamEvents(emptySession("bound"), new Set(), events);
+    assert.equal(r.session.eventCount, over);
+    assert.ok(Object.keys(r.session.nodes).length <= MAX_HOT_NODES);
+    assert.equal(r.session.metrics.thinkingSteps, over);
+    assert.ok((r.session.coldNodeCount ?? 0) >= 25);
   });
 });
 

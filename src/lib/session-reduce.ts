@@ -2,10 +2,21 @@
  * Pure session stream reducer — shared by the Zustand store and batch ingest.
  * Applies stamped StreamEvents to session + expanded-node set without
  * touching React/Zustand. Batch path mutates once and freezes at the end.
+ *
+ * Hot/cold (P0-8): `session.nodes` is a bounded hot materialization. Older
+ * nodes are demoted after `MAX_HOT_NODES`; durable recoverability is via
+ * events.ndjson / export event log / full replay (eventLog is also capped).
  */
 
 import { nanoid } from "nanoid";
-import type { FileDiff, Session, StreamEvent, TraceNode } from "./types";
+import type {
+  FileDiff,
+  Session,
+  SessionMetrics,
+  StreamEvent,
+  TraceNode,
+  TraceNodeType,
+} from "./types";
 import { buildFileTree, createFileDiff } from "./diff-utils";
 import { buildFileChangeLinks } from "./causal-links";
 import { streamEventToNodeType, extractPaths } from "./parser";
@@ -26,6 +37,13 @@ export type ReduceResult = {
 
 const MAX_EVENT_LOG = 8_000;
 
+/**
+ * Production hot-tier cap for materialized `session.nodes`.
+ * Aligned with `MAX_EVENT_LOG` / `PERF_HOT_BOUNDS.reduceEventLogCap` (8000).
+ * Spok should mirror this as `PERF_HOT_BOUNDS.reduceHotNodesCap` when integrating.
+ */
+export const MAX_HOT_NODES = 8_000;
+
 function normalizeRepoPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.?\//, "");
 }
@@ -41,11 +59,12 @@ function attachChild(
   }
 }
 
+/** @returns true when a new node id was inserted (not an in-place update). */
 function upsertNode(
   nodes: Record<string, TraceNode>,
   rootTraceIds: string[],
   node: TraceNode
-) {
+): boolean {
   const existing = nodes[node.id];
   if (existing) {
     nodes[node.id] = {
@@ -56,7 +75,7 @@ function upsertNode(
       depth: node.parentId ? node.depth : existing.depth,
       links: node.links.length ? node.links : existing.links,
     };
-    return;
+    return false;
   }
   nodes[node.id] = node;
   if (!node.parentId) {
@@ -64,6 +83,191 @@ function upsertNode(
   } else {
     attachChild(nodes, node.parentId, node.id);
   }
+  return true;
+}
+
+/** Incremental node-derived counters — required once hot nodes are cold-windowed. */
+function noteNewNodeMetrics(
+  ws: WorkState,
+  type: TraceNodeType,
+  status?: TraceNode["status"]
+) {
+  let toolCallCount = ws.metrics.toolCallCount;
+  let thinkingSteps = ws.metrics.thinkingSteps;
+  let subagentCount = ws.metrics.subagentCount;
+  let errorCount = ws.metrics.errorCount;
+  let changed = false;
+  if (type === "tool_call") {
+    toolCallCount += 1;
+    changed = true;
+  }
+  if (type === "thinking" || type === "reasoning") {
+    thinkingSteps += 1;
+    changed = true;
+  }
+  if (type === "subagent") {
+    subagentCount += 1;
+    changed = true;
+  }
+  if (type === "error" || status === "error") {
+    errorCount += 1;
+    changed = true;
+  }
+  if (changed) {
+    ws.metrics = {
+      ...ws.metrics,
+      toolCallCount,
+      thinkingSteps,
+      subagentCount,
+      errorCount,
+    };
+  }
+}
+
+function recomputeFileMetrics(files: Record<string, FileDiff>): {
+  filesChanged: number;
+  linesAdded: number;
+  linesDeleted: number;
+} {
+  let linesAdded = 0;
+  let linesDeleted = 0;
+  const fileList = Object.values(files);
+  for (const f of fileList) {
+    linesAdded += f.additions;
+    linesDeleted += f.deletions;
+  }
+  return {
+    filesChanged: fileList.length,
+    linesAdded,
+    linesDeleted,
+  };
+}
+
+/**
+ * Bound hot `session.nodes` to MAX_HOT_NODES, demoting oldest nodes first.
+ * Preserves selected / streaming-coalesce targets and file-linked nodes when
+ * possible. Parent ids may point at demoted (cold) nodes; children lists are
+ * filtered to the hot set. Evidence is not discarded — cold recovery is via
+ * durable/raw event logs and replay.
+ */
+export function boundHotNodes(
+  nodes: Record<string, TraceNode>,
+  rootTraceIds: string[],
+  opts?: {
+    selectedTraceId?: string | null;
+    protectIds?: Iterable<string | null | undefined>;
+    maxHotNodes?: number;
+  }
+): {
+  nodes: Record<string, TraceNode>;
+  rootTraceIds: string[];
+  demoted: number;
+} {
+  const maxHot = opts?.maxHotNodes ?? MAX_HOT_NODES;
+  const ids = Object.keys(nodes);
+  if (ids.length <= maxHot) {
+    return { nodes, rootTraceIds, demoted: 0 };
+  }
+
+  const protect = new Set<string>();
+  if (opts?.selectedTraceId) protect.add(opts.selectedTraceId);
+  if (opts?.protectIds) {
+    for (const id of opts.protectIds) {
+      if (id) protect.add(id);
+    }
+  }
+  // Prefer keeping file_change nodes (diff/trace links) when under pressure.
+  for (const n of Object.values(nodes)) {
+    if (n.type === "file_change") protect.add(n.id);
+    if (n.links?.some((l) => l.kind === "file")) protect.add(n.id);
+  }
+
+  // Newest first — hot window is the recent tail.
+  const byRecency = ids.slice().sort((a, b) => {
+    const dt = (nodes[b]?.timestamp ?? 0) - (nodes[a]?.timestamp ?? 0);
+    if (dt !== 0) return dt;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  const keep = new Set<string>();
+  for (const id of protect) {
+    if (nodes[id]) keep.add(id);
+  }
+  for (const id of byRecency) {
+    if (keep.size >= maxHot) break;
+    keep.add(id);
+  }
+
+  // If protect set alone exceeded the cap, keep protect but enforce hard cap
+  // by recency among protected+kept.
+  if (keep.size > maxHot) {
+    const ordered = [...keep].sort((a, b) => {
+      const dt = (nodes[b]?.timestamp ?? 0) - (nodes[a]?.timestamp ?? 0);
+      if (dt !== 0) return dt;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    keep.clear();
+    for (const id of ordered) {
+      if (keep.size >= maxHot) break;
+      keep.add(id);
+    }
+    // Always retain selection if present.
+    if (opts?.selectedTraceId && nodes[opts.selectedTraceId]) {
+      if (!keep.has(opts.selectedTraceId) && keep.size >= maxHot) {
+        // Drop oldest kept to make room for selection.
+        let oldest: string | null = null;
+        let oldestTs = Infinity;
+        for (const id of keep) {
+          const ts = nodes[id]?.timestamp ?? 0;
+          if (ts < oldestTs) {
+            oldestTs = ts;
+            oldest = id;
+          }
+        }
+        if (oldest) keep.delete(oldest);
+      }
+      keep.add(opts.selectedTraceId);
+    }
+  }
+
+  const nextNodes: Record<string, TraceNode> = {};
+  for (const id of keep) {
+    const n = nodes[id];
+    if (!n) continue;
+    nextNodes[id] = {
+      ...n,
+      children: n.children.filter((c) => keep.has(c)),
+    };
+  }
+
+  const nextRoots = rootTraceIds.filter((id) => keep.has(id));
+  // Nodes whose parent was demoted stay non-root (parentId retains provenance).
+  return {
+    nodes: nextNodes,
+    rootTraceIds: nextRoots,
+    demoted: ids.length - Object.keys(nextNodes).length,
+  };
+}
+
+/**
+ * Apply hot-node bound to a Session (hydrate / snapshot load path).
+ * Preserves cumulative metrics; records coldNodeCount.
+ */
+export function boundSessionHotNodes(
+  session: Session,
+  maxHotNodes: number = MAX_HOT_NODES
+): Session {
+  const result = boundHotNodes(session.nodes, session.rootTraceIds, {
+    selectedTraceId: session.selectedTraceId,
+    maxHotNodes,
+  });
+  if (result.demoted <= 0) return session;
+  return {
+    ...session,
+    nodes: result.nodes,
+    rootTraceIds: result.rootTraceIds,
+    coldNodeCount: (session.coldNodeCount ?? 0) + result.demoted,
+  };
 }
 
 /** Single-pass metrics — avoids 5× filter + 2× reduce over the same arrays. */
@@ -174,6 +378,8 @@ type WorkState = {
   updatedAt: number;
   eventLog: StreamEvent[];
   eventCount: number;
+  /** Nodes demoted from hot map (cumulative for this session). */
+  coldNodeCount: number;
   filesDirty: boolean;
   /** Cached id of most recent thinking/reasoning node (streaming coalesce). */
   latestThoughtId: string | null;
@@ -183,6 +389,8 @@ type WorkState = {
   expanded: Set<string>;
   linkedHighlightFileId: string | null | undefined;
   metricsDirty: boolean;
+  /** True once cold window is active — node counts stay incremental. */
+  metricsIncremental: boolean;
 };
 
 function findLatestOfType(
@@ -207,6 +415,7 @@ function createWorkState(
 ): WorkState {
   const nodes = { ...session.nodes };
   const files = { ...session.files };
+  const coldNodeCount = session.coldNodeCount ?? 0;
   return {
     status: session.status,
     metrics: { ...session.metrics },
@@ -218,6 +427,7 @@ function createWorkState(
     updatedAt: session.updatedAt,
     eventLog: session.eventLog ? session.eventLog.slice() : [],
     eventCount: session.eventCount ?? session.eventLog?.length ?? 0,
+    coldNodeCount,
     filesDirty: false,
     latestThoughtId: findLatestOfType(
       nodes,
@@ -228,6 +438,7 @@ function createWorkState(
     expanded: new Set(expandedNodeIds),
     linkedHighlightFileId: undefined,
     metricsDirty: false,
+    metricsIncremental: coldNodeCount > 0,
   };
 }
 
@@ -293,7 +504,7 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
     const parentId = workingEvent.parentId ?? prev?.parentId ?? null;
     const depth =
       parentId && ws.nodes[parentId] ? ws.nodes[parentId].depth + 1 : 0;
-    upsertNode(ws.nodes, ws.rootTraceIds, {
+    const inserted = upsertNode(ws.nodes, ws.rootTraceIds, {
       id: nodeId,
       parentId,
       type: "file_change",
@@ -309,6 +520,9 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
       depth,
       meta: workingEvent.meta,
     });
+    if (inserted && ws.metricsIncremental) {
+      noteNewNodeMetrics(ws, "file_change", "success");
+    }
     ws.expanded.add(nodeId);
     if (parentId) ws.expanded.add(parentId);
     ws.linkedHighlightFileId = fd.id;
@@ -437,6 +651,7 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
     workingEvent.type === "tool_result" &&
     existingNode?.type === "tool_call"
   ) {
+    const prevStatus = existingNode.status;
     upsertNode(ws.nodes, ws.rootTraceIds, {
       ...existingNode,
       type: "tool_call",
@@ -454,6 +669,16 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
       toolName: workingEvent.toolName || existingNode.toolName,
       meta: { ...existingNode.meta, ...workingEvent.meta },
     });
+    if (
+      ws.metricsIncremental &&
+      workingEvent.status === "error" &&
+      prevStatus !== "error"
+    ) {
+      ws.metrics = {
+        ...ws.metrics,
+        errorCount: ws.metrics.errorCount + 1,
+      };
+    }
   } else {
     const isProse =
       workingEvent.type === "thinking" ||
@@ -490,21 +715,23 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
           : undefined) ||
         existingNode?.summary;
 
-    upsertNode(ws.nodes, ws.rootTraceIds, {
+    const nodeType = streamEventToNodeType(workingEvent.type);
+    const nextStatus =
+      workingEvent.status ??
+      existingNode?.status ??
+      (workingEvent.type === "error" || workingEvent.type === "parser_error"
+        ? "error"
+        : "success");
+    const inserted = upsertNode(ws.nodes, ws.rootTraceIds, {
       id: nodeId,
       parentId: resolvedParent,
-      type: streamEventToNodeType(workingEvent.type),
+      type: nodeType,
       title: workingEvent.title || existingNode?.title || workingEvent.type,
       content: nextContent,
       summary: nextSummary,
       timestamp: existingNode?.timestamp ?? workingEvent.timestamp,
       durationMs: workingEvent.durationMs ?? existingNode?.durationMs,
-      status:
-        workingEvent.status ??
-        existingNode?.status ??
-        (workingEvent.type === "error" || workingEvent.type === "parser_error"
-          ? "error"
-          : "success"),
+      status: nextStatus,
       children: existingNode?.children ?? [],
       links,
       depth,
@@ -516,6 +743,19 @@ function applyEventToWork(ws: WorkState, event: StreamEvent): void {
         ...(workingEvent.path ? { path: workingEvent.path } : {}),
       },
     });
+    if (inserted && ws.metricsIncremental) {
+      noteNewNodeMetrics(ws, nodeType, nextStatus);
+    } else if (
+      ws.metricsIncremental &&
+      !inserted &&
+      nextStatus === "error" &&
+      existingNode?.status !== "error"
+    ) {
+      ws.metrics = {
+        ...ws.metrics,
+        errorCount: ws.metrics.errorCount + 1,
+      };
+    }
   }
 
   if (
@@ -574,31 +814,65 @@ function freezeWorkState(
     ? buildFileTree(Object.values(ws.files))
     : session.fileTree;
 
-  let next: Session = {
+  // Metrics first while the full in-batch node set is still present, then
+  // demote oldest nodes into the cold tier (count only — evidence stays in
+  // durable/raw event streams).
+  let metrics: SessionMetrics = ws.metrics;
+  if (recomputeMetrics && ws.metricsDirty) {
+    if (ws.metricsIncremental) {
+      const filePart = recomputeFileMetrics(ws.files);
+      metrics = {
+        ...ws.metrics,
+        filesChanged: filePart.filesChanged,
+        linesAdded: filePart.linesAdded,
+        linesDeleted: filePart.linesDeleted,
+      };
+    } else {
+      metrics = recomputeSessionMetrics({
+        ...session,
+        status: ws.status,
+        metrics: ws.metrics,
+        nodes: ws.nodes,
+        files: ws.files,
+        rootTraceIds: ws.rootTraceIds,
+      });
+    }
+  }
+
+  const bound = boundHotNodes(ws.nodes, ws.rootTraceIds, {
+    selectedTraceId: ws.selectedTraceId,
+    protectIds: [ws.latestThoughtId, ws.latestToolCallId],
+  });
+  const coldNodeCount = ws.coldNodeCount + bound.demoted;
+
+  // Drop expanded ids that no longer exist in the hot map (keep selection).
+  const expanded = new Set<string>();
+  for (const id of ws.expanded) {
+    if (bound.nodes[id]) expanded.add(id);
+  }
+  if (ws.selectedTraceId && bound.nodes[ws.selectedTraceId]) {
+    expanded.add(ws.selectedTraceId);
+  }
+
+  const next: Session = {
     ...session,
     status: ws.status,
-    metrics: ws.metrics,
-    nodes: ws.nodes,
+    metrics,
+    nodes: bound.nodes,
     files: ws.files,
     fileTree,
-    rootTraceIds: ws.rootTraceIds,
+    rootTraceIds: bound.rootTraceIds,
     selectedTraceId: ws.selectedTraceId,
     selectedFileId: ws.selectedFileId,
     updatedAt: ws.updatedAt,
     eventLog: ws.eventLog,
     eventCount: ws.eventCount,
+    coldNodeCount: coldNodeCount > 0 ? coldNodeCount : session.coldNodeCount,
   };
-
-  if (recomputeMetrics && ws.metricsDirty) {
-    next = {
-      ...next,
-      metrics: recomputeSessionMetrics(next),
-    };
-  }
 
   return {
     session: next,
-    expandedNodeIds: ws.expanded,
+    expandedNodeIds: expanded,
     linkedHighlightFileId: ws.linkedHighlightFileId,
     metricsDirty: ws.metricsDirty,
   };

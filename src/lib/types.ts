@@ -298,6 +298,15 @@ export interface Session {
   /** Count of normalized events written (disk or memory) */
   eventCount?: number;
   /**
+   * Count of trace nodes demoted out of the hot `nodes` map after the
+   * production hot-node bound (see `MAX_HOT_NODES` in session-reduce).
+   * Full evidence remains recoverable from durable events.ndjson / export
+   * event log / replay — the hot map is intentionally a recent window.
+   * Metrics stay cumulative; do not re-derive tool/thinking counts solely
+   * from the hot map when this is > 0.
+   */
+  coldNodeCount?: number;
+  /**
    * True when only meta/shell is in memory (sidebar entry).
    * Full nodes/files load lazily when the session is activated.
    */

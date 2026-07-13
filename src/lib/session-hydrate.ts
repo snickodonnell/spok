@@ -13,7 +13,14 @@ import {
   type DurableSessionBundle,
 } from "./session-persist-client";
 import { replayEvents } from "./session-replay";
+import {
+  boundSessionHotNodes,
+  MAX_HOT_NODES,
+  reduceStreamEvents,
+} from "./session-reduce";
 import type { Session, SessionMetaRecord, StreamEvent } from "./types";
+
+export { boundSessionHotNodes, MAX_HOT_NODES } from "./session-reduce";
 
 const MAX_MEM_EVENT_LOG = 80;
 const MAX_MEM_RAW_LOG = 400;
@@ -72,14 +79,17 @@ export function metaShellSession(meta: SessionMetaRecord): Session {
 function trimSessionMemory(session: Session, eventCountHint?: number): Session {
   const eventLog = session.eventLog ?? [];
   const rawLog = session.rawLog ?? [];
+  // Bound hot nodes on restore so fat legacy snapshots cannot reintroduce the
+  // P0-8 unbounded-nodes breach. Metrics on the snapshot stay cumulative.
+  const bounded = boundSessionHotNodes(session, MAX_HOT_NODES);
   return {
-    ...session,
+    ...bounded,
     hydratePartial: false,
     restoreState: "available",
     restoreError: undefined,
     durable: true,
     source: "resume",
-    status: normalizeStatus(session.status),
+    status: normalizeStatus(bounded.status),
     eventLog:
       eventLog.length > MAX_MEM_EVENT_LOG
         ? eventLog.slice(eventLog.length - MAX_MEM_EVENT_LOG)
@@ -90,8 +100,97 @@ function trimSessionMemory(session: Session, eventCountHint?: number): Session {
         : rawLog,
     eventCount:
       eventCountHint ??
-      session.eventCount ??
+      bounded.eventCount ??
       eventLog.length,
+  };
+}
+
+/**
+ * Re-apply events onto a session shell to recover hot materialization after
+ * cold demotion or checkpoint restore. Authority-neutral: does not grant
+ * trust/approval/execution. Prefer durable events.ndjson as the source of truth.
+ *
+ * The resulting hot `nodes` map remains bounded (MAX_HOT_NODES); full history
+ * stays in the provided event list / disk log.
+ */
+export function rehydrateSessionFromEvents(
+  base: Session,
+  events: StreamEvent[]
+): Session {
+  if (!events.length) {
+    return boundSessionHotNodes({
+      ...base,
+      hydratePartial: false,
+      restoreState: "available",
+    });
+  }
+  // Start from a node-empty shell so replay rebuilds from evidence, keeping
+  // cumulative metrics from `base` when the event list is a hot tail only.
+  const shell: Session = {
+    ...base,
+    nodes: {},
+    rootTraceIds: [],
+    files: { ...base.files },
+    fileTree: base.fileTree,
+    selectedTraceId: null,
+    eventLog: [],
+    eventCount: 0,
+    coldNodeCount: 0,
+    hydratePartial: false,
+    restoreState: "available",
+    // Reset node-derived counters; reduce will recompute from the event batch.
+    metrics: {
+      ...base.metrics,
+      toolCallCount: 0,
+      thinkingSteps: 0,
+      subagentCount: 0,
+      errorCount: 0,
+    },
+  };
+  const result = reduceStreamEvents(shell, new Set(), events);
+  const session = result.session;
+  // If events are a tail only, never drop prior cumulative metrics below base.
+  const mergedMetrics = {
+    ...session.metrics,
+    toolCallCount: Math.max(
+      base.metrics.toolCallCount,
+      session.metrics.toolCallCount
+    ),
+    thinkingSteps: Math.max(
+      base.metrics.thinkingSteps,
+      session.metrics.thinkingSteps
+    ),
+    subagentCount: Math.max(
+      base.metrics.subagentCount,
+      session.metrics.subagentCount
+    ),
+    errorCount: Math.max(base.metrics.errorCount, session.metrics.errorCount),
+    filesChanged: Math.max(
+      base.metrics.filesChanged,
+      session.metrics.filesChanged
+    ),
+    linesAdded: Math.max(base.metrics.linesAdded, session.metrics.linesAdded),
+    linesDeleted: Math.max(
+      base.metrics.linesDeleted,
+      session.metrics.linesDeleted
+    ),
+  };
+  return {
+    ...session,
+    metrics: mergedMetrics,
+    eventCount: Math.max(
+      base.eventCount ?? 0,
+      session.eventCount ?? events.length
+    ),
+    source: base.source === "live" ? "live" : base.source,
+    durable: base.durable,
+    // cold relative to full history when eventCount exceeds hot nodes
+    coldNodeCount:
+      (session.coldNodeCount ?? 0) ||
+      Math.max(
+        0,
+        (base.eventCount ?? events.length) - Object.keys(session.nodes).length
+      ),
   };
 }
 
