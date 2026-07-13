@@ -202,7 +202,7 @@ export type HotRenderWindow = {
 export function projectHotRenderWindow(
   events: StreamEvent[],
   offset: number,
-  size = PERF_HOT_BOUNDS.renderWindowEvents
+  size: number = PERF_HOT_BOUNDS.renderWindowEvents
 ): HotRenderWindow {
   const total = events.length;
   const safeSize = Math.max(1, Math.min(size, PERF_HOT_BOUNDS.renderWindowEvents));
@@ -344,8 +344,8 @@ export class BoundedHotState {
   private navOffset = 0;
 
   constructor(
-    renderWindowSize = PERF_HOT_BOUNDS.renderWindowEvents,
-    hotEventLogCap = PERF_HOT_BOUNDS.hotEventLog
+    renderWindowSize: number = PERF_HOT_BOUNDS.renderWindowEvents,
+    hotEventLogCap: number = PERF_HOT_BOUNDS.hotEventLog
   ) {
     this.renderWindowSize = renderWindowSize;
     this.hotEventLogCap = hotEventLogCap;
