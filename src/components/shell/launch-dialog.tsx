@@ -15,7 +15,12 @@ import { useSpokStore } from "@/lib/store";
 import { toast } from "sonner";
 import { DirectoryNavigator } from "@/components/shell/directory-navigator";
 import { openWorkspaceSession } from "@/lib/workspace-session";
-import { trustWorkspace } from "@/lib/local-api-client";
+import {
+  listTrustedWorkspaces,
+  trustWorkspace,
+  type TrustedRootDto,
+} from "@/lib/local-api-client";
+import { findTrustedWorkspaceReceipt } from "@/lib/workspace-trust-receipt";
 import { isDesktopRuntime, pickFolderNative } from "@/lib/desktop";
 import {
   defaultTaskLaunchTarget,
@@ -52,6 +57,7 @@ export function LaunchDialog() {
     const active = s.activeSessionId ? s.sessions[s.activeSessionId] : null;
     return active?.config.cwd ?? null;
   });
+  const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
 
   const [cwd, setCwd] = useState("");
   const [command, setCommand] = useState("grok");
@@ -65,6 +71,10 @@ export function LaunchDialog() {
   const [showBrowser, setShowBrowser] = useState(false);
   const [picking, setPicking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [trustedRoots, setTrustedRoots] = useState<TrustedRootDto[]>([]);
+  const [trustChecking, setTrustChecking] = useState(false);
+  const [trustConfirmed, setTrustConfirmed] = useState(false);
+  const [launchProblem, setLaunchProblem] = useState<string | null>(null);
   const desktop = isDesktopRuntime();
 
   useEffect(() => {
@@ -87,6 +97,8 @@ export function LaunchDialog() {
     setSubmitted(false);
     setShowAdvanced(false);
     setSubmitting(false);
+    setTrustConfirmed(false);
+    setLaunchProblem(null);
     setShowBrowser(!desktop || !nativeFolderPicker);
   }, [open, desktop, nativeFolderPicker]);
 
@@ -109,7 +121,40 @@ export function LaunchDialog() {
     preferredTarget,
   ]);
 
+  useEffect(() => {
+    if (!open || !cwd.trim()) {
+      setTrustedRoots([]);
+      setTrustChecking(false);
+      return;
+    }
+    let cancelled = false;
+    setTrustChecking(true);
+    const timer = window.setTimeout(() => {
+      void listTrustedWorkspaces()
+        .then((result) => {
+          if (!cancelled) setTrustedRoots(result.roots);
+        })
+        .catch(() => {
+          if (!cancelled) setTrustedRoots([]);
+        })
+        .finally(() => {
+          if (!cancelled) setTrustChecking(false);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, cwd]);
+
+  useEffect(() => {
+    setTrustConfirmed(false);
+    setLaunchProblem(null);
+  }, [cwd]);
+
   const validation = validateTaskLaunch({ cwd, command, task, target });
+  const trustReceipt = findTrustedWorkspaceReceipt(cwd, trustedRoots);
+  const authorityReady = !!trustReceipt || trustConfirmed;
 
   const pickNative = async () => {
     setPicking(true);
@@ -152,13 +197,20 @@ export function LaunchDialog() {
     event.preventDefault();
     setSubmitted(true);
     if (!validation.ok || submitting) return;
+    if (!authorityReady) {
+      setLaunchProblem(
+        "Confirm repository trust before launching. Selecting a folder alone grants no execution authority."
+      );
+      return;
+    }
 
     setSubmitting(true);
+    setLaunchProblem(null);
     try {
+      // This is the only authority-changing step and follows the visible trust
+      // confirmation (or an existing durable trust receipt).
+      const trusted = await trustWorkspace(cwd.trim());
       if (target === "background") {
-        // Selecting and queuing a repository is an explicit durable trust action,
-        // matching the existing interactive workspace-open contract.
-        const trusted = await trustWorkspace(cwd.trim());
         const { enqueueBackgroundJob } = await import("@/lib/background-runner");
         enqueueBackgroundJob({
           title: taskTitle(task),
@@ -178,7 +230,7 @@ export function LaunchDialog() {
       const base =
         cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "repo";
       const result = await openWorkspaceSession({
-        cwd,
+        cwd: trusted.root,
         command,
         name: base,
         forceNewSession: true,
@@ -195,7 +247,9 @@ export function LaunchDialog() {
           : "Enter a task when you are ready.",
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Task launch failed");
+      const message = error instanceof Error ? error.message : "Task launch failed";
+      setLaunchProblem(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }
@@ -350,9 +404,63 @@ export function LaunchDialog() {
             >
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               {target === "background"
-                ? "The repository is trusted when queued. If policy or worktree isolation cannot be established, no agent process starts."
-                : "Opening trusts this repository. The task stays editable in the composer until you explicitly send it."}
+                ? "Selection grants no authority. Confirm trust below; if policy or worktree isolation fails, no agent process starts."
+                : "Selection grants no authority. Confirm trust below; the task remains a draft until you explicitly send it."}
             </div>
+
+            <section
+              className="space-y-3 rounded-md border border-phosphor-green/20 bg-black/25 p-3"
+              aria-labelledby="launch-receipt-title"
+              data-testid="launch-authority-receipt"
+            >
+              <div id="launch-receipt-title" className="text-xs font-semibold text-phosphor-green">
+                Launch authority receipt
+              </div>
+              <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
+                <dt className="text-phosphor-green/60">Repository</dt>
+                <dd className="break-all font-mono text-phosphor-green/90">{cwd || "Not selected"}</dd>
+                <dt className="text-phosphor-green/60">Execution</dt>
+                <dd>{target === "background" ? "Isolated managed worktree" : "Interactive selected checkout"}</dd>
+                <dt className="text-phosphor-green/60">Effective policy</dt>
+                <dd className="capitalize">{appPermissionMode} · deny rules always win</dd>
+                <dt className="text-phosphor-green/60">Approval behavior</dt>
+                <dd>{appPermissionMode === "plan" ? "Execution is blocked in plan mode" : "Actions outside policy require a scoped approval"}</dd>
+                <dt className="text-phosphor-green/60">Trust</dt>
+                <dd>
+                  {trustChecking
+                    ? "Checking durable trust…"
+                    : trustReceipt
+                      ? `Trusted ${trustReceipt.trustedAt ? new Date(trustReceipt.trustedAt).toLocaleString() : "previously"} · root ${trustReceipt.path}`
+                      : "Not trusted · repository selection grants no authority"}
+                </dd>
+              </dl>
+              {!trustReceipt && !trustChecking && (
+                <label className="flex cursor-pointer items-start gap-2 rounded border border-phosphor-amber/30 bg-phosphor-amber/5 p-2 text-xs">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-amber-400"
+                    checked={trustConfirmed}
+                    onChange={(event) => {
+                      setTrustConfirmed(event.target.checked);
+                      setLaunchProblem(null);
+                    }}
+                    data-testid="launch-trust-confirmation"
+                  />
+                  <span>
+                    Trust this repository root for agent execution and Git operations. Trust is durable and can be revoked in Settings → Privacy.
+                  </span>
+                </label>
+              )}
+              <p className="text-xs text-phosphor-green/60">
+                Failure is safe: trust, policy, or isolation denial starts no agent process.
+              </p>
+            </section>
+
+            {launchProblem && (
+              <div className="rounded border border-phosphor-red/40 bg-phosphor-red/10 p-3 text-sm text-phosphor-red" role="alert" data-testid="launch-problem">
+                {launchProblem}
+              </div>
+            )}
 
             <section>
               <button

@@ -302,6 +302,10 @@ export interface Session {
    * Full nodes/files load lazily when the session is activated.
    */
   hydratePartial?: boolean;
+  /** Materialization state for restored metadata shells. Never grants authority. */
+  restoreState?: "restoring" | "available" | "unavailable";
+  /** Durable UI explanation when a restored body could not be materialized. */
+  restoreError?: string;
   /** Cached git branch/status summary for status line + Git panel. */
   gitSummary?: SessionGitSummary;
   /** Durable evidence from confirmed commit/push/PR handoff actions. */

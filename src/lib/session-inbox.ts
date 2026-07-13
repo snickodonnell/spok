@@ -223,6 +223,17 @@ export function classifySessionLane(
   const files = countFilesChanged(session);
   const errors = session.metrics?.errorCount ?? 0;
 
+  if (session.restoreState === "unavailable") {
+    return {
+      lane: "waiting",
+      reason: session.restoreError?.trim().slice(0, 64) || "Saved details unavailable",
+    };
+  }
+
+  if (session.restoreState === "restoring" || session.hydratePartial) {
+    return { lane: "waiting", reason: "Restoring saved details" };
+  }
+
   if (job?.status === "waiting_approval") {
     return { lane: "waiting", reason: "Waiting for approval" };
   }
@@ -551,6 +562,8 @@ export function inboxSessionFingerprint(session: Session): string {
     g?.untrackedCount ?? 0,
     g?.branch ?? "",
     session.hydratePartial ? "1" : "0",
+    session.restoreState ?? "",
+    session.restoreError ?? "",
     session.backgroundJob ? "1" : "0",
     updatedBucket,
   ].join(":");

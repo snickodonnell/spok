@@ -19,6 +19,7 @@ Treat Spok's Next API routes and Tauri shell as a privileged local bridge to the
    - pass environment variables
    - call Tauri shell
    - export logs/diffs/traces
+   - stop/cancel/archive/delete/cleanup one or many lifecycle records
 2. Define the policy before implementation.
    - trusted workspace roots
    - allowed command profile
@@ -26,11 +27,13 @@ Treat Spok's Next API routes and Tauri shell as a privileged local bridge to the
    - secret deny/redaction rules
    - approval requirement
    - audit event shape
-3. Canonicalize paths before comparing them.
-4. Avoid shell execution. If Windows `.cmd` fallback is necessary, keep quoting deterministic and covered by tests.
-5. Never expand privileges silently. If a request crosses policy, return a structured denial event.
-6. Record every privileged action and approval/denial in the session event log.
-7. Add tests with temp directories/repos and fake CLIs.
+   - user-visible scope/impact preview and recovery behavior
+3. Identify the actual user intent signal. Page hide, unload, disconnect, freeze, timeout, navigation, client unmount, and layout transition are not authorization to stop or mutate work.
+4. Canonicalize paths before comparing them.
+5. Avoid shell execution. If Windows `.cmd` fallback is necessary, keep quoting deterministic and covered by tests.
+6. Never expand privileges silently. Restore/import/read operations are authority-neutral; selecting or reopening a path must not implicitly trust it. If a request crosses policy, return a structured denial event.
+7. Record every privileged action and approval/denial in the session event log.
+8. Add tests with temp directories/repos and fake CLIs.
 
 ## Runtime Rules
 
@@ -39,6 +42,10 @@ Treat Spok's Next API routes and Tauri shell as a privileged local bridge to the
 - Custom commands must be explicitly approved or matched by an allow rule.
 - Environment overrides must be allowlisted; redact secrets in display and export.
 - Filesystem browsing must not enumerate arbitrary drives after workspace selection unless the user explicitly opens a picker.
+- Restored/imported sessions may be inspected without execution authority; hydration must not call a trust-grant path.
+- Stop/cancel is scoped to a named session and run by default. Fleet stop is a separate explicit action and must never be inferred from folder selection or client lifecycle.
+- Archive/delete/cleanup previews must include affected durable records, branch/worktree, dirty state, and unpushed commits. Irreversible or force paths require explicit confirmation.
+- Permission escalation (`bypass`, `always approve`, broad allow rules) requires a visible scope/duration confirmation before state changes; a toast after mutation is insufficient.
 - Git diff preview must skip binary files, cap large files, and deny known secret paths.
 - Tauri capabilities must be least privilege; do not keep broad shell spawn/execute permissions as defaults.
 - CSP must be explicit in desktop builds.
@@ -55,6 +62,10 @@ Add tests for:
 - untracked `.env` file denial.
 - binary/large file skip.
 - process cancellation and child tree cleanup.
+- client hide/disconnect/reload/layout change does not cancel a process.
+- repository switching preserves unrelated runs and global stop requires explicit fleet intent.
+- revoked trust remains revoked across session restore/import.
+- scoped stop cannot cancel another session/run; destructive preview matches the audited affected identities.
 - Windows `.cmd` fallback argv preservation.
 
 Run route/unit tests first. Run `npm run build` when route types or Tauri-facing config changed.

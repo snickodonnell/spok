@@ -7,12 +7,13 @@ The product goal is a world-class Grok Build control room that can compete with 
 ## Current Plan
 
 - Product and performance roadmap: [docs/HARNESS_AUDIT_AND_ROADMAP.md](docs/HARNESS_AUDIT_AND_ROADMAP.md)
+- Active UX audit and remediation contract: [docs/UX_AUDIT.md](docs/UX_AUDIT.md)
 - Low-overhead runtime and native desktop architecture: [docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md](docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md)
 - Security posture: [docs/SECURITY_POSTURE.md](docs/SECURITY_POSTURE.md)
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
-The fast local harness and Review Workbench foundations are shipped: batched/virtualized streams, snapshot-first restore, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, and an operational session inbox. Spok now also has a compact New Task flow, strict isolated background launch, a durable/recoverable job ledger, concurrent approval queue, inbox fleet controls, durable user-tunable runner capacity, an Enterprise surface for Grok-led subagent missions with per-person traces and same-worktree follow-up, and a responsive Review completion path that guides findings → stage → commit → sync → push → PR preparation through existing policy gates. Confirmed handoff outcomes persist with commit, push, PR, readiness, and audit evidence. The current product milestone is adding audited IDE launch and unifying archive with safe worktree cleanup without touching the main checkout.
+The fast local harness and Review Workbench foundations are implemented: batched/virtualized streams, snapshot-first persistence, durable trust, validation evidence, risk-ordered trace-linked diffs, review summaries, isolated background launch, a durable job ledger, concurrent approvals, fleet controls, Enterprise mission experiments, and a guided Git handoff path. Direct dogfood testing found release-blocking UX and lifecycle defects, including recoverability, passive phone cancellation, global folder-stop behavior, contradictory state language, fragmented navigation/authority, and accessibility gaps. The current product milestone is UX recovery and lifecycle coherence; audited IDE launch and unified archive/worktree cleanup follow that gate.
 
 ## Why Spok
 

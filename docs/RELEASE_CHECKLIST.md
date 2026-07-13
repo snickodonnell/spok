@@ -14,12 +14,18 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 
 ## Pre-Release
 
-- [ ] Roadmap, security posture, and architecture docs are current.
+- [ ] Roadmap, UX audit, security posture, and architecture docs are current; no shipped behavior is still described more favorably than direct dogfood evidence.
 - [ ] Version bumped in relevant package metadata.
 - [ ] `npm test` green.
 - [ ] `npm run build` green.
 - [ ] `npm run test:server` green and `node scripts/dev-app.mjs --check` confirms runtime/UI readiness plus clean teardown.
-- [ ] Playwright smoke green when UI behavior changed.
+- [ ] Playwright smoke green when UI behavior changed; required core-loop tests do not conditionally skip when expected UI is missing.
+- [ ] Fresh, restored, slow, corrupt, and unavailable-runtime startup reaches a usable inbox or actionable recovery state within 2.5 seconds; no indefinite “Restoring” or “Connecting” state.
+- [ ] Hiding, disconnecting, reloading, navigating, freezing, or changing layout on a client never stops an active host run.
+- [ ] Opening/changing a repository never stops unrelated sessions or jobs; any conflict decision previews the exact affected run.
+- [ ] Restoring or importing session data grants no workspace trust or execution authority.
+- [ ] Job, session, run, turn, review, and handoff labels use the canonical state contract and do not contradict one another.
+- [ ] Session/job/schedule archive or deletion and worktree cleanup preview impact; irreversible paths require explicit confirmation and are keyboard accessible.
 - [ ] Slash catalog verification green when slash command docs or catalog code changed.
 - [ ] Diagnostics bundle downloaded and scanned for secrets.
 - [ ] Default permission mode remains `manual`.
@@ -32,7 +38,9 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Fleet capacity persists across restart; lowering it does not cancel active work, and queued rows explain capacity plus priority/FIFO position.
 - [ ] Enterprise mission metadata, ordered turns, and accepted state roundtrip safely; requested crew never masquerade as emitted lanes; historical person traces remain inspectable; follow-up re-verifies the existing managed worktree and uses Grok continuation.
 - [ ] Cancelling a run while it waits for approval removes that exact request and cannot later launch the process.
-- [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log) and live stream responsiveness.
+- [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log), actionable restore failure, and live stream responsiveness.
+- [ ] Core loop passes keyboard-only use, visible selected/focus semantics, AA contrast in every theme, reduced motion, 200% zoom, and screen-reader smoke.
+- [ ] Compact, standard, and wide layouts are checked at 390, 768, 1024, and 1440 px without losing safety state or task context.
 
 ## Internal Tauri Build
 
@@ -54,6 +62,7 @@ Before an end-user native build ships:
 - [ ] Native UI talks to the runtime over loopback HTTP or equivalent local IPC with capability token protection.
 - [ ] No WebView is required for the primary product shell.
 - [ ] Pending approvals are dropped on runtime restart and surfaced with a UI banner.
+- [ ] Native client implements the shared startup/recovery, state provenance, trust receipt, cancellation scope, archive/cleanup, and accessibility contracts; it does not copy unresolved React UX.
 - [ ] Session reopen, large trace navigation, and diff review meet performance budgets.
 - [ ] Installer owns protocol registration, runtime placement, and upgrade/rollback.
 - [ ] Security posture is re-reviewed for native host privileges.
@@ -94,8 +103,10 @@ Internal builds can link to release notes and instruct users to install the new 
 6. Confirm denied operations are visible and understandable.
 7. Export diagnostics and confirm redaction.
 8. Reopen the app and verify recent session state.
-9. Test mobile/LAN only when LAN mode is intentionally enabled.
-10. Confirm release notes match the shipped behavior.
+9. Hide/reload/disconnect a monitoring client and confirm the host run continues; then exercise an explicit scoped stop.
+10. Test mobile/LAN only when LAN mode is intentionally enabled, including stale/disconnected recovery and safe repository switching.
+11. Complete the core loop by keyboard at 200% zoom and verify operational contrast in all themes.
+12. Confirm release notes match the shipped behavior.
 
 ## Rollback
 

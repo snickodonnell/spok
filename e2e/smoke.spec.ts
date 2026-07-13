@@ -5,6 +5,20 @@ import { test, expect } from "@playwright/test";
  * Does not require Grok CLI.
  */
 test.describe("Spok shell smoke", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/api/sessions", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ sessions: [] }),
+      });
+    });
+  });
+
   test("loads welcome screen with skip link and main landmark", async ({
     page,
   }) => {
@@ -43,13 +57,14 @@ test.describe("Spok shell smoke", () => {
     });
     // Topbar settings gear
     await page.getByTitle(/settings & permissions/i).click();
-    await expect(page.getByText(/settings & permissions/i)).toBeVisible();
-    await page.getByRole("tab", { name: /appearance/i }).click();
-    await expect(page.getByText(/professional/i).first()).toBeVisible();
-    await expect(page.getByText(/crt phosphor/i)).toBeVisible();
-    await expect(page.getByText(/high contrast/i)).toBeVisible();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await expect(settings).toBeVisible();
+    await settings.getByRole("tab", { name: "Appearance" }).click();
+    await expect(settings.getByRole("button", { name: /professional/i })).toBeVisible();
+    await expect(settings.getByRole("button", { name: /crt phosphor/i })).toBeVisible();
+    await expect(settings.getByRole("button", { name: /high contrast/i })).toBeVisible();
     // Live switch to high contrast
-    await page.getByRole("button", { name: /high contrast/i }).click();
+    await settings.getByRole("button", { name: /high contrast/i }).click();
     await expect(page.locator("html")).toHaveAttribute(
       "data-theme",
       "high-contrast"
@@ -75,16 +90,15 @@ test.describe("Spok shell smoke", () => {
       timeout: 30_000,
     });
     const demo = page.getByTestId("welcome-play-sample");
-    if (await demo.isVisible().catch(() => false)) {
-      await demo.click();
-      await expect(page.getByTestId("workspace")).toBeVisible({
-        timeout: 15_000,
-      });
-      await expect(page.getByTestId("run-status-card")).toBeVisible();
-      await expect(page.getByTestId("prompt-composer")).toBeVisible();
-      // Task-oriented right tabs
-      await expect(page.getByRole("tab", { name: /changes/i })).toBeVisible();
-    }
+    await expect(demo).toBeVisible();
+    await demo.click();
+    await expect(page.getByTestId("workspace")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("run-status-card")).toBeVisible();
+    await expect(page.getByTestId("prompt-composer")).toBeVisible();
+    // Task-oriented right tabs
+    await expect(page.getByRole("tab", { name: /changes/i })).toBeVisible();
   });
 
   test("welcome shows CLI readiness strip", async ({ page }) => {
@@ -102,15 +116,14 @@ test.describe("Spok shell smoke", () => {
       timeout: 30_000,
     });
     const demo = page.getByTestId("welcome-play-sample");
-    if (await demo.isVisible().catch(() => false)) {
-      await demo.click();
-      await expect(page.getByTestId("product-mode-nav")).toBeVisible({
-        timeout: 15_000,
-      });
-      await expect(
-        page.getByTestId("product-mode-nav").getByRole("button", { name: "Run" })
-      ).toBeVisible();
-    }
+    await expect(demo).toBeVisible();
+    await demo.click();
+    await expect(page.getByTestId("product-mode-nav")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(
+      page.getByTestId("product-mode-nav").getByRole("button", { name: "Run" })
+    ).toBeVisible();
   });
 
   test("workspace right tabs: changes review validation events health", async ({
@@ -121,10 +134,7 @@ test.describe("Spok shell smoke", () => {
       timeout: 30_000,
     });
     const demo = page.getByTestId("welcome-play-sample");
-    test.skip(
-      !(await demo.isVisible().catch(() => false)),
-      "sample button not available"
-    );
+    await expect(demo).toBeVisible();
     await demo.click();
     await expect(page.getByTestId("workspace")).toBeVisible({
       timeout: 15_000,
@@ -150,10 +160,7 @@ test.describe("Spok shell smoke", () => {
       timeout: 30_000,
     });
     const demo = page.getByTestId("welcome-play-sample");
-    test.skip(
-      !(await demo.isVisible().catch(() => false)),
-      "sample button not available"
-    );
+    await expect(demo).toBeVisible();
     await demo.click();
     await expect(page.getByTestId("prompt-composer")).toBeVisible({
       timeout: 15_000,

@@ -168,15 +168,29 @@ describe("classifySessionLane", () => {
     assert.equal(r.lane, "queued");
   });
 
-  it("does not require full file bodies for partial shells", () => {
+  it("marks partial restored shells unavailable until materialized", () => {
     const r = classifySessionLane(
       baseSession({
         hydratePartial: true,
+        restoreState: "restoring",
         status: "ready",
         metrics: { ...baseSession().metrics, filesChanged: 2 },
       })
     );
-    assert.equal(r.lane, "ready_review");
+    assert.equal(r.lane, "waiting");
+    assert.match(r.reason, /restoring saved details/i);
+  });
+
+  it("keeps a failed restored shell actionable", () => {
+    const r = classifySessionLane(
+      baseSession({
+        hydratePartial: true,
+        restoreState: "unavailable",
+        restoreError: "Snapshot could not be decoded",
+      })
+    );
+    assert.equal(r.lane, "waiting");
+    assert.match(r.reason, /snapshot could not be decoded/i);
   });
 });
 

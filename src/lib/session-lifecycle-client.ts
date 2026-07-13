@@ -1,6 +1,4 @@
-/**
- * Client helpers for session start/stop lifecycle (mobile abandon + cwd change).
- */
+/** Client helpers for explicit, scoped session lifecycle actions. */
 
 import {
   getCachedCapabilityToken,
@@ -8,6 +6,7 @@ import {
 } from "./local-api-client";
 import { CAPABILITY_HEADER } from "./security/local-api-shared";
 import { useSpokStore } from "./store";
+import type { Session } from "./types";
 
 /** Normalize paths for equality (Windows drive letters, slashes). */
 export function normalizeWorkspacePath(p: string): string {
@@ -26,9 +25,55 @@ export function isDifferentWorkspace(
   return normalizeWorkspacePath(a) !== normalizeWorkspacePath(b);
 }
 
+export type WorkspaceRunConflict = {
+  sessionId: string;
+  name: string;
+  cwd: string;
+  status: Session["status"];
+};
+
+export function isLiveSession(session: Session): boolean {
+  return (
+    session.status === "running" ||
+    session.status === "starting" ||
+    session.status === "paused"
+  );
+}
+
+/**
+ * A genuine repository-open conflict exists only for a live foreground run in
+ * the exact same non-isolated checkout. Runs in other repositories/worktrees
+ * are unrelated and must never be stopped by context switching.
+ */
+export function findWorkspaceRunConflict(
+  nextCwd: string,
+  sessions: Record<string, Session> = useSpokStore.getState().sessions
+): WorkspaceRunConflict | null {
+  const target = normalizeWorkspacePath(nextCwd);
+  const conflict = Object.values(sessions)
+    .filter(
+      (session) =>
+        isLiveSession(session) &&
+        !session.backgroundJob &&
+        !session.config.worktreePath &&
+        normalizeWorkspacePath(session.config.cwd) === target
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+
+  return conflict
+    ? {
+        sessionId: conflict.id,
+        name: conflict.name,
+        cwd: conflict.config.cwd,
+        status: conflict.status,
+      }
+    : null;
+}
+
 /**
  * Stop the Grok harness process for a session on the host.
- * Uses keepalive fetch so it can run during pagehide on mobile.
+ * `keepalive` is available for an explicit stop request during navigation, but
+ * passive navigation/lifecycle handlers must never call this function.
  */
 export async function stopHarnessProcess(
   sessionId: string,
@@ -104,7 +149,10 @@ export async function stopActiveHarnessIfLive(opts?: {
   return null;
 }
 
-/** Stop every session that still looks live (not only the active one). */
+/**
+ * Explicit fleet action only. Callers must show a complete impact preview and
+ * receive fleet confirmation before invoking this helper.
+ */
 export async function stopAllLiveHarnesses(opts?: {
   keepalive?: boolean;
 }): Promise<number> {
@@ -121,40 +169,4 @@ export async function stopAllLiveHarnesses(opts?: {
     }
   }
   return n;
-}
-
-/**
- * When opening a new workspace directory: always tear down live harnesses
- * so an "active session" never blocks folder changes (mobile requirement).
- */
-export async function stopPreviousSessionForWorkspaceChange(
-  nextCwd: string
-): Promise<void> {
-  // Kept in the contract for callers and future same-workspace optimization;
-  // current policy deliberately tears down every live process on context switch.
-  void nextCwd;
-  // Always clear live processes — user is intentionally changing context
-  await stopAllLiveHarnesses();
-
-  const { activeSessionId, sessions } = useSpokStore.getState();
-  if (!activeSessionId) return;
-  const prev = sessions[activeSessionId];
-  if (!prev) return;
-
-  // Mark previous active session stopped even if it was only "ready"
-  // so mobile UI never thinks it still owns the host process.
-  if (
-    prev.status === "running" ||
-    prev.status === "starting" ||
-    prev.status === "paused" ||
-    prev.status === "ready"
-  ) {
-    // Keep ready sessions ready if they never ran; only force-stop live ones
-    // (already handled). Clear error sticky state.
-    if (prev.error) {
-      useSpokStore.getState().updateSession(activeSessionId, {
-        error: undefined,
-      });
-    }
-  }
 }

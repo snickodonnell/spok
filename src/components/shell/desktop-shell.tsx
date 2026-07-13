@@ -41,6 +41,7 @@ import { resolveThemeEffects } from "@/lib/theme";
 import type { ViewMode } from "@/lib/types";
 import { Loader2 } from "lucide-react";
 import { EnterpriseScreen } from "@/components/enterprise/enterprise-screen";
+import { StartupRecovery } from "./startup-recovery";
 
 export function DesktopShell() {
   const viewMode = useSpokStore((s) => s.viewMode);
@@ -62,7 +63,7 @@ export function DesktopShell() {
   const hydrating = useSpokStore((s) => s.hydrating);
 
   // Snapshot-first progressive restore (do not full-replay every session at boot)
-  useSessionHydration({ preferSnapshot: true, maxSessions: 12 });
+  const hydration = useSessionHydration({ preferSnapshot: true, maxSessions: 12 });
   // Defer host sync until after restore so it doesn't compete for disk/network
   const hydrated = useSpokStore((s) => s.hydrated);
   useHostSessionSync(hydrated);
@@ -118,6 +119,15 @@ export function DesktopShell() {
   const showWelcome = hydrated && !activeSessionId && !hasSessions;
 
   function renderMain() {
+    if (hydration.state.phase === "recovery") {
+      return (
+        <StartupRecovery
+          state={hydration.state}
+          onRetry={hydration.retry}
+          onContinue={hydration.continueWithoutRestoredSessions}
+        />
+      );
+    }
     if (productMode === "enterprise") return <EnterpriseScreen />;
     // Show splash only until the first usable session is active (or none exist).
     // Progressive restore inserts sidebar shells first — don't leave a blank workspace.
@@ -172,6 +182,7 @@ export function DesktopShell() {
           themeFx.crtEffects && "crt-flicker",
           themeFx.scanlines && "crt-scanlines"
         )}
+        data-shell-usable={hydration.state.phase === "restoring" ? "false" : "true"}
       >
         <a href="#spok-main" className="skip-link">
           Skip to main content

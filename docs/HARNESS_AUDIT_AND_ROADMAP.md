@@ -32,41 +32,71 @@ Features that make this loop faster, safer, or easier to understand outrank broa
 
 ## Current Baseline
 
-The repository already has a strong product spine:
+The repository has a broad capability spine, but the current React/Tauri dogfood UI is not yet a dependable design reference. The active evidence and remediation contract is `docs/UX_AUDIT.md`. In particular, startup recovery, mobile lifecycle safety, navigation coherence, canonical status language, destructive-action previews, and accessibility must be corrected before more surface area is treated as product progress.
+
+Capabilities already present include:
 
 - A focused Run workspace with thinking/events, changes, review, validation, raw log, health, Git, attachments, and a policy-aware composer.
 - Durable sessions with snapshot-first progressive restore, replay/import/export, raw event preservation, and parser fixtures.
 - Responsive stream handling through batched reduction, selective store subscriptions, virtualized high-volume views, and lazy heavy panels.
 - A review workbench with risk ordering, file labels, unified/split diffs, keyboard navigation, hunk causality, review summaries, validation recipes, and issue derivation.
-- An operational session inbox with attention, running, queued, failed, ready-for-review, and idle lanes on desktop and mobile.
+- A lane-grouped session/job inbox with attention, running, queued, failed, ready-for-review, and idle derivation; row identity, job-only navigation, status consistency, and next-action UX remain incomplete.
 - A shared privileged Node runtime with thin Next adapters for core routes, loopback/token/origin checks, durable workspace trust, approvals, audit events, path controls, and secret redaction.
 - Git status/write operations plus managed-worktree primitives and isolation guards.
 - Strict background isolation that creates, trusts, verifies, and binds a managed worktree before launching an unattended agent.
 - Persistent review issue navigation through queue counts, a keyboard issue rail, and Monaco gutter/line/overview markers.
 - A supervised `npm run dev:app` path that dogfoods extracted routes through the standalone runtime.
 - A concurrent approval queue that keeps session waiters independent, binds each waiter to run cancellation, and exposes selected risk, command, path, policy, allow-once/scoped-always, and deny decisions without superseding or reviving another agent.
-- A compact New Task flow for repository, optional task, interactive draft versus isolated background execution, and advanced CLI selection; prompt content is never persisted or auto-run.
+- A New Task flow for repository, optional task, interactive draft versus isolated background execution, and advanced CLI selection; it still front-loads filesystem detail and makes trust/policy consequences too implicit.
 - Inbox fleet controls for job-only and session-linked work: stop/cancel, retry, safe duplicate, and queued priority changes with execution/worktree identity stripped from clones.
 - Durable user-configurable background capacity (one to eight runner slots), with non-destructive limit changes and priority/FIFO queue reasons shown consistently in the inbox and Monitor.
 - A responsive Review completion path that derives the next safe handoff action from fresh session, review, validation, and Git state; it routes findings back to review, then guides stage, commit, fast-forward sync, push, PR preparation, and copyable trace-linked summaries through the existing confirmation and policy gates. Confirmed commit, push, and PR outcomes persist as a versioned, audit-linked, secret-safe handoff record tied to the session, background job, branch, and worktree, with the captured readiness evidence restored after restart.
 - Direct-path repository navigation in New Task that handles Enter inside the picker without submitting the enclosing launch flow.
-- An Enterprise coordinated-mission surface: one isolated Spok leader turn receives the ultimate goal plus up to four crew briefs; Grok's real subagent lanes place a five-agent team in task-specific rooms on an interactive ASCII ship, with movement driven by provider task/message/report events rather than ambient animation; the per-person trace inspector, versioned turn history, durable same-worktree follow-ups, and persisted accept-to-Run preserve the underlying evidence.
+- An experimental Enterprise coordinated-mission surface with leader/crew metadata, real provider-lane linkage, turn history, same-worktree follow-up, and accept-to-Run. Its current presentation can contradict terminal state and overemphasizes decorative ship/crew UI before evidence, so it is not a core-loop quality baseline.
 - A versioned, atomic, secret-safe automation job ledger linking job/session/worktree/branch/policy/timestamps/outcome, with persist-before-launch guarantees and restart reconciliation for interrupted or still-queued work.
 - Background jobs, schedules, channels, notifications, hooks, skills, MCP discovery foundations, mobile/LAN viewing, and an interim Tauri shell.
 
 ## Gaps Found In This Audit
 
-These remaining gaps weaken the core workflow:
+The comprehensive finding list is maintained in `docs/UX_AUDIT.md`. The release-blocking themes are:
 
-1. Review now has one derived completion path and a durable outcome record through PR creation, but IDE launch, archive, and worktree cleanup remain separate lifecycle actions.
-2. Validation recipes prefill prompts; they are not yet a structured, cancellable validation runner with durable artifacts.
-3. Automation timers are app-lifetime helpers, not a supervised scheduler with restart recovery and missed-run policy.
-4. Several automation, extension, attachment, secret, and live-runtime routes are still Next-hosted rather than shared standalone-runtime contracts.
-5. The final native Windows UI is a major separate product track; starting a full rewrite before the agent lifecycle stabilizes would create two moving UI targets.
+1. **Recoverability:** the preferred development shell can remain indefinitely on restore/connect loading with no recovery action.
+2. **Lifecycle safety:** passive phone lifecycle events can stop active work, and phone folder changes stop unrelated harnesses.
+3. **Control-room coherence:** navigation mixes destinations, tab aliases, and dialogs; status vocabularies contradict; job-only inbox rows lack a reliable next action.
+4. **Visible authority:** restore can re-grant workspace trust, while permission escalation, stop, delete, archive, and cleanup scope are fragmented or implicit.
+5. **Review evidence:** review, validation, Git handoff, findings, and completion remain split across overlapping surfaces.
+6. **Accessibility/adaptation:** dense low-contrast 9–10 px controls, incomplete selection semantics, hover-only actions, and an abrupt desktop/phone feature cliff do not meet the stated quality bar.
+7. **Verification:** current smoke tests can pass or skip without proving that the shell became usable.
+8. **Remaining architecture gaps:** structured validation, durable scheduling, residual Next-hosted privileged routes, IDE launch, and safe archive/worktree cleanup still remain.
 
 ## Ordered Delivery Plan
 
-### Now — Mission-Control Vertical Slice
+### Now — UX Recovery And Lifecycle Coherence
+
+Goal: the current dogfood app always reaches a truthful, usable state and never changes run authority or lifecycle without a scoped user decision.
+
+Closure update (verified 2026-07-13): UX-001, UX-002, UX-003, and UX-008 are closed with focused tests, required non-skipping E2E, and direct development/production interaction review at 390, 768, 1024, and 1440 px. Startup reaches usable/recovery state within the 2.5-second contract; passive client lifecycle events and repository switching preserve unrelated runs; restore/import grants no trust; and launch requires a visible authority receipt plus explicit trust when needed. UX-004–UX-007 and UX-009–UX-017 remain open and continue to block Enterprise, Automate, Extend, and native-parity expansion.
+
+Build in this order:
+
+1. Fix desktop/mobile hydration so startup reaches usable, recoverable, or diagnostic state within 2.5 seconds in development and production. Add non-skipping E2E for fresh, restored, corrupt, slow, and unavailable runtime cases.
+2. Remove all stop behavior tied to page hide, unload, freeze, disconnect, or layout transition. Replace global phone folder-stop behavior with context switching and a scoped conflict decision.
+3. Separate restore/import from workspace trust. Add explicit trust state and an effective launch-policy receipt for repository, location, isolation, permissions, and approval behavior.
+4. Define and enforce the canonical job/session/run/turn/review/handoff state model. Rebuild inbox rows around identity, state reason, attention, and the next safe action.
+5. Replace product-mode/dialog ambiguity with durable primary destinations and contextual tabs. Unify Changes, findings, validation, review readiness, and Git handoff terminology.
+6. Make deletion archive-first; add previews and confirmation for session logs, schedules, jobs, branches, worktrees, dirty files, and unpushed commits.
+7. Simplify Run/New Task/composer hierarchy, then meet keyboard, AA contrast, screen-reader, 200% zoom, and compact/standard/wide layout gates.
+
+Exit criteria:
+
+- All P0 and P1 findings in `docs/UX_AUDIT.md` meet their required outcomes.
+- No client lifecycle event stops a run; every explicit stop identifies exactly one scope unless the user intentionally chooses a fleet action.
+- Restore/import grants no authority, and untrusted restored work remains safely reviewable.
+- Every inbox row and terminal surface uses the canonical state model and exposes one safe next action.
+- Required startup/core-loop E2E assertions fail rather than skip when UI is missing or blocked.
+- The core loop passes keyboard-only, AA contrast, high-contrast, reduced-motion, screen-reader smoke, and 200% zoom review.
+
+### Completed Foundation — Mission-Control Vertical Slice
 
 Goal: a user can launch two or more Grok tasks, leave them running safely, and return to reviewable results without touching the main checkout.
 
@@ -105,13 +135,18 @@ UX acceptance:
 - Every session row answers: what is it doing, where is it running, what needs attention, and what can I do next?
 - Keyboard navigation covers create, session cycling, stop, review, validation, and handoff.
 - Destructive cleanup always previews affected session, worktree, branch, and dirty/unpushed state.
+- Loading, disconnected, denied, failed, and stale states always expose a durable recovery action; toasts are never the only error explanation.
+- Restoring/importing sessions never grants workspace trust or execution authority.
+- Phone clients can disconnect, hide, or change layout without stopping host work.
+- Operational text and controls meet AA contrast and remain usable at 200% zoom.
 
 Immediate implementation sequence:
 
-1. Add an audited runtime capability for “Open in IDE” with trusted-workspace containment and explicit unavailable/error states. Keep editor discovery and process spawning outside React components.
-2. Build one archive-and-cleanup dialog from managed-worktree status: archive only, archive and keep worktree, remove clean/pushed worktree, or force cleanup after a full dirty/unpushed preview and explicit confirmation.
-3. Stabilize Monaco model disposal during rapid Changes/Review or session switches, then add keyboard and E2E coverage for finding → stage → commit → push → PR preparation, plan-mode denial, failed validation recovery, narrow Review panes, and the New Task direct-path repository flow.
-4. Only after this lifecycle is durable, add general-purpose continue/steer and resource-pressure UX so resumed work cannot obscure or invalidate prior handoff evidence.
+1. Complete the UX Recovery milestone above; do not expand Enterprise, Automate, Extend, or native feature parity while P0/P1 lifecycle and coherence findings remain open.
+2. Add an audited runtime capability for “Open in IDE” with trusted-workspace containment and explicit unavailable/error states. Keep editor discovery and process spawning outside React components.
+3. Build one archive-and-cleanup flow from managed-worktree status: archive only, archive and keep worktree, remove clean/pushed worktree, or force cleanup after a full dirty/unpushed preview and explicit confirmation.
+4. Stabilize Monaco model disposal during rapid Changes/Review or session switches, then add keyboard and E2E coverage for finding → validate → stage → commit → push → PR preparation, plan-mode denial, failed validation recovery, compact Review panes, and New Task direct-path repository flow.
+5. Only after lifecycle state is durable and coherent, add general-purpose continue/steer and resource-pressure UX so resumed work cannot obscure or invalidate prior handoff evidence.
 
 ### Then — Review And Validation As Evidence
 
@@ -156,10 +191,11 @@ Near-term runtime work:
 
 Native track gates:
 
+- Canonical navigation, state/outcome vocabulary, trust receipt, cancellation scope, recovery states, and accessibility behavior are specified independently of the current React component layout.
 - A WinUI host can supervise the bundled runtime, bootstrap a token in memory, and render a session inbox.
 - Native trace, diff, composer, approval, validation, settings, and accessibility prototypes meet quality budgets before product cutover.
 - No WebView/browser is required in the end-user shell.
-- The React UI remains the only feature-complete surface until native parity is real; do not maintain two independently evolving product designs.
+- The React UI remains the only broad-capability surface until native parity is real; it is a dogfood client for the shared contracts, not a layout/status model to copy while its UX audit remains open. Do not maintain two independently evolving product designs.
 
 See `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md` for the current boundary and cutover plan.
 
@@ -179,9 +215,12 @@ See `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md` for the current boundary and cut
 | Recent session | First useful content in under 500 ms |
 | Stream ingest | Under 16 ms main-thread work per burst after batching |
 | Reliability | No silent loss of session/job terminal state after restart |
+| Startup recovery | Usable inbox or actionable recovery within 2.5 seconds; no indefinite loading |
+| Lifecycle intent | Client hide, disconnect, reload, or layout change never stops host work |
 | Isolation | No concurrent/background run writes to the main checkout by default |
 | Review | Every changed file has risk, cause when known, validation state, and next action |
-| Accessibility | Full core loop by keyboard; visible focus; reduced motion; AA contrast |
+| State coherence | Job, session, run, review, and handoff labels cannot contradict and include provenance |
+| Accessibility | Full core loop by keyboard and at 200% zoom; visible focus; reduced motion; screen-reader smoke; AA contrast |
 | Security | Every privileged action is trusted, policy-checked, approval-gated when required, and audited |
 
 ## Competitive Context
@@ -197,6 +236,7 @@ Official product documentation checked on 2026-07-11 shows the desktop bar now i
 ## Documentation Ownership
 
 - This file: current product priorities, sequence, and acceptance criteria.
+- `docs/UX_AUDIT.md`: active substantial UX findings, evidence, required outcomes, and closure policy.
 - `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md`: runtime/native boundary and migration plan.
 - `docs/SECURITY_POSTURE.md`: active threat model and controls.
 - `docs/RELEASE_CHECKLIST.md`: shippable verification gates.

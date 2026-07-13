@@ -1,10 +1,10 @@
 # Spok Runtime And Native Desktop Architecture
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 Status: the shared Node runtime and supervised contributor dogfood path are operational. The end-user native Windows UI has not started.
 
-This document defines the current runtime boundary and the migration from the React/Tauri dogfood application to a native Windows product. Product priority and sequencing live in `docs/HARNESS_AUDIT_AND_ROADMAP.md`; security controls live in `docs/SECURITY_POSTURE.md`.
+This document defines the current runtime boundary and the migration from the React/Tauri dogfood application to a native Windows product. Product priority and sequencing live in `docs/HARNESS_AUDIT_AND_ROADMAP.md`; the current interaction defects and UX contracts live in `docs/UX_AUDIT.md`; security controls live in `docs/SECURITY_POSTURE.md`.
 
 ## Binding Decisions
 
@@ -33,7 +33,7 @@ flowchart LR
   NATIVE["Future native Windows UI"] -.->|"loopback + token"| RT
 ```
 
-The current UI is feature-complete and remains the design reference while runtime contracts stabilize. `npm run dev:app` dogfoods the standalone runtime behind that UI; `npm run dev` continues to use Next-hosted adapters directly.
+The current UI is capability-rich but is not a quality or interaction reference until the P0/P1 findings in `docs/UX_AUDIT.md` close. `npm run dev:app` dogfoods the standalone runtime behind that UI; `npm run dev` continues to use Next-hosted adapters directly. Native work must reuse stable domain and UX contracts, not copy the current navigation, modal hierarchy, status vocabulary, passive mobile cancellation, or dense visual treatment.
 
 ### Runtime-owned routes
 
@@ -126,6 +126,18 @@ Before native UI implementation expands, add a capability response containing:
 
 ## Migration Sequence
 
+### U0 — Stabilize lifecycle and UX contracts
+
+Before native product UI expansion:
+
+1. Define canonical job/session/run/turn/review/handoff states and legal transitions.
+2. Define startup/recovery, stale/disconnected, trust, effective policy, approval, stop, archive, and cleanup interaction contracts.
+3. Guarantee that client hide/disconnect/reload/layout changes cannot stop host work.
+4. Make restore/import authority-neutral and require explicit trust renewal for privileged actions.
+5. Establish navigation, keyboard, screen-reader, contrast, zoom, and compact/standard/wide acceptance tests independent of React component structure.
+
+Exit: the React dogfood surface passes the P0/P1 outcomes in `docs/UX_AUDIT.md`, and the contracts are testable by any future client.
+
 ### A1 — Finish the standalone runtime
 
 1. Extract automation schedules/channels and notification APIs; the durable job ledger is already standalone-runtime owned.
@@ -146,7 +158,7 @@ Exit: a minimal host can start, health-check, stop, restart, and upgrade the run
 
 ### N0 — Native shell proof
 
-Build a small WinUI host that supervises the packaged runtime and implements repository selection/trust, session inbox, settings bootstrap, keyboard navigation, theming, accessibility, and diagnostics.
+Build a small WinUI host that supervises the packaged runtime and implements repository selection/trust, recoverable startup, canonical session inbox states/next actions, settings bootstrap, keyboard navigation, theming, accessibility, and diagnostics.
 
 This is a quality/architecture proof, not a second feature roadmap. Stop if startup, memory, accessibility, or developer velocity do not justify the native track.
 
@@ -173,6 +185,9 @@ Package, sign, update, migrate, and soak the native product. Keep the React UI a
 | Repository open/trust and policy selection | Yes |
 | Multiple isolated sessions and durable recovery | Yes |
 | Live stream, stop, approval, and error handling | Yes |
+| Client disconnect never implies stop; cancellation scope is explicit | Yes |
+| Canonical job/session/run/review/handoff state and provenance | Yes |
+| Actionable startup, stale, disconnected, denied, and recovery states | Yes |
 | Virtualized thinking/event views | Yes |
 | High-quality unified/split diff with issue/causal navigation | Yes |
 | Validation evidence and artifacts | Yes |
@@ -207,6 +222,7 @@ For runtime work:
 - `node scripts/dev-app.mjs --check` when launcher/proxy behavior changes;
 - `npm test` and `npm run build` before integration;
 - explicit tests for token/origin/host denial, untrusted paths, policy denial, cancellation, child-tree cleanup, and restart recovery.
+- client contract tests proving hide/disconnect/reload does not stop runs, restore/import grants no trust, and global lifecycle actions require explicit scoped intent.
 
 For native work:
 
@@ -223,4 +239,5 @@ For native work:
 - Making Tauri/WebView the permanent product shell.
 - Introducing Hono, Vite, or another framework solely to satisfy an obsolete intermediate plan.
 - Starting two independent product designs before shared lifecycle/API contracts stabilize.
+- Treating the current React navigation, modal structure, status labels, or Enterprise visualization as native requirements before the UX audit closes.
 - Sacrificing trace, diff, validation, accessibility, or review quality to claim a native shell is “done.”

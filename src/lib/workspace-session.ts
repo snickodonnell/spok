@@ -1,11 +1,11 @@
 "use client";
 
 import { useSpokStore } from "@/lib/store";
-import { trustWorkspace } from "@/lib/local-api-client";
 import { saveRecentDir } from "@/components/shell/directory-navigator";
 import {
+  findWorkspaceRunConflict,
   isDifferentWorkspace,
-  stopPreviousSessionForWorkspaceChange,
+  stopHarnessProcess,
 } from "@/lib/session-lifecycle-client";
 
 const LAST_CWD_KEY = "spok.lastCwd";
@@ -21,18 +21,27 @@ export type OpenWorkspaceOpts = {
    * When the directory changes vs the active session, a new session is required.
    */
   forceNewSession?: boolean;
+  /** Explicit decision for a live run in this exact foreground checkout. */
+  conflictDecision?: "reuse" | "stop";
 };
 
 /**
  * Trust a directory and open a fresh live session pointed at it.
  * Used by Launch dialog, "New session", and command palette.
  *
- * On directory change: stops any live harness on the previous active session
- * and always starts a **new** session for the new cwd (mobile-friendly).
+ * Repository context changes never stop unrelated work. If the exact same
+ * foreground checkout is already live, the safe default reuses that session;
+ * stopping it requires the caller's explicit scoped decision.
  */
 export async function openWorkspaceSession(
   opts: OpenWorkspaceOpts
-): Promise<{ sessionId: string; root: string; name: string; isNewDirectory: boolean }> {
+): Promise<{
+  sessionId: string;
+  root: string;
+  name: string;
+  isNewDirectory: boolean;
+  reusedExisting: boolean;
+}> {
   const cwd = opts.cwd.trim();
   if (!cwd) throw new Error("Working directory is required");
 
@@ -42,13 +51,47 @@ export async function openWorkspaceSession(
     : null;
   const prevCwd = prevActive?.config.cwd;
 
-  const trusted = await trustWorkspace(cwd);
-  const root = trusted.root;
+  let conflict = findWorkspaceRunConflict(cwd, store.sessions);
+  if (conflict && opts.conflictDecision !== "stop") {
+    store.setActiveSession(conflict.sessionId);
+    store.setViewMode("workspace");
+    store.setProductMode("run");
+    return {
+      sessionId: conflict.sessionId,
+      root: conflict.cwd,
+      name: conflict.name,
+      isNewDirectory: false,
+      reusedExisting: true,
+    };
+  }
+
+  if (conflict && opts.conflictDecision === "stop") {
+    await stopHarnessProcess(conflict.sessionId);
+  }
+
+  // Opening context is authority-neutral. Callers that intend to execute must
+  // obtain an explicit trust decision before they invoke this helper.
+  const root = cwd;
   const command = (opts.command?.trim() || "grok").trim() || "grok";
   const isNewDirectory = isDifferentWorkspace(prevCwd, root);
 
-  // Always stop any live host process first — never block on "active session"
-  await stopPreviousSessionForWorkspaceChange(root);
+  // Re-check after canonicalization so aliases cannot bypass same-checkout safety.
+  conflict = findWorkspaceRunConflict(root, useSpokStore.getState().sessions);
+  if (conflict && opts.conflictDecision !== "stop") {
+    store.setActiveSession(conflict.sessionId);
+    store.setViewMode("workspace");
+    store.setProductMode("run");
+    return {
+      sessionId: conflict.sessionId,
+      root: conflict.cwd,
+      name: conflict.name,
+      isNewDirectory: false,
+      reusedExisting: true,
+    };
+  }
+  if (conflict && opts.conflictDecision === "stop") {
+    await stopHarnessProcess(conflict.sessionId);
+  }
 
   saveRecentDir(root);
   try {
@@ -99,7 +142,7 @@ export async function openWorkspaceSession(
   store.setViewMode("workspace");
   store.setProductMode("run");
 
-  return { sessionId, root, name, isNewDirectory };
+  return { sessionId, root, name, isNewDirectory, reusedExisting: false };
 }
 
 /**

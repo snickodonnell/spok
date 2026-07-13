@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSpokStore } from "@/lib/store";
 import {
@@ -11,7 +11,6 @@ import {
   materializeDurableSessionOnce,
   metaShellSession,
 } from "@/lib/session-hydrate";
-import { trustWorkspace } from "@/lib/local-api-client";
 import { fetchSettings } from "@/lib/settings-client";
 import { writeCachedUiPrefs } from "@/lib/ui-prefs-cache";
 import { startMark } from "@/lib/perf";
@@ -31,6 +30,24 @@ export type SessionHydrationOptions = {
   preferSnapshot?: boolean;
 };
 
+export type SessionHydrationState =
+  | { phase: "restoring"; attempt: number; operation: string }
+  | { phase: "ready"; attempt: number; restoredCount: number }
+  | {
+      phase: "recovery";
+      attempt: number;
+      operation: string;
+      message: string;
+      timedOut: boolean;
+    }
+  | { phase: "continued"; attempt: number; operation: string };
+
+export type SessionHydrationController = {
+  state: SessionHydrationState;
+  retry: () => void;
+  continueWithoutRestoredSessions: () => void;
+};
+
 /**
  * Progressive boot restore (optimized for perceived launch speed):
  * 1. UI theme already applied from localStorage (layout boot script + store seed).
@@ -40,8 +57,16 @@ export type SessionHydrationOptions = {
  * 5. Background-fill other sessions from lean snapshots.
  * 6. Trust cwds once per unique path after UI is up.
  */
-export function useSessionHydration(opts: SessionHydrationOptions = {}) {
-  const started = useRef(false);
+export function useSessionHydration(
+  opts: SessionHydrationOptions = {}
+): SessionHydrationController {
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<SessionHydrationState>({
+    phase: "restoring",
+    attempt: 1,
+    operation: "List saved sessions",
+  });
+  const generationRef = useRef(0);
   const hydrateSession = useSpokStore((s) => s.hydrateSession);
   const setHydrated = useSpokStore((s) => s.setHydrated);
   const setHydrating = useSpokStore((s) => s.setHydrating);
@@ -57,22 +82,55 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
     (s) => s.setAutomationMaxConcurrent
   );
 
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
+  const retry = useCallback(() => {
+    setAttempt((value) => value + 1);
+  }, []);
 
+  const continueWithoutRestoredSessions = useCallback(() => {
+    generationRef.current += 1;
+    const nextAttempt = attempt + 1;
+    setHydrated(true);
+    setHydrating(false);
+    setState({
+      phase: "continued",
+      attempt: nextAttempt,
+      operation: "Restore skipped for this launch",
+    });
+  }, [attempt, setHydrated, setHydrating]);
+
+  useEffect(() => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
     let cancelled = false;
     let uiUnblocked = false;
+    let terminalFailure = false;
+    const attemptNumber = attempt + 1;
     const bootMark = startMark("app_boot");
+
+    const isCurrent = () =>
+      !cancelled && generationRef.current === generation;
+
+    setState({
+      phase: "restoring",
+      attempt: attemptNumber,
+      operation: "List saved sessions",
+    });
 
     // Short deadline — UI must not stay on "Restoring…" even if disk is slow.
     const bootDeadline = window.setTimeout(() => {
-      if (cancelled || uiUnblocked) return;
-      console.warn("[spok] hydration deadline — showing UI anyway");
+      if (!isCurrent() || uiUnblocked) return;
+      console.warn("[spok] hydration deadline — showing recovery actions");
       uiUnblocked = true;
       setHydrated(true);
       setHydrating(false);
       bootMark.end({ reason: "deadline" });
+      setState({
+        phase: "recovery",
+        attempt: attemptNumber,
+        operation: "List saved sessions",
+        message: "The session store did not respond within 2.5 seconds.",
+        timedOut: true,
+      });
     }, 2_500);
 
     const applySettingsBundle = (settings: Awaited<
@@ -102,18 +160,20 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
       });
     };
 
-    const unblockUi = () => {
+    const unblockUi = (restoredCount: number) => {
       window.clearTimeout(bootDeadline);
-      if (cancelled || uiUnblocked) return;
-      uiUnblocked = true;
-      setHydrated(true);
-      setHydrating(false);
-      bootMark.end({ reason: "shells_ready" });
+      if (!isCurrent()) return;
+      if (!uiUnblocked) {
+        uiUnblocked = true;
+        setHydrated(true);
+        setHydrating(false);
+        bootMark.end({ reason: "shells_ready" });
+      }
+      setState({ phase: "ready", attempt: attemptNumber, restoredCount });
     };
 
     (async () => {
       setHydrating(true);
-      const trustedCwds = new Set<string>();
       try {
         let maxRestore = opts.maxSessions ?? 12;
 
@@ -132,14 +192,11 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
           })
           .catch(() => null);
 
-        const metasP = listDurableSessions().catch((e) => {
-          console.warn("[spok] list sessions failed (LAN?)", e);
-          return [] as SessionMetaRecord[];
-        });
+        const metasP = listDurableSessions();
 
         // Prefer metas first for shells; settings can land whenever.
         const metas = await metasP;
-        if (cancelled) return;
+        if (!isCurrent()) return;
 
         // If settings already resolved, pick up maxRestore; else don't wait.
         void settingsP;
@@ -149,7 +206,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
 
         if (metas.length === 0) {
           await settingsP.catch(() => null);
-          unblockUi();
+          unblockUi(0);
           return;
         }
 
@@ -166,7 +223,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
 
         // 1) Sidebar shells immediately (no body IO)
         for (const meta of toLoad) {
-          if (cancelled) return;
+          if (!isCurrent()) return;
           hydrateSession(metaShellSession(meta), { activate: false });
         }
 
@@ -177,11 +234,11 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
         }
 
         // 3) Unblock UI before any multi-MB snapshot parse
-        unblockUi();
-        if (!cancelled && toLoad.length > 0) {
+        unblockUi(toLoad.length);
+        if (isCurrent() && toLoad.length > 0) {
           // Defer toast so it doesn't fight first paint
           window.setTimeout(() => {
-            if (cancelled) return;
+            if (!isCurrent()) return;
             toast.message(
               toLoad.length === 1
                 ? "Restored session"
@@ -197,20 +254,21 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
               activeMeta,
               "full"
             );
-            if (cancelled) return;
+            if (!isCurrent()) return;
             // Don't clobber if user already navigated away
             const still =
               useSpokStore.getState().activeSessionId === activeMeta.id ||
               useSpokStore.getState().sessions[activeMeta.id]?.hydratePartial;
-            if (still) {
+            if (still && session.hydratePartial) {
+              useSpokStore.getState().updateSession(activeMeta.id, {
+                restoreState: "unavailable",
+                restoreError: "Saved session details are unavailable",
+              });
+            } else if (still) {
               hydrateSession(session, {
                 activate:
                   useSpokStore.getState().activeSessionId === activeMeta.id,
               });
-            }
-            if (session.config.cwd && !trustedCwds.has(session.config.cwd)) {
-              trustedCwds.add(session.config.cwd);
-              void trustWorkspace(session.config.cwd).catch(() => undefined);
             }
           } catch (e) {
             console.warn(
@@ -218,6 +276,12 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
               activeMeta.id,
               e
             );
+            if (isCurrent()) {
+              useSpokStore.getState().updateSession(activeMeta.id, {
+                restoreState: "unavailable",
+                restoreError: "Saved session details could not be restored",
+              });
+            }
           }
         }
 
@@ -227,7 +291,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
         // 5) Background: lean snapshot-fill other sessions
         const rest = toLoad.filter((m) => m.id !== activeMeta?.id);
         for (const meta of rest) {
-          if (cancelled) return;
+          if (!isCurrent()) return;
           try {
             await new Promise<void>((r) => {
               if (typeof requestIdleCallback === "function") {
@@ -236,7 +300,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
                 setTimeout(r, 16);
               }
             });
-            if (cancelled) return;
+            if (!isCurrent()) return;
 
             const existing = useSpokStore.getState().sessions[meta.id];
             if (existing && !existing.hydratePartial) continue;
@@ -245,25 +309,47 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
               meta,
               "snapshot"
             );
-            if (cancelled) return;
-            if (session.hydratePartial) continue;
+            if (!isCurrent()) return;
+            if (session.hydratePartial) {
+              useSpokStore.getState().updateSession(meta.id, {
+                restoreState: "unavailable",
+                restoreError: "Saved session details are unavailable",
+              });
+              continue;
+            }
 
             hydrateSession(session, { activate: false });
-
-            if (session.config.cwd && !trustedCwds.has(session.config.cwd)) {
-              trustedCwds.add(session.config.cwd);
-              void trustWorkspace(session.config.cwd).catch(() => undefined);
-            }
           } catch (e) {
             console.warn("[spok] background restore failed", meta.id, e);
+            if (isCurrent()) {
+              useSpokStore.getState().updateSession(meta.id, {
+                restoreState: "unavailable",
+                restoreError: "Saved session details could not be restored",
+              });
+            }
           }
         }
 
       } catch (e) {
         console.warn("[spok] session hydration failed", e);
+        if (isCurrent()) {
+          terminalFailure = true;
+          const message = e instanceof Error ? e.message : "Unknown restore error";
+          uiUnblocked = true;
+          setHydrated(true);
+          setHydrating(false);
+          bootMark.end({ reason: "restore_failed" });
+          setState({
+            phase: "recovery",
+            attempt: attemptNumber,
+            operation: "List saved sessions",
+            message,
+            timedOut: false,
+          });
+        }
       } finally {
         window.clearTimeout(bootDeadline);
-        if (!cancelled) {
+        if (isCurrent() && !terminalFailure && !uiUnblocked) {
           setHydrated(true);
           setHydrating(false);
         }
@@ -275,6 +361,7 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
       window.clearTimeout(bootDeadline);
     };
   }, [
+    attempt,
     hydrateSession,
     setHydrated,
     setHydrating,
@@ -339,16 +426,22 @@ export function useSessionHydration(opts: SessionHydrationOptions = {}) {
           useSpokStore.getState().hydrateSession(full, {
             activate: useSpokStore.getState().activeSessionId === id,
           });
-          if (full.config.cwd) {
-            void trustWorkspace(full.config.cwd).catch(() => undefined);
-          }
         } catch (e) {
           console.warn("[spok] lazy materialize failed", id, e);
+          const current = useSpokStore.getState().sessions[id];
+          if (current) {
+            useSpokStore.getState().updateSession(id, {
+              restoreState: "unavailable",
+              restoreError: "Saved session details could not be restored",
+            });
+          }
         }
       })();
     });
     return unsub;
   }, []);
+
+  return { state, retry, continueWithoutRestoredSessions };
 }
 
 /** Ensure a live workspace is registered durably (e.g. after open-repo). */

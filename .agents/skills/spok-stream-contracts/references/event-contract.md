@@ -6,6 +6,8 @@ Spok should keep three layers separate:
 2. Normalized `StreamEvent`: versioned app event used by reducers, replay, import/export, and tests.
 3. Materialized UI state: `Session`, `TraceNode`, `FileDiff`, metrics, selections, and file tree.
 
+Materialized state must also expose lifecycle provenance. Job status, session availability, process run status, task outcome, review readiness, and Git handoff are different dimensions; clients must not collapse them into a single optimistic `completed` flag.
+
 ## Current Normalized Event Fields
 
 Defined in `src/lib/types.ts`:
@@ -36,6 +38,9 @@ Defined in `src/lib/types.ts`:
 - `approvalId`: link privileged action to approval record.
 - `worktreeId` and `branch`: link events to isolation context.
 - Stronger Zod-driven adapter boundaries per provider.
+- `lifecycle`: versioned transition record with dimension (`job`, `session`, `run`, `turn`, `task`, `review`, `handoff`), from/to state, reason, source event id, and timestamp.
+- `terminalOutcome`: `succeeded` | `failed` | `cancelled` | `interrupted` | `inconclusive`, distinct from process exit and review readiness.
+- `reviewReadiness`: `not_ready` | `needs_attention` | `ready` | `accepted`, with validation/finding provenance.
 
 ## Reducer Invariants
 
@@ -44,3 +49,7 @@ Defined in `src/lib/types.ts`:
 - A `file_change` must be visible in both trace and diff views.
 - Metrics should be recomputed from materialized nodes/files, not incremented blindly.
 - Import/replay/live mode should flow through the same reducer.
+- A process exit must not set task success, review readiness, mission acceptance, or handoff success without the required evidence for that dimension.
+- Requested/briefed subagents are metadata, not provider lanes; lane state begins only with a provider task/message/report event.
+- Contradictory transitions preserve both inputs, emit a diagnostic, and choose a safe `needs_attention`/`inconclusive` materialization.
+- Imported/restored events preserve source/provenance but confer no trust, approval, or execution authority.

@@ -65,6 +65,7 @@ export function metaShellSession(meta: SessionMetaRecord): Session {
     durable: true,
     eventCount: meta.eventCount ?? 0,
     hydratePartial: true,
+    restoreState: "restoring",
   };
 }
 
@@ -74,6 +75,8 @@ function trimSessionMemory(session: Session, eventCountHint?: number): Session {
   return {
     ...session,
     hydratePartial: false,
+    restoreState: "available",
+    restoreError: undefined,
     durable: true,
     source: "resume",
     status: normalizeStatus(session.status),

@@ -18,6 +18,9 @@ Spok is a privileged local harness for Grok Build. It can browse workspaces, run
 | Job recovery | Active job records are sanitized and persisted before privileged preparation/process launch. On restart, stale in-flight work becomes an explicit interrupted failure; queued work resumes only while its workspace remains trusted. |
 | Enterprise missions | Enterprise adds sanitized, versioned team/turn/acceptance linkage to a normal durable background job. It grants no new command, filesystem, approval, or process authority; initial turns require verified isolation and follow-ups must re-verify the same managed worktree before Grok continuation. |
 | Concurrent approvals | Each pending approval is bound to one session/run and its abort signal. Cancelling a run denies/removes only its request; a later approval cannot supersede or revive another run. |
+| Client lifecycle | Browser/phone hide, unload, disconnect, freeze, navigation, and layout changes are not user authorization to stop a run. Cancellation requires an explicit scoped action and audit event. |
+| Restore/import | Restored or imported data is authority-neutral. It may be inspected without trust, but must never grant/re-grant workspace trust, approvals, command permission, or execution capability. |
+| Destructive scope | Stop, archive, delete, worktree cleanup, and fleet actions identify affected session/run/job/worktree records. Global or irreversible actions require an impact preview and explicit confirmation. |
 | Commands | Default command profiles are restricted. Custom or high-risk profiles require approval unless policy explicitly allows them. |
 | Secrets | Secrets are stored locally, redacted from exports/logs where possible, and treated as sensitive even after redaction. |
 | Desktop | Tauri is an interim shell. It must not gain arbitrary process spawn permissions. The long-term product is native UI plus the shared local runtime. |
@@ -59,7 +62,7 @@ LAN mode is for trusted local networks only. Do not port-forward or expose Spok 
 | File | `~/.spok/workspace-trust.json` (or `$SPOK_HOME/workspace-trust.json`) |
 | Schema | `{ "version": 1, "roots": [{ "path": string, "trustedAt": number }] }` |
 | Paths | Stored via `canonicalizePath` (absolute, Windows drive letter normalized) |
-| Grant | Opening a workspace / `POST /api/workspace/trust` with capability token |
+| Grant | Explicit trust decision during workspace open / `POST /api/workspace/trust` with capability token; session restore/import is never a grant |
 | List | `GET /api/workspace/trust` → `trustedRoots` + `roots` (with timestamps) |
 | Revoke | `DELETE /api/workspace/trust` body `{ "path" }`; Settings → Privacy UI |
 | Audit | `workspace_trust` events on grant and revoke in `~/.spok/audit.ndjson` |
@@ -78,6 +81,8 @@ Trust is process-loaded on first use and rewritten atomically on every mutation.
 | `bypass` | Dangerous mode for disposable environments only. |
 
 Deny rules always win. Approval decisions and security-relevant state changes should be auditable.
+
+Client presentation must show the effective policy and its scope before launch or escalation. A compact provider flag selector or transient toast is not sufficient consent for `bypass`, `always approve`, global stop, or destructive cleanup.
 
 ## Desktop Boundary
 
@@ -126,6 +131,9 @@ Focused checks:
 5. Export diagnostics and confirm no raw capability token or stored secret value appears.
 6. Confirm Tauri config does not grant arbitrary process spawn.
 7. Queue an isolated job and confirm worktree-creation/policy failure launches no process and never uses the main checkout.
+8. Restore/import sessions after revoking trust and confirm they remain inspectable but cannot spawn, browse, or run Git until the user explicitly trusts the workspace again.
+9. Hide, reload, disconnect, freeze, or switch layout on phone/browser clients and confirm active host runs continue.
+10. Attempt scoped and global stop/cleanup actions and confirm authorization, impact preview, audit identity, and unrelated-run preservation.
 
 ## Residual Risks
 
@@ -133,6 +141,8 @@ Focused checks:
 - LAN mode is only as safe as the local network and token handling.
 - Durable job state reconciles after restart, but OS-level orphan-process reconciliation still depends on the future native supervisor/Job Object.
 - Managed worktrees are preserved by default; intentional dirty/unpushed cleanup UX is still required.
+- Phone lifecycle and repository-switch regressions remain release gates: required E2E asserts passive events issue no stop request and exact-checkout conflicts stay scoped to one named session.
+- Restore/import trust neutrality remains a release gate: hydration contains no trust grant, and launch denial E2E proves folder selection alone grants no authority.
 - Redaction can miss novel secret formats.
 - Windows file permissions are best-effort.
 - Future MCP, hooks, plugins, and remote runners increase attack surface unless each permission boundary is explicit and tested.

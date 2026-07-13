@@ -26,6 +26,7 @@ import { resolveThemeEffects } from "@/lib/theme";
 import { PromptComposer } from "@/components/session/prompt-composer";
 import { ThinkingStream } from "@/components/trace/thinking-stream";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
+import { StartupRecovery } from "@/components/shell/startup-recovery";
 import { MobileFolderPicker } from "@/components/mobile/mobile-folder-picker";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,13 @@ const ApprovalOverlay = dynamic(
     import("@/components/shell/approval-overlay").then((m) => m.ApprovalOverlay),
   { ssr: false }
 );
+const DiagnosticsDialog = dynamic(
+  () =>
+    import("@/components/shell/diagnostics-dialog").then(
+      (m) => m.DiagnosticsDialog
+    ),
+  { ssr: false }
+);
 
 type MobileTab = "run" | "think" | "files" | "sessions";
 
@@ -62,8 +70,8 @@ type Props = {
  */
 export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
   // Fast phone boot: few sessions, prefer snapshot over replaying huge event logs
-  useSessionHydration({ maxSessions: 3, preferSnapshot: true });
-  // Kill host process when phone navigates away / closes tab
+  const hydration = useSessionHydration({ maxSessions: 3, preferSnapshot: true });
+  // Client lifecycle only affects presence/connectivity, never host run intent.
   useMobileSessionLifecycle(true);
   // Poll host for live runs + pull thought events (simple refresh)
   const liveWatch = useMobileLiveWatch(true);
@@ -95,7 +103,7 @@ export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
   );
 
   const [tab, setTab] = useState<MobileTab>("run");
-  /** Full-screen folder picker — never blocked by an active session */
+  /** Full-screen repository picker; unrelated runs remain host-owned. */
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
 
   const themeFx = resolveThemeEffects({
@@ -161,6 +169,20 @@ export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
     );
   };
 
+  if (hydration.state.phase === "recovery") {
+    return (
+      <>
+        <StartupRecovery
+          state={hydration.state}
+          onRetry={hydration.retry}
+          onContinue={hydration.continueWithoutRestoredSessions}
+          compact
+        />
+        <DiagnosticsDialog />
+      </>
+    );
+  }
+
   if (hydrating && !hasSessions) {
     return (
       <div
@@ -180,6 +202,7 @@ export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
         themeFx.crtEffects && "crt-flicker"
       )}
       data-testid="mobile-shell"
+      data-shell-usable="true"
     >
       {/* Header */}
       <header className="flex shrink-0 items-center gap-2 border-b border-phosphor-green/15 bg-crt-panel px-3 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
@@ -306,8 +329,7 @@ export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
                       )}
                       {isLive && (
                         <div className="mt-2 text-[11px] text-phosphor-amber">
-                          Changing folder stops the current run and starts a new
-                          session.
+                          This run keeps working if you switch repositories.
                         </div>
                       )}
                     </button>
@@ -456,6 +478,7 @@ export function MobileShell({ layoutPreference, onLayoutPreference }: Props) {
 
       <ImportDialog />
       <ApprovalOverlay />
+      <DiagnosticsDialog />
       <Toaster
         theme="dark"
         position="top-center"

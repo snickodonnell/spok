@@ -20,6 +20,7 @@ describe("session hydrate helpers", () => {
     };
     const shell = metaShellSession(meta);
     assert.equal(shell.hydratePartial, true);
+    assert.equal(shell.restoreState, "restoring");
     assert.equal(shell.status, "ready"); // never restore as running without process
     assert.equal(shell.eventCount, 9000);
     assert.equal(Object.keys(shell.nodes).length, 0);
