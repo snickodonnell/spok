@@ -70,7 +70,7 @@ LAN mode is for trusted local networks only. Do not port-forward or expose Spok 
 | Audit | `workspace_trust` events on grant and revoke in `~/.spok/audit.ndjson` |
 | Containment | `isTrustedWorkspacePath` / `requireTrustedCwd` — path must equal a root or nest under one |
 
-Trust is process-loaded on first use and rewritten atomically on every mutation. Tests should set `SPOK_HOME` to a temp directory so durable writes do not touch the developer’s real home.
+Trust is loaded from the durable file on first use and re-read when that file’s mtime/size changes (cross-process coherence for standalone runtime vs residual Next API). Mutations rewrite the file atomically. Refresh only materializes already-persisted roots — it never grants trust. Tests should set `SPOK_HOME` to a temp directory so durable writes do not touch the developer’s real home.
 
 ## Permission Modes
 

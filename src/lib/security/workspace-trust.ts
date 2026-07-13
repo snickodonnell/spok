@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from "fs";
 import path from "path";
@@ -14,8 +15,11 @@ import { appendAuditEvent } from "./audit";
  * Durable trusted workspace root registry.
  *
  * Persists to `~/.spok/workspace-trust.json` (or `$SPOK_HOME/workspace-trust.json`)
- * so trust survives process restarts. In-memory map is the source of truth after
- * first load; every mutation writes the file atomically.
+ * so trust survives process restarts and stays coherent across Spok processes
+ * (standalone runtime vs residual Next API). Durable file is authority for
+ * already-persisted roots; in-memory is a cache that reloads when the file's
+ * mtime/size changes. Refresh never grants trust, broadens roots, or skips
+ * canonicalizePath — it only re-reads what was already written.
  *
  * Schema v1:
  * `{ "version": 1, "roots": [{ "path": string, "trustedAt": number }] }`
@@ -37,18 +41,50 @@ type TrustFileV1 = {
   roots: TrustedRootEntry[];
 };
 
+/** Observed durable-file identity for cross-process cache invalidation. */
+type DiskStamp = {
+  mtimeMs: number;
+  size: number;
+};
+
 /** path → trustedAt */
 const trustedRoots = new Map<string, number>();
 let loaded = false;
+/** Stamp of the trust file last applied to `trustedRoots`; null if absent. */
+let diskStamp: DiskStamp | null = null;
 
 export function getWorkspaceTrustFilePath(): string {
   return path.join(getSpokHome(), "workspace-trust.json");
 }
 
+function readDiskStamp(): DiskStamp | null {
+  const file = getWorkspaceTrustFilePath();
+  try {
+    if (!existsSync(file)) return null;
+    const st = statSync(file);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
+function stampsEqual(a: DiskStamp | null, b: DiskStamp | null): boolean {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  return a.mtimeMs === b.mtimeMs && a.size === b.size;
+}
+
+/**
+ * Ensure in-memory roots match durable disk state.
+ * Reloads when never loaded or when another process rewrote the trust file.
+ * Does not invent roots — only materializes already-persisted entries.
+ */
 function ensureLoaded(): void {
-  if (loaded) return;
+  const stamp = readDiskStamp();
+  if (loaded && stampsEqual(stamp, diskStamp)) return;
   loaded = true;
   loadFromDisk();
+  diskStamp = readDiskStamp();
 }
 
 function loadFromDisk(): void {
@@ -81,13 +117,16 @@ function persistToDisk(): void {
     const file = getWorkspaceTrustFilePath();
     const payload: TrustFileV1 = {
       version: WORKSPACE_TRUST_SCHEMA_VERSION,
-      roots: listTrustedRootEntries(),
+      roots: [...trustedRoots.entries()]
+        .map(([p, trustedAt]) => ({ path: p, trustedAt }))
+        .sort((a, b) => a.path.localeCompare(b.path)),
     };
     const dir = path.dirname(file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf8");
     renameSync(tmp, file);
+    diskStamp = readDiskStamp();
   } catch {
     /* never break privileged path on trust I/O failure */
   }
@@ -97,6 +136,7 @@ function persistToDisk(): void {
 export function reloadTrustedRootsFromDisk(): void {
   loaded = true;
   loadFromDisk();
+  diskStamp = readDiskStamp();
 }
 
 /**
