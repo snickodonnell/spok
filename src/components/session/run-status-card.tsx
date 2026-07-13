@@ -108,6 +108,7 @@ export function RunStatusCard({
   );
   const setSettingsOpen = useSpokStore((s) => s.setSettingsOpen);
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
+  const setMonitorSelectedJobId = useSpokStore((s) => s.setMonitorSelectedJobId);
   const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
   const setCausalDrawerOpen = useSpokStore((s) => s.setCausalDrawerOpen);
   const setViewMode = useSpokStore((s) => s.setViewMode);
@@ -163,6 +164,7 @@ export function RunStatusCard({
       return;
     }
     if (lifecycle.nextAction.kind === "open_job" && lifecycle.jobId) {
+      setMonitorSelectedJobId(lifecycle.jobId);
       setMonitorOpen(true);
       return;
     }
