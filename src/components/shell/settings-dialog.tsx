@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -49,6 +49,11 @@ import {
   revokeTrustedWorkspace,
   type TrustedRootDto,
 } from "@/lib/local-api-client";
+import { EffectivePolicySummaryView } from "@/components/session/effective-policy-summary";
+import {
+  buildEffectivePolicySummary,
+  POLICY_PRECEDENCE_LINES,
+} from "@/lib/security/effective-policy";
 
 const MODES: AppPermissionMode[] = [
   "manual",
@@ -90,6 +95,27 @@ export function SettingsDialog() {
   >("permissions");
 
   const cwd = session?.config.cwd;
+  const sessionFlags = session?.grokFlags;
+
+  const effectivePolicy = useMemo(() => {
+    const appMode = draft?.permissionMode ?? "manual";
+    return buildEffectivePolicySummary({
+      appPermissionMode: appMode,
+      flags: {
+        alwaysApprove: sessionFlags?.alwaysApprove === true,
+        permissionMode:
+          typeof sessionFlags?.permissionMode === "string"
+            ? sessionFlags.permissionMode
+            : undefined,
+        model:
+          typeof sessionFlags?.model === "string"
+            ? sessionFlags.model
+            : undefined,
+        check: sessionFlags?.check === true,
+      },
+      cwd,
+    });
+  }, [draft?.permissionMode, sessionFlags, cwd]);
 
   const loadTrusted = useCallback(async () => {
     try {
@@ -284,15 +310,41 @@ export function SettingsDialog() {
               <TabsContent value="permissions" className="mt-0 space-y-3">
                 <LayerPicker layer={layer} setLayer={setLayer} hasProject={!!cwd} />
 
+                <section
+                  className="rounded-lg border border-phosphor-green/15 bg-black/30 px-3 py-2.5"
+                  data-testid="policy-chrome-settings"
+                  data-elevated={effectivePolicy.elevated ? "true" : "false"}
+                  data-risk={effectivePolicy.riskTier}
+                >
+                  <h3 className="mb-1.5 text-[11px] font-medium text-phosphor-green/55">
+                    Effective policy
+                  </h3>
+                  <p className="mb-2 text-[10px] leading-relaxed text-phosphor-green/50">
+                    One model for app gate + session provider flags. Deny rules
+                    always win. Elevated provider modes stay visible while active.
+                  </p>
+                  <EffectivePolicySummaryView summary={effectivePolicy} />
+                  <ol className="mt-2 list-decimal space-y-0.5 pl-3.5 text-[10px] text-phosphor-green/45">
+                    {POLICY_PRECEDENCE_LINES.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ol>
+                </section>
+
                 <section>
                   <h3 className="mb-2 text-[11px] font-medium text-phosphor-green/55">
-                    Permission mode
+                    App permission mode (Spok gate)
                     {data?.provenance.permissionMode && (
                       <Badge variant="muted" className="ml-2 normal-case">
                         {data.provenance.permissionMode}
                       </Badge>
                     )}
                   </h3>
+                  <p className="mb-2 text-[10px] text-phosphor-green/45">
+                    Controls Spok privileged actions (spawn, git, file, export).
+                    Separate from Grok CLI session flags set in the composer
+                    (/permission-mode, /always-approve).
+                  </p>
                   <div className="grid gap-2">
                     {MODES.map((mode) => {
                       const meta = PERMISSION_MODE_META[mode];

@@ -20,12 +20,14 @@ import {
   Folder,
   GitBranch,
   Shield,
+  ShieldAlert,
   Terminal,
   Monitor,
   AlertCircle,
   CheckCircle2,
   Loader2,
 } from "lucide-react";
+import { buildEffectivePolicySummary } from "@/lib/security/effective-policy";
 import { cn } from "@/lib/utils";
 
 /**
@@ -56,6 +58,22 @@ export function StatusLine() {
       : false
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const grokFlags = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.grokFlags
+      : undefined
+  );
+  const effectivePolicy = buildEffectivePolicySummary({
+    appPermissionMode,
+    flags: {
+      alwaysApprove: grokFlags?.alwaysApprove === true,
+      permissionMode:
+        typeof grokFlags?.permissionMode === "string"
+          ? grokFlags.permissionMode
+          : undefined,
+    },
+    cwd,
+  });
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [cliLoading, setCliLoading] = useState(false);
   const desktop = isDesktopRuntime();
@@ -119,13 +137,30 @@ export function StatusLine() {
       )}
 
       <span
-        className="inline-flex items-center gap-1"
-        title="Permission mode"
+        className={cn(
+          "inline-flex max-w-[220px] items-center gap-1",
+          effectivePolicy.elevated
+            ? "text-red-400"
+            : "text-phosphor-green/55"
+        )}
+        title={effectivePolicy.headline}
+        data-testid="policy-chrome-status-line"
+        data-elevated={effectivePolicy.elevated ? "true" : "false"}
+        data-risk={effectivePolicy.riskTier}
       >
-        <Shield className="h-3 w-3 text-phosphor-cyan/70" />
-        <span className="font-mono uppercase tracking-wider">
-          {appPermissionMode}
+        {effectivePolicy.elevated ? (
+          <ShieldAlert className="h-3 w-3 shrink-0 text-red-400" />
+        ) : (
+          <Shield className="h-3 w-3 shrink-0 text-phosphor-cyan/70" />
+        )}
+        <span className="truncate font-mono tracking-wide">
+          {effectivePolicy.appLabel} · {effectivePolicy.providerLabel}
         </span>
+        {effectivePolicy.elevated && (
+          <span className="shrink-0 uppercase tracking-wider text-red-400">
+            elevated
+          </span>
+        )}
       </span>
 
       <span

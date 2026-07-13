@@ -50,6 +50,7 @@ import {
   requiresEscalationConfirmation,
   type ProviderPermissionSelection,
 } from "@/lib/security/effective-policy";
+import { gateProviderPermissionPatch } from "@/lib/security/slash-permission-gate";
 import { localFetch } from "@/lib/local-api-client";
 import { buildExportPayload } from "@/lib/export-session";
 import {
@@ -418,7 +419,29 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
 
       if (resolved.type === "ui") {
         if (resolved.action === "set-flag" && resolved.flags) {
-          setGrokFlags(session.id, resolved.flags as Record<string, unknown>);
+          const patch = resolved.flags as Record<string, unknown>;
+          // Gate provider permission escalations before setGrokFlags mutates.
+          const gate = gateProviderPermissionPatch(flags, patch);
+          if (gate.kind === "confirm") {
+            setPendingEscalation(gate.selection);
+            setHint(
+              `Confirm elevated permissions: ${gate.selection} (scope/duration dialog)`
+            );
+            toast.message(
+              "Elevated permission requires confirmation — review scope and duration"
+            );
+            return;
+          }
+          if (gate.kind === "apply") {
+            setGrokFlags(session.id, gate.flags);
+            const msg =
+              resolved.message ?? `Permission: ${gate.selection}`;
+            setHint(msg);
+            toast.message(msg);
+            return;
+          }
+          // Non-permission flags (model, debug, …) apply immediately.
+          setGrokFlags(session.id, patch);
           setHint(resolved.message ?? "Flag updated");
           toast.message(resolved.message ?? "Flag updated");
           return;
@@ -649,6 +672,7 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
       attachedSkills,
       selectedAgent,
       clearSelectedSkills,
+      setPendingEscalation,
     ]
   );
 

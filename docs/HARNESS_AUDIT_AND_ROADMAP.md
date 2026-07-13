@@ -57,15 +57,15 @@ Spok already has a broad capability spine:
 
 - Durable sessions, snapshot-first restore, replay/import/export, raw event preservation, parser fixtures, batched stream reduction, selective subscriptions, and virtualized high-volume views.
 - A review workbench with risk ordering, trace-linked diffs, findings, validation recipes, Git state, and guided handoff records.
-- A versioned inbox lifecycle projection that separates attention, active, queued, failed, review-ready, finished, and ready states; contradictions become diagnostics and job-only rows have a real detail target. Monitor and Run now consume the same projection via `session-lifecycle-projection` (review readiness and handoff surfaces still incomplete).
+- A versioned inbox lifecycle projection that separates attention, active, queued, failed, review-ready, finished, and ready states; contradictions become diagnostics and job-only rows have a real detail target. Monitor, Run, review readiness, and handoff now consume the same projection via `session-lifecycle-projection`, while remaining row E2E/accessibility work keeps UX-005/UX-006 open.
 - A shared privileged Node runtime with capability tokens, loopback/origin checks, durable trust, approvals, audit events, path containment, secret redaction, and thin Next adapters for core routes.
 - Managed-worktree isolation for background jobs, a durable job ledger, restart reconciliation, concurrent approvals, fleet controls, and configurable runner capacity.
-- A thin versioned **Mission v1** domain and privileged API (`src/lib/missions`, `/api/missions`) with milestones, work items, dependency/evidence rules, authority and budget receipts, and checkpoint materialization. It is not yet wired as the user-facing Missions leadership surface.
-- Composer effective-policy summary plus confirm-before-escalation for high-risk provider modes; Settings/Topbar still expose parallel policy chrome.
-- Deterministic long-project performance gates for 100 jobs, 10 lanes, 10k hot events, and checkpoint-first projection under 500 ms (fixture-owned bounds; production `session.nodes` growth after 10k reduce remains a known breach).
+- A thin versioned **Mission v1** domain and privileged API (`src/lib/missions`, `/api/missions`) with milestones, work items, dependency/evidence rules, authority and budget receipts, and checkpoint materialization. The user-facing Missions control room now loads durable Mission v1 evidence through the mission client, while scheduler/supervision breadth remains open.
+- Effective-policy summaries across composer, Settings, Topbar, Run Status, and Status Line share one risk model; high-risk selector and slash-command changes require scope/duration confirmation before mutation.
+- Deterministic long-project performance gates for 100 jobs, 10 lanes, 10k hot events, and checkpoint-first projection under 500 ms. Production `session.nodes` is bounded to `MAX_HOT_NODES = 8000`, including reduce, replay, and hydrate paths.
 - An experimental Spok-led multi-agent mission implementation with durable turns, real provider-lane linkage, same-worktree continuation, and accepted summaries. Its internal name and evidence hierarchy are being migrated; it is not yet the long-project contract.
 
-Direct dogfood evidence still shows release-blocking product defects. Startup/lifecycle/trust defects UX-001, UX-002, UX-003, and UX-008 are closed. UX-004–UX-007 and UX-009–UX-017 remain the current gate. UX-005/UX-006 are advanced on Inbox, Missions, Monitor, and Run but stay open until review/handoff and remaining row E2E/a11y criteria pass.
+Direct dogfood evidence still shows release-blocking product defects. Startup/lifecycle/trust defects UX-001, UX-002, UX-003, and UX-008 are closed. UX-004–UX-007 and UX-009–UX-017 remain the current gate. UX-005/UX-006 now span Inbox, Missions, Monitor, Run, review readiness, and handoff but stay open until remaining row E2E/a11y criteria pass.
 
 ## Ordered Delivery Plan
 
@@ -73,18 +73,18 @@ Direct dogfood evidence still shows release-blocking product defects. Startup/li
 
 Outcome: the current app always reaches a truthful, usable state; no passive client event changes execution; every visible state has one safe next action; the shell stays responsive under load.
 
-Progress verified 2026-07-13 (enterprise mission `spok/enterprise-p0p1-mission` @ `c1b88df`): prior Missions navigation/leadership vocabulary slice retained. Additionally: Monitor and Run project the canonical lifecycle (lane, process, job layers distinct; diagnostics on contradiction; one next action); composer presents an effective-policy summary and blocks high-risk provider escalation until scope/duration confirmation (2/2 permission E2E + 15 unit); deterministic perf gates cover 100 jobs / 10 lanes / 10k hot events / checkpoint-first ≤500 ms (12/12 `test:perf`). Full suite: 351 unit/integration tests, lint, production build, and 9 Chromium E2E (permission + startup/lifecycle subset) pass. Remaining P0 gaps: review/handoff lifecycle consumption, navigation/cleanup, Settings/Topbar policy consolidation, a11y/responsive, and production hot-node bounding.
+Progress verified 2026-07-13 across the two Spok-led enterprise missions and final handoff: Monitor, Run, review readiness, and handoff project distinct lifecycle layers with diagnostic precedence; Missions reads durable Mission v1 evidence; effective-policy chrome shares one model and gates selector plus slash-command escalation; and production hot trace state is bounded at 8,000 nodes. Current verification is 388 unit/integration tests, 19 performance tests, lint, production build, and 5/5 focused Chromium permission scenarios. Remaining P0 gaps are navigation/archive-first cleanup, launch/continue/handoff policy evidence, accessibility/responsive completion, and direct cross-surface interaction coverage.
 
 Build in this order:
 
-1. Finish the canonical lifecycle projection across Inbox, Missions, Run, Monitor, Review, and handoff. **In progress:** Inbox, Missions, Monitor, and Run consume the versioned projection; Review and handoff still need the same legal model. Contradictory durable claims render a diagnostic, never optimistic success.
+1. Finish the canonical lifecycle projection across Inbox, Missions, Run, Monitor, Review, and handoff. **In progress:** all named surfaces now consume or project the versioned lifecycle model, and contradictory durable claims render a diagnostic instead of optimistic success. Remaining closure work is direct cross-surface E2E, row hierarchy, and accessibility evidence.
 2. Replace mixed product-mode/dialog navigation with durable destinations: **Missions, Run, Review, Automate, Extend**. Context tabs remain local to a destination.
 3. Replace direct deletion with archive-first, scope-aware cleanup previews covering durable records, logs, branches, worktrees, dirty files, and unpushed commits.
-4. Present one effective policy summary; require explicit scope/duration confirmation for escalation. **In progress (composer slice):** effective summary + confirm-before-escalation for high-risk provider modes; Settings/Topbar/Run Status duplication and launch/handoff evidence remain.
+4. Present one effective policy summary; require explicit scope/duration confirmation for escalation. **In progress:** composer, Settings, Topbar, Run Status, and Status Line share the effective-policy model; selector and slash-command escalations are gated before mutation. Launch/continue/handoff evidence and mobile parity remain.
 5. Simplify New Task, Run, and composer hierarchy. Put outcome and next action first; move provider/debug detail on demand.
 6. Unify changed files, findings, validation, readiness, and Git handoff in one review workbench.
 7. Meet keyboard, AA contrast, screen-reader, 200% zoom, and compact/standard/wide layout gates.
-8. Enforce performance budgets with release-build telemetry and representative long-project fixtures. **In progress:** representative gates exist and pass; production `session.nodes` after 10k reduce remains unbounded (breach for sequential fix).
+8. Enforce performance budgets with release-build telemetry and representative long-project fixtures. **In progress:** representative gates pass and production `session.nodes` is bounded across reduce/replay/hydrate paths; release-device frame telemetry remains.
 
 Exit criteria:
 

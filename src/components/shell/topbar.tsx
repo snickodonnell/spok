@@ -9,6 +9,7 @@ import {
   Download,
   Settings,
   Shield,
+  ShieldAlert,
   Bell,
   Keyboard,
   Palette,
@@ -30,6 +31,7 @@ import {
   inboxJobsFingerprint,
   inboxSessionFingerprint,
 } from "@/lib/session-inbox";
+import { buildEffectivePolicySummary } from "@/lib/security/effective-policy";
 import { cn } from "@/lib/utils";
 
 const PRODUCT_MODES: ProductMode[] = [
@@ -55,6 +57,27 @@ export function Topbar() {
     (s) => s.automationMaxConcurrent
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const activeGrokFlags = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.grokFlags
+      : undefined
+  );
+  const activeCwd = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.config.cwd
+      : undefined
+  );
+  const effectivePolicy = buildEffectivePolicySummary({
+    appPermissionMode,
+    flags: {
+      alwaysApprove: activeGrokFlags?.alwaysApprove === true,
+      permissionMode:
+        typeof activeGrokFlags?.permissionMode === "string"
+          ? activeGrokFlags.permissionMode
+          : undefined,
+    },
+    cwd: activeCwd,
+  });
   const productMode = useSpokStore((s) => s.productMode);
   const setProductMode = useSpokStore((s) => s.setProductMode);
   const unread = unreadCount(notifications);
@@ -198,22 +221,40 @@ export function Topbar() {
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
-          className="inline-flex items-center gap-1 rounded border border-phosphor-green/20 px-1.5 py-0.5 transition hover:border-phosphor-cyan/40 hover:bg-phosphor-cyan/5"
-          title="Permission mode — open settings"
+          className={cn(
+            "inline-flex max-w-[220px] items-center gap-1 rounded border px-1.5 py-0.5 transition",
+            effectivePolicy.elevated
+              ? "border-red-500/40 bg-red-500/10 hover:border-red-400/60"
+              : "border-phosphor-green/20 hover:border-phosphor-cyan/40 hover:bg-phosphor-cyan/5"
+          )}
+          title={`${effectivePolicy.headline} — open settings`}
+          data-testid="policy-chrome-topbar"
+          data-elevated={effectivePolicy.elevated ? "true" : "false"}
+          data-risk={effectivePolicy.riskTier}
         >
-          <Shield className="h-3 w-3 text-phosphor-cyan/80" />
+          {effectivePolicy.elevated ? (
+            <ShieldAlert className="h-3 w-3 shrink-0 text-red-400" />
+          ) : (
+            <Shield className="h-3 w-3 shrink-0 text-phosphor-cyan/80" />
+          )}
           <Badge
             variant={
-              appPermissionMode === "bypass"
+              effectivePolicy.riskTier === "critical" ||
+              effectivePolicy.riskTier === "high"
                 ? "error"
-                : appPermissionMode === "manual" || appPermissionMode === "plan"
-                  ? "cyan"
-                  : "amber"
+                : effectivePolicy.riskTier === "medium"
+                  ? "amber"
+                  : "cyan"
             }
-            className="h-4 px-1 text-[8px]"
+            className="h-4 max-w-[160px] truncate px-1 text-[8px]"
           >
-            {appPermissionMode}
+            {effectivePolicy.appLabel} · {effectivePolicy.providerLabel}
           </Badge>
+          {effectivePolicy.elevated && (
+            <Badge variant="error" className="h-4 px-1 text-[8px]">
+              Elevated
+            </Badge>
+          )}
         </button>
       </div>
 

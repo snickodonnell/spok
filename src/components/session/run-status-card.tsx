@@ -26,6 +26,7 @@ import {
   type LifecyclePresentationTone,
   type SessionLifecycleProjection,
 } from "@/lib/session-lifecycle-projection";
+import { buildEffectivePolicySummary } from "@/lib/security/effective-policy";
 
 type CliStatus = {
   command: string;
@@ -85,11 +86,10 @@ export function RunStatusCard({
     if (!id) return 0;
     return Object.keys(s.sessions[id]?.files ?? {}).length;
   });
-  const alwaysApprove = useSpokStore(
-    (s) =>
-      s.activeSessionId
-        ? s.sessions[s.activeSessionId!]?.grokFlags?.alwaysApprove === true
-        : false
+  const grokFlags = useSpokStore((s) =>
+    s.activeSessionId
+      ? s.sessions[s.activeSessionId!]?.grokFlags
+      : undefined
   );
   const fileSelected = useSpokStore(
     (s) =>
@@ -99,6 +99,21 @@ export function RunStatusCard({
       )
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const effectivePolicy = useMemo(
+    () =>
+      buildEffectivePolicySummary({
+        appPermissionMode,
+        flags: {
+          alwaysApprove: grokFlags?.alwaysApprove === true,
+          permissionMode:
+            typeof grokFlags?.permissionMode === "string"
+              ? grokFlags.permissionMode
+              : undefined,
+        },
+        cwd,
+      }),
+    [appPermissionMode, grokFlags, cwd]
+  );
   const automationJobs = useSpokStore((s) => s.automationJobs);
   const activeJobCount = useSpokStore(
     (s) =>
@@ -260,21 +275,31 @@ export function RunStatusCard({
         type="button"
         onClick={() => setSettingsOpen(true)}
         className={cn(
-          "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition hover:border-phosphor-cyan/50",
-          alwaysApprove || appPermissionMode === "bypass"
-            ? "border-phosphor-amber/40 bg-phosphor-amber/10 text-phosphor-amber"
-            : "border-phosphor-green/20 text-phosphor-green/65"
+          "inline-flex max-w-[240px] items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition hover:border-phosphor-cyan/50",
+          effectivePolicy.elevated
+            ? "border-red-500/40 bg-red-500/10 text-red-300"
+            : effectivePolicy.riskTier === "medium"
+              ? "border-phosphor-amber/40 bg-phosphor-amber/10 text-phosphor-amber"
+              : "border-phosphor-green/20 text-phosphor-green/65"
         )}
-        title="Permission mode — open settings"
+        title={`${effectivePolicy.headline} — ${effectivePolicy.riskLabel}. Open settings.`}
+        data-testid="policy-chrome-run-status"
+        data-elevated={effectivePolicy.elevated ? "true" : "false"}
+        data-risk={effectivePolicy.riskTier}
       >
-        {alwaysApprove || appPermissionMode === "bypass" ? (
-          <ShieldAlert className="h-3 w-3" />
+        {effectivePolicy.elevated ? (
+          <ShieldAlert className="h-3 w-3 shrink-0" />
         ) : (
-          <Shield className="h-3 w-3" />
+          <Shield className="h-3 w-3 shrink-0" />
         )}
-        <span className="font-mono uppercase tracking-wider">
-          {alwaysApprove ? "always approve" : appPermissionMode}
+        <span className="truncate font-mono tracking-wide">
+          {effectivePolicy.appLabel} · {effectivePolicy.providerLabel}
         </span>
+        {effectivePolicy.elevated && (
+          <span className="shrink-0 font-mono text-[9px] uppercase tracking-wider text-red-400">
+            elevated
+          </span>
+        )}
       </button>
 
       <span
