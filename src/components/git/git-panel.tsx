@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -38,12 +38,15 @@ import {
 } from "@/lib/git/client";
 import { trustWorkspace } from "@/lib/local-api-client";
 import { hunkToUnifiedPatch } from "@/lib/diff-utils";
-import type { GitWorktreeInfo } from "@/lib/git/types";
+import type { GitActionResponse, GitWorktreeInfo } from "@/lib/git/types";
 import type { FileDiff } from "@/lib/types";
 import { classifyFileRisk } from "@/lib/file-risk";
 import { FileRiskBadge } from "@/components/diff/file-risk-badge";
 import { buildReviewSummary } from "@/lib/review-summary";
 import { buildReviewQueue } from "@/lib/review-queue";
+import { buildHandoffFlow, type HandoffActionId } from "@/lib/handoff-flow";
+import { advanceHandoffOutcome } from "@/lib/handoff-record";
+import { CompletionPanel } from "./completion-panel";
 
 type ConfirmState = {
   title: string;
@@ -92,6 +95,8 @@ export function GitPanel() {
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [hunkIdx, setHunkIdx] = useState(0);
+  const commitMessageRef = useRef<HTMLTextAreaElement>(null);
+  const prFormRef = useRef<HTMLDivElement>(null);
 
   const cwd = session?.config.cwd;
   const summary = session?.gitSummary;
@@ -109,6 +114,10 @@ export function GitPanel() {
   const readiness = useCommitReadiness();
   const reviewQueue = useMemo(
     () => (session ? buildReviewQueue(session) : null),
+    [session]
+  );
+  const handoffFlow = useMemo(
+    () => (session ? buildHandoffFlow(session) : null),
     [session]
   );
 
@@ -194,6 +203,34 @@ export function GitPanel() {
   };
 
   const askConfirm = (state: ConfirmState) => setConfirm(state);
+
+  const recordHandoffResult = (
+    action: "commit" | "push" | "pr_create",
+    result: GitActionResponse
+  ) => {
+    if (!session) return;
+    const store = useSpokStore.getState();
+    const latest = store.sessions[session.id];
+    if (!latest) return;
+    const jobId = store.automationJobs.find(
+      (job) => job.sessionId === session.id
+    )?.id;
+    const handoffOutcome = advanceHandoffOutcome({
+      session: latest,
+      jobId,
+      event: {
+        action,
+        ok: result.ok,
+        auditId: result.auditId,
+        error: result.error,
+        commit: result.commit,
+        push: result.push,
+        pullRequest: result.pr,
+      },
+    });
+    store.updateSession(session.id, { handoffOutcome });
+    store.persistSessionNow(session.id);
+  };
 
   const runConfirmed = async (state: NonNullable<ConfirmState>) => {
     setConfirm(null);
@@ -301,6 +338,7 @@ export function GitPanel() {
           amend,
           confirm: true,
         });
+        recordHandoffResult("commit", r);
         if (r.ok) {
           setCommitMsg("");
           setAmend(false);
@@ -325,6 +363,7 @@ export function GitPanel() {
           confirm: true,
           branch: summary?.branch ?? undefined,
         });
+        recordHandoffResult("push", r);
         if (r.ok) toast.success("Pushed");
         else toast.error(r.error || "Push failed");
       },
@@ -507,6 +546,7 @@ export function GitPanel() {
           body: prBody.trim() || undefined,
           confirm: true,
         });
+        recordHandoffResult("pr_create", r);
         if (r.ok) {
           if (r.pr?.url) {
             try {
@@ -578,6 +618,57 @@ export function GitPanel() {
     });
     setCommentDraft("");
     toast.success("Review comment added");
+  };
+
+  const copyReviewSummary = async () => {
+    const reviewSummary = buildReviewSummary(session);
+    await navigator.clipboard.writeText(reviewSummary.clipboard);
+    toast.success("Review summary copied");
+  };
+
+  const openPrDraft = () => {
+    const reviewSummary = buildReviewSummary(session);
+    setPrTitle((current) => current || reviewSummary.title);
+    setPrBody((current) => current || reviewSummary.bodyMarkdown);
+    setShowPr(true);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        prFormRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    });
+  };
+
+  const onHandoffAction = (action: HandoffActionId) => {
+    switch (action) {
+      case "review": {
+        const issue = reviewQueue?.issues[0];
+        if (issue?.fileId) selectFile(issue.fileId);
+        setReviewMode(session.id, true);
+        toast.message(
+          issue ? `${issue.title} · ${issue.detail}` : "Review findings highlighted"
+        );
+        break;
+      }
+      case "stage":
+        void onStage([]);
+        break;
+      case "commit":
+        commitMessageRef.current?.focus();
+        commitMessageRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        break;
+      case "pull":
+        onPull();
+        break;
+      case "push":
+        onPush();
+        break;
+      case "create_pr":
+        openPrDraft();
+        break;
+      case "wait":
+      case "none":
+        break;
+    }
   };
 
   const FileRow = ({ file, zone }: { file: FileDiff; zone: "staged" | "work" }) => {
@@ -705,11 +796,7 @@ export function GitPanel() {
             size="icon"
             className="h-7 w-7"
             title="Copy review summary for PR"
-            onClick={async () => {
-              const summary = buildReviewSummary(session);
-              await navigator.clipboard.writeText(summary.clipboard);
-              toast.success("Review summary copied");
-            }}
+            onClick={() => void copyReviewSummary()}
           >
             <ClipboardCopy className="h-3.5 w-3.5" />
           </Button>
@@ -739,6 +826,16 @@ export function GitPanel() {
           </Button>
         </div>
       </div>
+
+      {handoffFlow && (
+        <CompletionPanel
+          flow={handoffFlow}
+          busy={!!busy}
+          planMode={planMode}
+          onAction={onHandoffAction}
+          onCopySummary={() => void copyReviewSummary()}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* Left: staging lists */}
@@ -822,6 +919,7 @@ export function GitPanel() {
               Commit
             </div>
             <textarea
+              ref={commitMessageRef}
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
               placeholder={
@@ -961,7 +1059,10 @@ export function GitPanel() {
             )}
 
             {showPr && (
-              <div className="space-y-2 rounded-md border border-phosphor-cyan/25 bg-phosphor-cyan/5 p-2">
+              <div
+                ref={prFormRef}
+                className="space-y-2 rounded-md border border-phosphor-cyan/25 bg-phosphor-cyan/5 p-2"
+              >
                 <div className="flex flex-wrap items-center gap-1">
                   <Button
                     type="button"

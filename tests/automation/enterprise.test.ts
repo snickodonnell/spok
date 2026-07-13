@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildEnterpriseCrewStations,
+  buildEnterpriseDeckState,
   buildEnterpriseFollowupPrompt,
   buildEnterpriseMissionPrompt,
   buildEnterpriseTeams,
@@ -10,6 +11,8 @@ import {
   extractEnterpriseCrew,
   extractEnterpriseGoal,
   validateEnterpriseDraft,
+  MAX_ENTERPRISE_AGENTS,
+  MAX_ENTERPRISE_CREW,
   type EnterpriseCrewDraft,
 } from "../../src/lib/enterprise";
 import type { AutomationJob } from "../../src/lib/automation/types";
@@ -120,6 +123,7 @@ describe("Enterprise mission contract", () => {
     assert.deepEqual(extractEnterpriseCrew(prompt), crew);
     assert.match(prompt, /native subagent capabilities/i);
     assert.match(prompt, /do not claim a crew member ran/i);
+    assert.match(prompt, /at most 4 subagents/i);
   });
 
   it("validates repository, assignments, capacity, and unique names", () => {
@@ -138,6 +142,17 @@ describe("Enterprise mission contract", () => {
         crew: [crew[0], { ...crew[1], name: "nova" }],
       }).reason ?? "",
       /unique/i
+    );
+    const overCapacity = [...crew, ...Array.from({ length: 3 }, (_, index) => ({
+      id: `extra-${index}`,
+      name: `Extra ${index}`,
+      assignment: "Help with implementation",
+    }))];
+    assert.equal(MAX_ENTERPRISE_AGENTS, 5);
+    assert.equal(MAX_ENTERPRISE_CREW, 4);
+    assert.match(
+      validateEnterpriseDraft({ goal: "Goal", crew: overCapacity, cwd: "C:\\repo" }).reason ?? "",
+      /5 agents total/i
     );
   });
 
@@ -202,6 +217,90 @@ describe("Enterprise mission contract", () => {
       ),
       true
     );
+  });
+
+  it("places crew on task-driven rooms and uses messages and reports for movement", () => {
+    const briefed = buildEnterpriseDeckState(
+      buildEnterpriseCrewStations(crew, []),
+      {}
+    );
+    assert.equal(
+      briefed.actors.find((actor) => actor.name === "Nova")?.room,
+      "science"
+    );
+    assert.equal(
+      briefed.actors.find((actor) => actor.name === "Patch")?.room,
+      "review"
+    );
+
+    const working = node({
+      id: "sub-nova",
+      type: "subagent",
+      title: "Nova",
+      content: "Starting runtime research",
+      status: "running",
+      subagentId: "nova-lane",
+    });
+    const briefingSession = session([working], "session-briefing-lane");
+    const briefingJob = job({ sessionId: briefingSession.id });
+    const briefing = buildEnterpriseDeckState(
+      buildEnterpriseCrewStations(
+        crew,
+        enterpriseLanes(briefingJob, { [briefingSession.id]: briefingSession })
+      ),
+      briefingSession.nodes
+    );
+    assert.equal(
+      briefing.actors.find((actor) => actor.name === "Nova")?.room,
+      "ready"
+    );
+    assert.equal(briefing.coordination[0]?.label, "task brief");
+
+    const message = node({
+      id: "message-nova",
+      parentId: "sub-nova",
+      type: "message",
+      title: "Nova update",
+      content: "Sending the runtime map to Spok",
+      status: "running",
+      subagentId: "nova-lane",
+      timestamp: 130,
+    });
+    const sess = session([working, message]);
+    const spokJob = job({ sessionId: sess.id });
+    const stations = buildEnterpriseCrewStations(
+      crew,
+      enterpriseLanes(spokJob, { [sess.id]: sess })
+    );
+    const exchanging = buildEnterpriseDeckState(stations, sess.nodes);
+
+    assert.equal(
+      exchanging.actors.find((actor) => actor.name === "Nova")?.room,
+      "comms"
+    );
+    assert.equal(exchanging.coordination[0]?.label, "context message");
+
+    const completed = node({
+      ...working,
+      id: "sub-nova-complete",
+      status: "success",
+      timestamp: 200,
+    });
+    const completedSession = session([completed], "session-completed-lane");
+    const completedJob = job({ sessionId: completedSession.id });
+    const reported = buildEnterpriseDeckState(
+      buildEnterpriseCrewStations(
+        crew,
+        enterpriseLanes(completedJob, { [completedSession.id]: completedSession })
+      ),
+      completedSession.nodes
+    );
+
+    assert.equal(
+      reported.actors.find((actor) => actor.name === "Nova")?.room,
+      "review"
+    );
+    assert.equal(reported.coordination[0]?.label, "task report");
   });
 
   it("builds a continuation prompt from the prior summary and lane evidence", () => {

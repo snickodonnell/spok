@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 import {
   ArrowUp,
   Folder,
@@ -149,8 +149,10 @@ export function DirectoryNavigator({
     onConfirm?.(currentPath);
   };
 
-  const onPathSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const onPathKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    event.stopPropagation();
     if (pathInput.trim()) void browse(pathInput.trim());
   };
 
@@ -167,7 +169,7 @@ export function DirectoryNavigator({
       )}
     >
       {/* Path bar */}
-      <form onSubmit={onPathSubmit} className="flex items-center gap-1 border-b border-phosphor-green/15 p-2">
+      <div className="flex items-center gap-1 border-b border-phosphor-green/15 p-2">
         <Button
           type="button"
           variant="ghost"
@@ -196,6 +198,7 @@ export function DirectoryNavigator({
           className="h-8 flex-1 text-xs"
           placeholder="Path…"
           spellCheck={false}
+          onKeyDown={onPathKeyDown}
         />
         <Button
           type="button"
@@ -212,7 +215,7 @@ export function DirectoryNavigator({
             <RefreshCw className="h-3.5 w-3.5" />
           )}
         </Button>
-      </form>
+      </div>
 
       {/* Breadcrumbs */}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-phosphor-green/10 px-2 py-1.5">

@@ -7,7 +7,8 @@ const GOAL_START = "[SPOK_ENTERPRISE_GOAL]";
 const GOAL_END = "[/SPOK_ENTERPRISE_GOAL]";
 const CREW_START = "[SPOK_ENTERPRISE_CREW]";
 const CREW_END = "[/SPOK_ENTERPRISE_CREW]";
-const MAX_CREW = 8;
+export const MAX_ENTERPRISE_AGENTS = 5;
+export const MAX_ENTERPRISE_CREW = MAX_ENTERPRISE_AGENTS - 1;
 
 export type EnterpriseCrewDraft = {
   id: string;
@@ -43,6 +44,37 @@ export type EnterpriseCrewStation = {
   lane: SubagentLane | null;
   requested: boolean;
   status: "briefed" | "working" | "done" | "error" | "skipped";
+};
+
+export type EnterpriseDeckRoom =
+  | "bridge"
+  | "ready"
+  | "science"
+  | "mission"
+  | "engineering"
+  | "review"
+  | "comms";
+
+export type EnterpriseDeckActor = {
+  id: string;
+  name: string;
+  room: EnterpriseDeckRoom;
+  activity: string;
+  eventAt: number;
+};
+
+export type EnterpriseCoordination = {
+  id: string;
+  from: string;
+  to: string;
+  label: string;
+  eventAt: number;
+  tone: "task" | "message" | "report" | "blocked";
+};
+
+export type EnterpriseDeckState = {
+  actors: EnterpriseDeckActor[];
+  coordination: EnterpriseCoordination[];
 };
 
 function clip(value: string | undefined, max: number): string {
@@ -91,7 +123,7 @@ export function extractEnterpriseCrew(prompt: string): EnterpriseCrewDraft[] {
             : "",
       }))
       .filter((item) => item.id && item.name && item.assignment)
-      .slice(0, MAX_CREW);
+      .slice(0, MAX_ENTERPRISE_CREW);
   } catch {
     return [];
   }
@@ -114,8 +146,11 @@ export function validateEnterpriseDraft(input: {
   if (assigned.length === 0) {
     return { ok: false, reason: "Add at least one crew assignment." };
   }
-  if (assigned.length > MAX_CREW) {
-    return { ok: false, reason: `Enterprise supports up to ${MAX_CREW} crew stations.` };
+  if (assigned.length > MAX_ENTERPRISE_CREW) {
+    return {
+      ok: false,
+      reason: `Enterprise supports ${MAX_ENTERPRISE_AGENTS} agents total: Spok and up to ${MAX_ENTERPRISE_CREW} crew.`,
+    };
   }
   const names = new Set<string>();
   for (const member of assigned) {
@@ -149,6 +184,7 @@ export function buildEnterpriseMissionPrompt(input: {
     manifest,
     "Coordinate this mission using your native subagent capabilities:",
     "- create and lead subagents for the requested assignments; preserve their names when the provider allows it;",
+    `- keep the active crew to at most ${MAX_ENTERPRISE_CREW} subagents so the ship remains legible;`,
     "- identify dependencies and exchange only the context each specialist needs;",
     "- keep work inside the isolated worktree Spok provides;",
     "- integrate and review crew results yourself rather than merely listing them;",
@@ -206,6 +242,128 @@ export function buildEnterpriseCrewStations(
     });
   }
   return stations;
+}
+
+function assignmentRoom(assignment: string): EnterpriseDeckRoom {
+  const value = normalize(assignment);
+  if (/\b(test|tests|review|verify|validation|quality|qa|audit)\b/.test(value)) {
+    return "review";
+  }
+  if (/\b(research|explore|investigate|map|docs|document|analyze|analysis)\b/.test(value)) {
+    return "science";
+  }
+  if (/\b(implement|code|fix|build|refactor|runtime|server|api|database|ui|css)\b/.test(value)) {
+    return "engineering";
+  }
+  return "mission";
+}
+
+function latestLaneNode(
+  station: EnterpriseCrewStation,
+  nodes: Record<string, TraceNode>
+): TraceNode | null {
+  if (!station.lane) return null;
+  const laneIds = new Set(station.lane.nodeIds);
+  return (
+    Object.values(nodes)
+      .filter(
+        (node) =>
+          laneIds.has(node.id) || node.subagentId === station.lane?.id
+      )
+      .sort((a, b) => b.timestamp - a.timestamp)[0] ?? null
+  );
+}
+
+/**
+ * Materialize truthful ship positions from provider-emitted lane activity.
+ * Room changes are deliberate: task work stays at its assigned station, while
+ * explicit messages, starts, reports, and failures move crew through Comms.
+ */
+export function buildEnterpriseDeckState(
+  stations: EnterpriseCrewStation[],
+  nodes: Record<string, TraceNode>
+): EnterpriseDeckState {
+  const actors: EnterpriseDeckActor[] = [];
+  const coordination: EnterpriseCoordination[] = [];
+
+  for (const station of stations.slice(0, MAX_ENTERPRISE_CREW)) {
+    const latest = latestLaneNode(station, nodes);
+    const eventAt = latest?.timestamp ?? station.lane?.startedAt ?? 0;
+    let room: EnterpriseDeckRoom = assignmentRoom(station.assignment);
+    let activity = "Briefed at task station · awaiting lane";
+
+    if (station.status === "working") {
+      const isExchange = latest?.type === "message";
+      const isTaskBrief = latest?.type === "subagent";
+      room = isExchange
+        ? "comms"
+        : isTaskBrief
+          ? "ready"
+          : assignmentRoom(station.assignment);
+      activity = isExchange
+        ? "Exchanging context with Spok"
+        : isTaskBrief
+          ? "Receiving task brief"
+          : "Working assigned task";
+      coordination.push({
+        id: `${station.id}-${eventAt}-working`,
+        from: isExchange ? station.name : "Spok",
+        to: isExchange ? "Spok" : station.name,
+        label: isExchange
+          ? "context message"
+          : isTaskBrief
+            ? "task brief"
+            : "task in progress",
+        eventAt,
+        tone: isExchange ? "message" : "task",
+      });
+    } else if (station.status === "done") {
+      room = "review";
+      activity = "Reporting completed task";
+      coordination.push({
+        id: `${station.id}-${eventAt}-done`,
+        from: station.name,
+        to: "Spok",
+        label: "task report",
+        eventAt,
+        tone: "report",
+      });
+    } else if (station.status === "error") {
+      room = "comms";
+      activity = "Escalating a blocker";
+      coordination.push({
+        id: `${station.id}-${eventAt}-error`,
+        from: station.name,
+        to: "Spok",
+        label: "blocker",
+        eventAt,
+        tone: "blocked",
+      });
+    } else if (station.status === "skipped") {
+      room = "ready";
+      activity = "Task lane skipped";
+    } else if (station.lane) {
+      room = "ready";
+      activity = "Receiving task brief";
+      coordination.push({
+        id: `${station.id}-${eventAt}-brief`,
+        from: "Spok",
+        to: station.name,
+        label: "task brief",
+        eventAt,
+        tone: "task",
+      });
+    }
+
+    actors.push({ id: station.id, name: station.name, room, activity, eventAt });
+  }
+
+  return {
+    actors,
+    coordination: coordination
+      .sort((a, b) => b.eventAt - a.eventAt)
+      .slice(0, MAX_ENTERPRISE_CREW),
+  };
 }
 
 function currentSession(

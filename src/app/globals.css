@@ -297,16 +297,6 @@ html[data-theme="professional"] .diff-remove {
   animation: phosphor-pulse 1.4s ease-in-out infinite;
 }
 
-@keyframes enterprise-walk {
-  0%,
-  100% {
-    transform: translate3d(-4px, 0, 0) rotate(-0.5deg);
-  }
-  50% {
-    transform: translate3d(4px, -3px, 0) rotate(0.5deg);
-  }
-}
-
 @keyframes enterprise-progress {
   0%,
   100% {
@@ -319,17 +309,69 @@ html[data-theme="professional"] .diff-remove {
   }
 }
 
-.enterprise-person-working {
-  animation: enterprise-walk 0.9s steps(2, end) infinite;
-}
-
 .enterprise-progress-active {
   animation: enterprise-progress 1.4s ease-in-out infinite;
 }
 
-.enterprise-person:focus-visible {
+.enterprise-deck-map {
+  width: max-content;
+  max-width: 100%;
+  font-size: clamp(8px, 0.85vw, 12px);
+  line-height: 1.35;
+  text-shadow: 0 0 10px color-mix(in srgb, var(--phosphor-cyan) 18%, transparent);
+}
+
+.enterprise-actor {
+  border-radius: 0.4rem;
+  transition:
+    left 800ms steps(8, end),
+    top 800ms steps(8, end),
+    color 180ms ease,
+    filter 180ms ease;
+}
+
+.enterprise-actor:hover {
+  filter: brightness(1.35) drop-shadow(0 0 5px currentColor);
+}
+
+.enterprise-actor-selected .enterprise-actor-label {
+  outline: 1px solid currentColor;
+  box-shadow: 0 0 12px color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.enterprise-actor-art {
+  filter: drop-shadow(0 0 4px currentColor);
+}
+
+.enterprise-actor:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--phosphor-cyan) 75%, transparent);
   outline-offset: 3px;
+}
+
+.enterprise-route {
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+  opacity: 0.18;
+  border-color: var(--phosphor-cyan);
+}
+
+.enterprise-route-horizontal {
+  left: 14%;
+  right: 14%;
+  top: 39%;
+  border-top: 1px dashed;
+}
+
+.enterprise-route-vertical {
+  top: 16%;
+  bottom: 60%;
+  left: 50%;
+  border-left: 1px dashed;
+}
+
+.enterprise-route-active {
+  animation: enterprise-progress 1.4s steps(2, end) infinite;
 }
 
 .enterprise-grid {
@@ -381,20 +423,33 @@ html[data-theme="professional"] .diff-remove {
     overflow: visible;
   }
   .enterprise-ship {
-    min-height: 18rem;
+    min-height: 23rem;
+  }
+  .enterprise-deck-map {
+    left: 50%;
+    max-width: none;
+    transform: translateX(-50%);
+    font-size: 7px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .enterprise-person-working,
-  .enterprise-progress-active {
+  .enterprise-progress-active,
+  .enterprise-route-active {
     animation: none !important;
+  }
+  .enterprise-actor {
+    transition: none !important;
   }
 }
 
-html.reduce-motion .enterprise-person-working,
-html.reduce-motion .enterprise-progress-active {
+html.reduce-motion .enterprise-progress-active,
+html.reduce-motion .enterprise-route-active {
   animation: none !important;
+}
+
+html.reduce-motion .enterprise-actor {
+  transition: none !important;
 }
 
 html[data-theme="professional"] .live-dot,

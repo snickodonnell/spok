@@ -133,6 +133,70 @@ export interface SessionGitSummary {
   updatedAt: number;
 }
 
+export type HandoffOutcomeAction = "commit" | "push" | "pr_create";
+export type HandoffOutcomeState =
+  | "in_progress"
+  | "committed"
+  | "published"
+  | "pull_request"
+  | "failed";
+
+export interface HandoffReadinessSnapshot {
+  capturedAt: number;
+  sessionStatus: SessionStatus;
+  reviewIssueCount: number;
+  unresolvedComments: number;
+  validationTotal: number;
+  validationPassed: number;
+  validationFailed: number;
+  validationBlocked: number;
+  dirtyCount: number;
+  conflictCount: number;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  headOid?: string;
+}
+
+/** Durable, audit-linked evidence for the Git handoff lifecycle. */
+export interface HandoffOutcomeRecord {
+  version: 1;
+  id: string;
+  sessionId: string;
+  jobId?: string;
+  branch?: string;
+  worktreePath?: string;
+  mainCheckout?: string;
+  state: HandoffOutcomeState;
+  createdAt: number;
+  updatedAt: number;
+  readiness: HandoffReadinessSnapshot;
+  commit?: {
+    oid: string;
+    summary?: string;
+    recordedAt: number;
+    auditId?: string;
+  };
+  push?: {
+    remote?: string;
+    branch?: string;
+    recordedAt: number;
+    auditId?: string;
+  };
+  pullRequest?: {
+    url?: string;
+    number?: number;
+    recordedAt: number;
+    auditId?: string;
+  };
+  failure?: {
+    action: HandoffOutcomeAction;
+    message: string;
+    recordedAt: number;
+    auditId?: string;
+  };
+}
+
 export interface FileTreeNode {
   name: string;
   path: string;
@@ -240,6 +304,8 @@ export interface Session {
   hydratePartial?: boolean;
   /** Cached git branch/status summary for status line + Git panel. */
   gitSummary?: SessionGitSummary;
+  /** Durable evidence from confirmed commit/push/PR handoff actions. */
+  handoffOutcome?: HandoffOutcomeRecord;
   /** Review-mode comments for this session. */
   reviewComments?: ReviewComment[];
   /** When true, review pane is emphasized in the Git panel. */

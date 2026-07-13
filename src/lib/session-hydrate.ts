@@ -162,6 +162,9 @@ function sessionFromReplay(
   if (snapshot?.gitSummary) {
     session.gitSummary = snapshot.gitSummary;
   }
+  if (snapshot?.handoffOutcome) {
+    session.handoffOutcome = snapshot.handoffOutcome;
+  }
   return trimSessionMemory(session, events.length);
 }
 

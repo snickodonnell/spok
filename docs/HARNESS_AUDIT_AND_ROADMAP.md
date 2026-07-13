@@ -48,7 +48,9 @@ The repository already has a strong product spine:
 - A compact New Task flow for repository, optional task, interactive draft versus isolated background execution, and advanced CLI selection; prompt content is never persisted or auto-run.
 - Inbox fleet controls for job-only and session-linked work: stop/cancel, retry, safe duplicate, and queued priority changes with execution/worktree identity stripped from clones.
 - Durable user-configurable background capacity (one to eight runner slots), with non-destructive limit changes and priority/FIFO queue reasons shown consistently in the inbox and Monitor.
-- An Enterprise coordinated-mission surface: one isolated Spok leader turn receives the ultimate goal plus requested crew briefs; Grok's real subagent lanes populate an interactive ASCII ship and filterable per-person trace inspector; versioned turn history preserves prior evidence; and durable same-worktree follow-ups use Grok continuation before persisted accept-to-Run.
+- A responsive Review completion path that derives the next safe handoff action from fresh session, review, validation, and Git state; it routes findings back to review, then guides stage, commit, fast-forward sync, push, PR preparation, and copyable trace-linked summaries through the existing confirmation and policy gates. Confirmed commit, push, and PR outcomes persist as a versioned, audit-linked, secret-safe handoff record tied to the session, background job, branch, and worktree, with the captured readiness evidence restored after restart.
+- Direct-path repository navigation in New Task that handles Enter inside the picker without submitting the enclosing launch flow.
+- An Enterprise coordinated-mission surface: one isolated Spok leader turn receives the ultimate goal plus up to four crew briefs; Grok's real subagent lanes place a five-agent team in task-specific rooms on an interactive ASCII ship, with movement driven by provider task/message/report events rather than ambient animation; the per-person trace inspector, versioned turn history, durable same-worktree follow-ups, and persisted accept-to-Run preserve the underlying evidence.
 - A versioned, atomic, secret-safe automation job ledger linking job/session/worktree/branch/policy/timestamps/outcome, with persist-before-launch guarantees and restart reconciliation for interrupted or still-queued work.
 - Background jobs, schedules, channels, notifications, hooks, skills, MCP discovery foundations, mobile/LAN viewing, and an interim Tauri shell.
 
@@ -56,7 +58,7 @@ The repository already has a strong product spine:
 
 These remaining gaps weaken the core workflow:
 
-1. Task launch now creates the workspace/job boundary, but review handoff, archive, and worktree cleanup are still separate actions rather than one completion lifecycle.
+1. Review now has one derived completion path and a durable outcome record through PR creation, but IDE launch, archive, and worktree cleanup remain separate lifecycle actions.
 2. Validation recipes prefill prompts; they are not yet a structured, cancellable validation runner with durable artifacts.
 3. Automation timers are app-lifetime helpers, not a supervised scheduler with restart recovery and missed-run policy.
 4. Several automation, extension, attachment, secret, and live-runtime routes are still Next-hosted rather than shared standalone-runtime contracts.
@@ -93,7 +95,7 @@ Build in this order:
 
 1. **Fleet policy:** add general-purpose continue/steer and runtime/resource pressure. Enterprise now ships a focused same-worktree team continuation flow; stop, retry, safe duplicate, reprioritize, durable user-configurable concurrency, and explicit capacity/queue-position reasons already ship in the inbox and Monitor.
 2. **Approval recovery:** reconcile expired or runtime-interrupted approvals into explicit session/job outcomes and retain audit-safe decision history without restoring stale authority.
-3. **Handoff:** review readiness gate, commit, push, PR creation, open in IDE, and copy summary from one consistent completion panel.
+3. **Handoff:** the consistent completion panel now ships review-finding recovery, stage/commit/sync/push routing, PR preparation, copy summary, and a durable audit-linked outcome containing commit SHA, push result, PR URL, and readiness evidence. Next, add audited open-in-IDE and show the completed outcome in the inbox.
 4. **Archive and cleanup:** distinguish archive session, keep branch/worktree, remove clean worktree, and force cleanup. Never remove dirty or unpushed work by default.
 5. **Run templates:** implement issue, fix CI, review branch, update dependencies, reproduce bug, and validate touched packages as editable presets—not hard-coded workflows.
 
@@ -103,6 +105,13 @@ UX acceptance:
 - Every session row answers: what is it doing, where is it running, what needs attention, and what can I do next?
 - Keyboard navigation covers create, session cycling, stop, review, validation, and handoff.
 - Destructive cleanup always previews affected session, worktree, branch, and dirty/unpushed state.
+
+Immediate implementation sequence:
+
+1. Add an audited runtime capability for “Open in IDE” with trusted-workspace containment and explicit unavailable/error states. Keep editor discovery and process spawning outside React components.
+2. Build one archive-and-cleanup dialog from managed-worktree status: archive only, archive and keep worktree, remove clean/pushed worktree, or force cleanup after a full dirty/unpushed preview and explicit confirmation.
+3. Stabilize Monaco model disposal during rapid Changes/Review or session switches, then add keyboard and E2E coverage for finding → stage → commit → push → PR preparation, plan-mode denial, failed validation recovery, narrow Review panes, and the New Task direct-path repository flow.
+4. Only after this lifecycle is durable, add general-purpose continue/steer and resource-pressure UX so resumed work cannot obscure or invalidate prior handoff evidence.
 
 ### Then — Review And Validation As Evidence
 

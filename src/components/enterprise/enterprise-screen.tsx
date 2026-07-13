@@ -18,7 +18,6 @@ import {
   Rocket,
   RotateCcw,
   ShieldCheck,
-  Sparkles,
   Square,
   Trash2,
   UsersRound,
@@ -30,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { TraceNodeIcon } from "@/components/trace/trace-node-icon";
 import {
   buildEnterpriseCrewStations,
+  buildEnterpriseDeckState,
   buildEnterpriseFollowupPrompt,
   buildEnterpriseMissionPrompt,
   buildEnterpriseTeams,
@@ -37,9 +37,11 @@ import {
   enterpriseStatusLabel,
   enterpriseTraceNodes,
   enterpriseTurn,
+  MAX_ENTERPRISE_CREW,
   validateEnterpriseDraft,
   type EnterpriseCrewDraft,
   type EnterpriseCrewStation,
+  type EnterpriseDeckRoom,
   type EnterpriseTeam,
 } from "@/lib/enterprise";
 import {
@@ -60,12 +62,7 @@ const ACTIVE_JOB_STATUSES = new Set<AutomationJob["status"]>([
   "waiting_approval",
 ]);
 
-const CREW_ART = [
-  `  o\n /|\\\n / \\`,
-  ` \\o/\n  |\n / \\`,
-  `  O>\n /|\\\n / \\`,
-  ` _o_\n  |\n / \\`,
-] as const;
+const CREW_ART = [` o\n/|\\\n/ \\`, `\\o/\n |\n/ \\`, ` O>\n/|\\\n/ \\`, `_o_\n |\n/ \\`] as const;
 
 const CREW_GLYPHS = ["o/", "\\o", "O>", "^o"] as const;
 
@@ -485,8 +482,8 @@ export function EnterpriseScreen() {
 
           <EnterpriseShip
             team={team}
-            job={selectedJob ?? team.currentJob}
             stations={stations}
+            session={selectedSession}
             selectedPersonId={selectedPersonId}
             onSelect={setSelectedPersonId}
           />
@@ -742,13 +739,13 @@ function EnterpriseDraft({
                   Crew briefs
                 </h2>
                 <p className="mt-0.5 text-[10px] text-phosphor-green/40">
-                  Requested names are matched only to real provider-emitted lanes.
+                  Spok plus up to {MAX_ENTERPRISE_CREW} crew. Names match only real provider lanes.
                 </p>
               </div>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={crew.length >= 8}
+                disabled={crew.length >= MAX_ENTERPRISE_CREW}
                 onClick={addCrew}
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -1022,109 +1019,176 @@ function EnterpriseRoster({
 
 function EnterpriseShip({
   team,
-  job,
   stations,
+  session,
   selectedPersonId,
   onSelect,
 }: {
   team: EnterpriseTeam;
-  job: AutomationJob;
   stations: EnterpriseCrewStation[];
+  session: Session | null;
   selectedPersonId: string;
   onSelect: (id: string) => void;
 }) {
-  const spokWorking = ACTIVE_JOB_STATUSES.has(job.status);
-  const visibleStations = stations.slice(0, 8);
-  const hiddenStations = stations.length - visibleStations.length;
+  const visibleStations = stations.slice(0, MAX_ENTERPRISE_CREW);
+  const deck = useMemo(
+    () => buildEnterpriseDeckState(visibleStations, session?.nodes ?? {}),
+    [visibleStations, session]
+  );
+  const latestCoordination = deck.coordination[0];
+  const spokRoom: EnterpriseDeckRoom =
+    latestCoordination?.tone === "blocked" || latestCoordination?.tone === "message"
+      ? "comms"
+      : latestCoordination?.tone === "report"
+        ? "review"
+        : "bridge";
+  const actors = [
+    {
+      id: "spok",
+      name: "Spok",
+      room: spokRoom,
+      activity: latestCoordination
+        ? `${latestCoordination.from} → ${latestCoordination.to} · ${latestCoordination.label}`
+        : enterpriseStatusLabel(team.status),
+    },
+    ...deck.actors,
+  ];
+  const roomGroups = new Map<EnterpriseDeckRoom, string[]>();
+  for (const actor of actors) {
+    const occupants = roomGroups.get(actor.room) ?? [];
+    occupants.push(actor.id);
+    roomGroups.set(actor.room, occupants);
+  }
+
+  const positionFor = (room: EnterpriseDeckRoom, id: string) => {
+    const centers: Record<EnterpriseDeckRoom, { left: number; top: number }> = {
+      bridge: { left: 50, top: 10 },
+      ready: { left: 69, top: 18 },
+      science: { left: 18, top: 29 },
+      mission: { left: 50, top: 29 },
+      engineering: { left: 82, top: 29 },
+      review: { left: 24, top: 49 },
+      comms: { left: 76, top: 49 },
+    };
+    const occupants = roomGroups.get(room) ?? [id];
+    const index = Math.max(0, occupants.indexOf(id));
+    const slots =
+      occupants.length <= 1
+        ? [{ x: 0, y: 0 }]
+        : occupants.length === 2
+          ? [{ x: -4.5, y: 0 }, { x: 4.5, y: 0 }]
+          : occupants.length === 3
+            ? [{ x: 0, y: -3 }, { x: -4.5, y: 3 }, { x: 4.5, y: 3 }]
+            : [
+                { x: -4.5, y: -3 },
+                { x: 4.5, y: -3 },
+                { x: -4.5, y: 3 },
+                { x: 4.5, y: 3 },
+              ];
+    const slot = slots[index] ?? { x: 0, y: 0 };
+    return {
+      left: `${centers[room].left + slot.x}%`,
+      top: `${centers[room].top + slot.y}%`,
+    };
+  };
   return (
     <section
-      className="enterprise-ship relative min-h-[22rem] overflow-hidden rounded-xl border border-phosphor-cyan/25 bg-black/45 p-4"
+      className="enterprise-ship relative min-h-[24rem] overflow-hidden rounded-xl border border-phosphor-cyan/25 bg-black/55"
       data-testid="enterprise-ship"
-      aria-label="Enterprise crew deck"
+      aria-label="Enterprise ship map"
     >
       <pre
         aria-hidden="true"
-        className="enterprise-hull pointer-events-none absolute inset-0 select-none overflow-hidden text-[10px] leading-[1.05] text-phosphor-cyan/15"
-      >{`             .                  *                 .
-       __________________________________________________
-     /                                                    \\
-    /    BRIDGE          MISSION LAB        ENGINEERING     \\
-   |    [ HELM ]        [ STATIONS ]        [ SYSTEMS ]      |
-   |                                                        |
-   |            =======  CENTRAL CORRIDOR  =======           |
-   |                                                        |
-    \\    SCIENCE          REVIEW BAY          COMMS         /
-     \\____________________________________________________/
-                 \\________________________/
-                        \\____________/
-                              \/`}</pre>
+        className="enterprise-deck-map pointer-events-none absolute inset-x-0 top-3 m-auto select-none text-phosphor-cyan/55"
+      >{`                              .          *
+                    __________________________
+              _____/      BRIDGE  [B]         \\_____
+             /    +--------------------------+      \\
+            /     |   HELM        READY [Y]  |       \\
+       ____/------+------------+-------------+--------\\____
+      / SCIENCE [S] | MISSION LAB [M] | ENGINEERING [E]   \\
+     /--------------+-----------------+---------------------\\
+    |                                                       |
+    |================= MAIN CORRIDOR ========================|
+    |                                                       |
+    |  REVIEW BAY [R]   |   TURBOLIFT   |    COMMS [C]      |
+     \\-----------------+---------------+-------------------/
+      \\                                                   /
+       \\________________ NCC-SPOK _______________________/
+                         \\____________/
+                              \\__/`}</pre>
 
-      <div className="relative z-10 flex h-full min-h-[20rem] flex-col">
-        <div className="flex justify-center pt-1">
+      <div
+        className={cn(
+          "enterprise-route enterprise-route-vertical",
+          deck.coordination.length && "enterprise-route-active"
+        )}
+        aria-hidden="true"
+      />
+      <div
+        className={cn(
+          "enterprise-route enterprise-route-horizontal",
+          deck.coordination.length && "enterprise-route-active"
+        )}
+        aria-hidden="true"
+      />
+
+      {actors.map((actor, index) => {
+        const station = visibleStations.find((candidate) => candidate.id === actor.id);
+        const isSpok = actor.id === "spok";
+        return (
           <button
+            key={actor.id}
             type="button"
-            onClick={() => onSelect("spok")}
-            aria-pressed={selectedPersonId === "spok"}
-            aria-label={`Spok at the helm, ${enterpriseStatusLabel(team.status)}`}
+            onClick={() => onSelect(actor.id)}
+            aria-pressed={selectedPersonId === actor.id}
+            aria-label={`${actor.name}, ${actor.activity}`}
+            title={actor.activity}
             className={cn(
-              "enterprise-person rounded-lg border bg-black/70 px-4 py-2 text-center transition",
-              selectedPersonId === "spok"
-                ? "border-phosphor-cyan/70 shadow-[0_0_20px_color-mix(in_srgb,var(--phosphor-cyan)_20%,transparent)]"
-                : "border-phosphor-cyan/25 hover:border-phosphor-cyan/50",
-              spokWorking && "enterprise-person-working"
+              "enterprise-actor absolute z-10 -translate-x-1/2 -translate-y-1/2 text-center",
+              selectedPersonId === actor.id && "enterprise-actor-selected",
+              isSpok ? "text-phosphor-cyan" : "text-phosphor-magenta",
+              station?.status === "error" && "text-red-400"
             )}
+            style={positionFor(actor.room, actor.id)}
+            data-room={actor.room}
           >
-            <pre aria-hidden="true" className="font-mono text-xs leading-none text-phosphor-cyan">{` /\\   /\\
-<  • •  >
- \\  -  /
-  /|_|\\`}</pre>
-            <span className="mt-1 block text-[9px] font-semibold uppercase tracking-widest text-phosphor-cyan">
-              Spok · helm
+            <pre aria-hidden="true" className="enterprise-actor-art font-mono text-[11px] leading-[0.8]">
+              {isSpok ? ` /\\/\\\n< •• >\n /||\\` : CREW_ART[(index - 1) % CREW_ART.length]}
+            </pre>
+            <span className="enterprise-actor-label mt-1 block max-w-24 truncate rounded bg-black/85 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide">
+              {actor.name}
             </span>
           </button>
-        </div>
+        );
+      })}
 
-        <div className="mt-10 grid flex-1 grid-cols-2 content-center gap-5 sm:grid-cols-3 xl:grid-cols-4">
-          {visibleStations.map((station, index) => (
-            <button
-              key={station.id}
-              type="button"
-              onClick={() => onSelect(station.id)}
-              aria-pressed={selectedPersonId === station.id}
-              aria-label={`${station.name}, ${stationStatusLabel(station)}`}
-              className={cn(
-                "enterprise-person justify-self-center rounded-lg border bg-black/65 px-3 py-2 text-center transition",
-                selectedPersonId === station.id
-                  ? "border-phosphor-magenta/70 bg-phosphor-magenta/10"
-                  : "border-phosphor-green/15 hover:border-phosphor-magenta/45",
-                station.status === "working" && "enterprise-person-working"
-              )}
-              style={{ animationDelay: `${(index % 4) * 120}ms` }}
-            >
-              <pre aria-hidden="true" className="font-mono text-xs leading-none text-phosphor-magenta">
-                {CREW_ART[index % CREW_ART.length]}
-              </pre>
-              <span className="mt-1 block max-w-28 truncate text-[9px] font-medium text-phosphor-green/75">
-                {station.name}
-              </span>
-              <span className="block text-[8px] text-phosphor-green/35">
-                {station.status === "briefed" ? "briefed" : station.status}
-              </span>
-            </button>
-          ))}
+      <div className="enterprise-comms-log absolute inset-x-3 bottom-3 z-20 rounded border border-phosphor-green/15 bg-black/80 px-3 py-2">
+        <div className="mb-1 flex items-center gap-1.5 text-[8px] uppercase tracking-[0.18em] text-phosphor-green/35">
+          <Radio className="h-3 w-3" />
+          Coordination channel · movement follows these events
         </div>
-
-        {hiddenStations > 0 && (
-          <p className="mt-2 text-center text-[9px] text-phosphor-magenta/55">
-            +{hiddenStations} supporting {hiddenStations === 1 ? "lane" : "lanes"} visible in the roster
+        {deck.coordination.length ? (
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {deck.coordination.slice(0, 3).map((event) => (
+              <span
+                key={event.id}
+                className={cn(
+                  "font-mono text-[9px] text-phosphor-green/55",
+                  event.tone === "blocked" && "text-red-300",
+                  event.tone === "message" && "text-phosphor-cyan/75",
+                  event.tone === "report" && "text-phosphor-green/80"
+                )}
+              >
+                {event.from} → {event.to} · {event.label}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="font-mono text-[9px] text-phosphor-green/35">
+            No provider task or message events yet; crew hold at their briefed task stations.
           </p>
         )}
-
-        <div className="mt-auto flex items-center justify-center gap-2 pt-4 text-[9px] uppercase tracking-widest text-phosphor-green/30">
-          <Sparkles className="h-3 w-3" />
-          NCC-SPOK · isolated mission deck
-          <Sparkles className="h-3 w-3" />
-        </div>
       </div>
     </section>
   );

@@ -101,10 +101,39 @@ describe("session store filesystem", () => {
       source: "resume",
       config: { cwd: "C:\\dev\\demo", command: "grok", args: [], autoScroll: true, playbackSpeed: 1 },
     });
+    session.handoffOutcome = {
+      version: 1,
+      id: `handoff-${id}`,
+      sessionId: id,
+      jobId: "job-test",
+      branch: "spok/test",
+      worktreePath: "C:\\dev\\demo",
+      state: "committed",
+      createdAt: 10,
+      updatedAt: 10,
+      readiness: {
+        capturedAt: 10,
+        sessionStatus: "ready",
+        reviewIssueCount: 0,
+        unresolvedComments: 0,
+        validationTotal: 1,
+        validationPassed: 1,
+        validationFailed: 0,
+        validationBlocked: 0,
+        dirtyCount: 0,
+        conflictCount: 0,
+        ahead: 1,
+        behind: 0,
+        clean: true,
+      },
+      commit: { oid: "abc123", recordedAt: 10, auditId: "audit-test" },
+    };
     writeSnapshot(id, session as Session);
     const snap = readSnapshot(id);
     assert.ok(snap);
     assert.equal(snap!.id, id);
+    assert.equal(snap!.handoffOutcome?.commit?.oid, "abc123");
+    assert.equal(snap!.handoffOutcome?.jobId, "job-test");
 
     assert.equal(deleteSessionOnDisk(id), true);
     assert.equal(readSessionMeta(id), null);
