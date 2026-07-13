@@ -269,9 +269,11 @@ describe("schedules and policy", () => {
   });
 
   after(() => {
+    // Clear while SPOK_HOME still points at the temp home so we never
+    // wipe the operator's live workspace-trust.json.
+    clearTrustedRoots();
     if (prevHome === undefined) delete process.env.SPOK_HOME;
     else process.env.SPOK_HOME = prevHome;
-    clearTrustedRoots();
     rmSync(home, { recursive: true, force: true });
   });
 
