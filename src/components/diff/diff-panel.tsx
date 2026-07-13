@@ -42,6 +42,8 @@ import { refreshGitDiff } from "@/lib/harness";
 import { runGitAndRefresh } from "@/lib/git/client";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CommitChecklist } from "@/components/git/commit-checklist";
+import { buildReviewReadiness } from "@/lib/review-readiness";
+import { findLinkedJob } from "@/lib/session-lifecycle-projection";
 import { cn } from "@/lib/utils";
 
 const LAYOUT_KEY = "spok.diffLayout";
@@ -67,6 +69,7 @@ export function DiffPanel() {
   const session = useSpokStore((s) =>
     s.activeSessionId ? s.sessions[s.activeSessionId] : null
   );
+  const automationJobs = useSpokStore((s) => s.automationJobs);
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
   const causalOpen = useSpokStore((s) => s.causalDrawerOpen);
   const setCausalOpen = useSpokStore((s) => s.setCausalDrawerOpen);
@@ -130,6 +133,42 @@ export function DiffPanel() {
     () => (session ? buildReviewQueue(session) : null),
     [session]
   );
+
+  const linkedJob = useMemo(
+    () => (session ? findLinkedJob(session.id, automationJobs) : null),
+    [session, automationJobs]
+  );
+
+  const reviewReadiness = useMemo(
+    () => (session ? buildReviewReadiness(session, linkedJob) : null),
+    [session, linkedJob]
+  );
+
+  const onReviewNextAction = useCallback(() => {
+    if (!reviewReadiness || !session) return;
+    const action = reviewReadiness.nextAction;
+    if (action.disabled) return;
+    switch (action.id) {
+      case "inspect_state":
+      case "review_findings": {
+        const issue = queue?.issues[0];
+        if (issue?.fileId) selectFile(issue.fileId);
+        setWorkspaceRightTab("review");
+        break;
+      }
+      case "validate":
+        setWorkspaceRightTab("validation");
+        break;
+      case "stage":
+      case "commit":
+      case "open_handoff":
+        // Review tab owns commit / branch / push / PR handoff.
+        setWorkspaceRightTab("review");
+        break;
+      default:
+        break;
+    }
+  }, [reviewReadiness, session, queue, selectFile, setWorkspaceRightTab]);
 
   const fileRisk = useMemo(
     () => (file ? classifyFileRisk(file.path, file) : null),
@@ -503,6 +542,86 @@ export function DiffPanel() {
       </div>
 
       <CausalMiniRail hunkIndex={hunkIdx} />
+
+      {reviewReadiness && (
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-2 py-1.5",
+            reviewReadiness.isDiagnostic
+              ? "border-phosphor-amber/25 bg-phosphor-amber/5"
+              : reviewReadiness.reviewReady
+                ? "border-phosphor-cyan/20 bg-phosphor-cyan/5"
+                : "border-phosphor-green/10 bg-black/15"
+          )}
+          role="status"
+          aria-label="Review lifecycle"
+          data-testid="review-lifecycle-strip"
+          data-lifecycle-lane={reviewReadiness.lane}
+          data-lifecycle-source={reviewReadiness.reasonSource}
+          data-lifecycle-diagnostic={
+            reviewReadiness.isDiagnostic ? "true" : "false"
+          }
+          data-review-ready={reviewReadiness.reviewReady ? "true" : "false"}
+        >
+          <Badge
+            className={cn(
+              "h-5 border px-1.5 font-mono text-[9px] uppercase tracking-wider",
+              reviewReadiness.isDiagnostic
+                ? "border-phosphor-amber/40 bg-phosphor-amber/10 text-phosphor-amber"
+                : reviewReadiness.reviewReady
+                  ? "border-phosphor-cyan/35 bg-phosphor-cyan/10 text-phosphor-cyan"
+                  : "border-phosphor-green/25 bg-phosphor-green/5 text-phosphor-green/80"
+            )}
+            data-testid="review-lifecycle-badge"
+            title={
+              reviewReadiness.isDiagnostic
+                ? `Diagnostic · ${reviewReadiness.reason}`
+                : `${reviewReadiness.laneLabel} · ${reviewReadiness.reason}`
+            }
+          >
+            {reviewReadiness.isDiagnostic
+              ? "Needs attention"
+              : reviewReadiness.laneLabel}
+          </Badge>
+          <span
+            className="inline-flex min-w-0 max-w-[220px] items-center gap-1 font-mono text-[9px] text-phosphor-green/55"
+            title={`${reviewReadiness.reasonSource} · ${reviewReadiness.reason}`}
+            data-testid="review-lifecycle-reason"
+          >
+            <span className="uppercase tracking-wider text-phosphor-green/40">
+              {reviewReadiness.reasonSource}
+            </span>
+            <span className="truncate">{reviewReadiness.reason}</span>
+          </span>
+          <span
+            className="hidden font-mono text-[9px] text-phosphor-green/35 sm:inline"
+            title="Distinct lifecycle layers"
+            data-testid="review-lifecycle-layers"
+          >
+            {reviewReadiness.processLabel ?? "Process —"}
+            {" · "}
+            {reviewReadiness.taskLabel
+              ? `Task ${reviewReadiness.taskLabel}`
+              : "Task —"}
+            {" · "}
+            {reviewReadiness.reviewLabel}
+            {" · "}
+            {reviewReadiness.validationLabel}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-6 shrink-0 gap-1 text-[10px]"
+            disabled={reviewReadiness.nextAction.disabled}
+            onClick={onReviewNextAction}
+            title={reviewReadiness.nextAction.detail}
+            data-testid="review-lifecycle-next-action"
+          >
+            {reviewReadiness.nextAction.label}
+          </Button>
+        </div>
+      )}
 
       <div className="flex items-center gap-2 border-b border-phosphor-green/10 px-2 py-1">
         <CommitChecklist compact className="min-w-0 flex-1" />

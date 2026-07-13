@@ -1,9 +1,25 @@
 /**
  * Pre-commit / PR readiness checklist for the Review workbench.
  * Pure functions — unit-tested, reused by Changes and Review UI.
+ *
+ * Lifecycle labels come from the versioned inbox / session-lifecycle-projection
+ * contract. Process exit, task (job) outcome, review readiness, and Git commit
+ * readiness stay distinct layers — contradictions never become optimistic success.
  */
 
-import type { Session } from "./types";
+import type { AutomationJob } from "./automation/types";
+import {
+  INBOX_LIFECYCLE_PRESENTATION_VERSION,
+  processStatusLabel,
+  projectRunLifecycle,
+  type InboxLane,
+  type InboxReasonSource,
+  type LifecyclePresentationTone,
+} from "./session-lifecycle-projection";
+import type { Session, SessionStatus } from "./types";
+import { buildValidationLane } from "./validation-lane";
+import { buildReviewQueue } from "./review-queue";
+import { jobStatusLabel } from "./automation/queue";
 
 export type ChecklistSeverity = "ok" | "warn" | "block" | "info";
 
@@ -16,8 +32,33 @@ export interface ChecklistItem {
   blocksCommit?: boolean;
 }
 
+/**
+ * Single safest next action for the review surface.
+ * Distinct from process exit and from durable handoff commit/push/PR outcomes.
+ */
+export type ReviewNextActionId =
+  | "wait"
+  | "inspect_state"
+  | "review_findings"
+  | "validate"
+  | "stage"
+  | "commit"
+  | "open_handoff"
+  | "none";
+
+export interface ReviewNextAction {
+  id: ReviewNextActionId;
+  label: string;
+  detail: string;
+  disabled: boolean;
+}
+
 export interface ReviewReadiness {
   items: ChecklistItem[];
+  /**
+   * Git index is free of hard blockers (conflicts / isolation / empty stage).
+   * False when lifecycle claims contradict — never optimistic success.
+   */
   readyToCommit: boolean;
   readyToPush: boolean;
   stagedCount: number;
@@ -27,6 +68,32 @@ export interface ReviewReadiness {
   secretFiles: number;
   conflictCount: number;
   summary: string;
+
+  // ── Lifecycle layers (session-lifecycle-projection / inbox) ──────────────
+  lifecycleVersion: typeof INBOX_LIFECYCLE_PRESENTATION_VERSION;
+  lane: InboxLane;
+  laneLabel: string;
+  tone: LifecyclePresentationTone;
+  /** Process layer — runtime status; never equated to review readiness. */
+  processStatus: SessionStatus | null;
+  processLabel: string | null;
+  /** Task / job layer when linked. */
+  jobStatus: AutomationJob["status"] | null;
+  taskLabel: string | null;
+  /**
+   * Review-readiness layer: true only when lifecycle places the session in
+   * ready_review and claims are non-diagnostic. Process exit alone is not enough.
+   */
+  reviewReady: boolean;
+  reviewLabel: string;
+  /** Validation layer — distinct from review findings and Git handoff. */
+  validationLabel: string;
+  validationNeedsAttention: boolean;
+  reason: string;
+  reasonSource: InboxReasonSource;
+  isDiagnostic: boolean;
+  /** Exactly one safest next action for the review surface. */
+  nextAction: ReviewNextAction;
 }
 
 function gitCounts(session: Session) {
@@ -45,10 +112,123 @@ function gitCounts(session: Session) {
   return { stagedCount, unstagedCount, untrackedCount, conflictCount, files };
 }
 
+function reviewLayerLabel(
+  reviewReady: boolean,
+  isDiagnostic: boolean,
+  issueCount: number,
+  conflictCount: number
+): string {
+  if (isDiagnostic) return "Review blocked by diagnostic";
+  if (conflictCount > 0) return "Review blocked by conflicts";
+  if (issueCount > 0) return `${issueCount} finding${issueCount === 1 ? "" : "s"} need attention`;
+  if (reviewReady) return "Ready for review";
+  return "Not review-ready";
+}
+
+function validationLayerLabel(
+  failed: number,
+  blocked: number,
+  total: number,
+  needsAttention: boolean
+): string {
+  if (needsAttention) {
+    const parts: string[] = [];
+    if (failed > 0) parts.push(`${failed} failed`);
+    if (blocked > 0) parts.push(`${blocked} blocked`);
+    return parts.length ? `Validation · ${parts.join(" · ")}` : "Validation needs attention";
+  }
+  if (total === 0) return "Validation · no checks yet";
+  return `Validation · ${total} recorded`;
+}
+
+function pickReviewNextAction(input: {
+  isDiagnostic: boolean;
+  isLive: boolean;
+  issueCount: number;
+  conflictCount: number;
+  validationNeedsAttention: boolean;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  gitReadyToCommit: boolean;
+  reviewReady: boolean;
+}): ReviewNextAction {
+  if (input.isDiagnostic) {
+    return {
+      id: "inspect_state",
+      label: "Inspect state",
+      detail:
+        "Process and task claims disagree — resolve the diagnostic before treating work as review-ready or handing off.",
+      disabled: false,
+    };
+  }
+  if (input.isLive) {
+    return {
+      id: "wait",
+      label: "Wait for run",
+      detail: "Review readiness unlocks when the active process reaches a terminal state.",
+      disabled: true,
+    };
+  }
+  if (input.conflictCount > 0 || input.issueCount > 0) {
+    return {
+      id: "review_findings",
+      label:
+        input.conflictCount > 0
+          ? "Resolve conflicts"
+          : `Inspect ${input.issueCount} finding${input.issueCount === 1 ? "" : "s"}`,
+      detail: "Clear review findings and conflicts before Git handoff.",
+      disabled: false,
+    };
+  }
+  if (input.validationNeedsAttention) {
+    return {
+      id: "validate",
+      label: "Review validation",
+      detail: "Failed or blocked checks must be understood before commit/push claims.",
+      disabled: false,
+    };
+  }
+  if (input.stagedCount === 0 && input.unstagedCount + input.untrackedCount > 0) {
+    return {
+      id: "stage",
+      label: "Stage changes",
+      detail: "Stage reviewed work, then write a confirmation-gated commit.",
+      disabled: false,
+    };
+  }
+  if (input.gitReadyToCommit && input.stagedCount > 0) {
+    return {
+      id: "commit",
+      label: "Commit staged work",
+      detail: "Review readiness is satisfied for handoff — open the commit path next.",
+      disabled: false,
+    };
+  }
+  if (input.reviewReady) {
+    return {
+      id: "open_handoff",
+      label: "Open handoff",
+      detail: "Process exited with reviewable work — continue on the Git completion path.",
+      disabled: false,
+    };
+  }
+  return {
+    id: "none",
+    label: "No review action",
+    detail: "No reviewable work or Git handoff step is ready.",
+    disabled: true,
+  };
+}
+
 /**
  * Build a commit/PR readiness checklist from session state.
+ * Optional linked job feeds the canonical lifecycle projection for diagnostics.
  */
-export function buildReviewReadiness(session: Session): ReviewReadiness {
+export function buildReviewReadiness(
+  session: Session,
+  job?: AutomationJob | null
+): ReviewReadiness {
   const { stagedCount, unstagedCount, untrackedCount, conflictCount, files } =
     gitCounts(session);
   const comments = session.reviewComments ?? [];
@@ -61,7 +241,28 @@ export function buildReviewReadiness(session: Session): ReviewReadiness {
     !!session.config.mainCheckout &&
     session.config.cwd === session.config.mainCheckout;
 
+  // Canonical lifecycle — process / job / review lane / diagnostic.
+  const lifecycle = projectRunLifecycle(session, job ?? null);
+  const isDiagnostic = lifecycle.isDiagnostic;
+  const reviewReady =
+    !isDiagnostic && lifecycle.lane === "ready_review";
+
+  const queue = buildReviewQueue(session);
+  const issueCount = queue.issues.length;
+  const validation = buildValidationLane(session).summary;
+  const validationNeedsAttention = validation.needsAttention;
+
   const items: ChecklistItem[] = [];
+
+  if (isDiagnostic) {
+    items.push({
+      id: "lifecycle",
+      label: "Lifecycle",
+      detail: lifecycle.reason,
+      severity: "block",
+      blocksCommit: true,
+    });
+  }
 
   if (conflictCount > 0) {
     items.push({
@@ -152,31 +353,71 @@ export function buildReviewReadiness(session: Session): ReviewReadiness {
     });
   }
 
+  // Process layer only — never label process exit as review success.
+  const processLabel = processStatusLabel(session.status);
   if (isLive) {
     items.push({
       id: "run",
-      label: "Agent run",
-      detail: "A run is still active — prefer waiting for completion",
+      label: "Process",
+      detail: processLabel ?? "Process running",
       severity: "warn",
     });
   } else if (session.status === "error") {
     items.push({
       id: "run",
-      label: "Agent run",
-      detail: "Last run ended in error",
+      label: "Process",
+      detail: processLabel ?? "Process error",
       severity: "warn",
     });
   } else {
     items.push({
       id: "run",
-      label: "Agent run",
-      detail:
-        session.status === "completed" || session.status === "ready"
-          ? "Idle"
-          : session.status,
+      label: "Process",
+      detail: processLabel ?? session.status,
       severity: "ok",
     });
   }
+
+  // Task layer when a job is linked — distinct from process.
+  if (job) {
+    items.push({
+      id: "task",
+      label: "Task",
+      detail: jobStatusLabel(job.status),
+      severity: isDiagnostic
+        ? "block"
+        : job.status === "failed"
+          ? "warn"
+          : "info",
+      blocksCommit: isDiagnostic ? true : undefined,
+    });
+  }
+
+  // Review layer — not the same as process exit or Git staged readiness.
+  items.push({
+    id: "review_layer",
+    label: "Review readiness",
+    detail: reviewLayerLabel(reviewReady, isDiagnostic, issueCount, conflictCount),
+    severity: isDiagnostic
+      ? "block"
+      : issueCount > 0 || conflictCount > 0
+        ? "warn"
+        : reviewReady
+          ? "ok"
+          : "info",
+  });
+
+  items.push({
+    id: "validation_layer",
+    label: "Validation",
+    detail: validationLayerLabel(
+      validation.failed,
+      validation.blocked,
+      validation.total,
+      validationNeedsAttention
+    ),
+    severity: validationNeedsAttention ? "warn" : validation.total > 0 ? "ok" : "info",
+  });
 
   if (isolationBlocked) {
     items.push({
@@ -205,16 +446,36 @@ export function buildReviewReadiness(session: Session): ReviewReadiness {
     });
   }
 
+  // Diagnostic inserts a blocksCommit item — never optimistic success.
   const readyToCommit = !items.some((i) => i.blocksCommit);
   const readyToPush =
     readyToCommit &&
     (session.gitSummary?.ahead ?? 0) >= 0 &&
-    !isLive;
+    !isLive &&
+    !isDiagnostic;
+
+  const nextAction = pickReviewNextAction({
+    isDiagnostic,
+    isLive,
+    issueCount,
+    conflictCount,
+    validationNeedsAttention,
+    stagedCount,
+    unstagedCount,
+    untrackedCount,
+    gitReadyToCommit: readyToCommit,
+    reviewReady,
+  });
 
   let summary: string;
-  if (!readyToCommit) {
+  if (isDiagnostic) {
+    summary = `Needs attention · ${lifecycle.reason}`;
+  } else if (!readyToCommit) {
     const blockers = items.filter((i) => i.blocksCommit).map((i) => i.label);
-    summary = `Not ready: ${blockers.join(", ")}`;
+    summary =
+      blockers.length > 0
+        ? `Not ready: ${blockers.join(", ")}`
+        : "Not ready";
   } else if (items.some((i) => i.severity === "warn")) {
     summary = "Ready with warnings";
   } else {
@@ -232,5 +493,31 @@ export function buildReviewReadiness(session: Session): ReviewReadiness {
     secretFiles,
     conflictCount,
     summary,
+    lifecycleVersion: lifecycle.lifecycleVersion,
+    lane: lifecycle.lane,
+    laneLabel: lifecycle.laneLabel,
+    tone: lifecycle.tone,
+    processStatus: lifecycle.processStatus,
+    processLabel: lifecycle.processLabel,
+    jobStatus: lifecycle.jobStatus,
+    taskLabel: lifecycle.jobLabel,
+    reviewReady,
+    reviewLabel: reviewLayerLabel(
+      reviewReady,
+      isDiagnostic,
+      issueCount,
+      conflictCount
+    ),
+    validationLabel: validationLayerLabel(
+      validation.failed,
+      validation.blocked,
+      validation.total,
+      validationNeedsAttention
+    ),
+    validationNeedsAttention,
+    reason: lifecycle.reason,
+    reasonSource: lifecycle.reasonSource,
+    isDiagnostic,
+    nextAction,
   };
 }

@@ -4,10 +4,27 @@
  * This intentionally describes existing, policy-gated Git actions. Durable
  * handoff evidence is historical context only; fresh Git/session state always
  * reconstructs the next action and the record never grants authority.
+ *
+ * Process, task (job), review readiness, validation, and Git handoff stages
+ * remain distinct. Lifecycle labels reuse session-lifecycle-projection / inbox
+ * classification — contradictions never become optimistic handoff success.
  */
 
+import type { AutomationJob } from "./automation/types";
 import { buildReviewQueue } from "./review-queue";
-import type { HandoffOutcomeRecord, Session } from "./types";
+import {
+  INBOX_LIFECYCLE_PRESENTATION_VERSION,
+  projectRunLifecycle,
+  type InboxLane,
+  type InboxReasonSource,
+  type LifecyclePresentationTone,
+} from "./session-lifecycle-projection";
+import type { HandoffOutcomeRecord, Session, SessionStatus } from "./types";
+import { buildValidationLane } from "./validation-lane";
+import {
+  projectHandoffLayerLabels,
+  type HandoffLayerLabels,
+} from "./handoff-record";
 
 export type HandoffStepId = "review" | "commit" | "push" | "pr";
 export type HandoffStepStatus = "complete" | "active" | "blocked" | "pending";
@@ -36,6 +53,31 @@ export interface HandoffAction {
   privileged: boolean;
 }
 
+/**
+ * Distinct lifecycle layers projected beside the Git handoff step rail.
+ * Never collapse process exit into review readiness or commit/push success.
+ */
+export interface HandoffLifecycleProjection {
+  lifecycleVersion: typeof INBOX_LIFECYCLE_PRESENTATION_VERSION;
+  lane: InboxLane;
+  laneLabel: string;
+  tone: LifecyclePresentationTone;
+  processStatus: SessionStatus | null;
+  processLabel: string | null;
+  jobStatus: AutomationJob["status"] | null;
+  taskLabel: string | null;
+  reviewReady: boolean;
+  reviewLabel: string;
+  validationLabel: string;
+  validationNeedsAttention: boolean;
+  /** Active Git handoff stage label (commit/push/PR), not review readiness. */
+  handoffLabel: string;
+  layers: HandoffLayerLabels;
+  reason: string;
+  reasonSource: InboxReasonSource;
+  isDiagnostic: boolean;
+}
+
 export interface HandoffFlow {
   steps: HandoffStep[];
   nextAction: HandoffAction;
@@ -47,13 +89,35 @@ export interface HandoffFlow {
   workspaceLabel: string;
   /** Historical evidence only; nextAction always comes from fresh session/Git state. */
   outcome: HandoffOutcomeRecord | null;
+  /** Canonical lifecycle layers — process / task / review / validation / handoff. */
+  lifecycle: HandoffLifecycleProjection;
 }
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-export function buildHandoffFlow(session: Session): HandoffFlow {
+function activeHandoffStageLabel(
+  steps: HandoffStep[],
+  nextAction: HandoffAction,
+  isDiagnostic: boolean
+): string {
+  if (isDiagnostic) return "Handoff blocked · diagnostic";
+  if (nextAction.id === "wait") return "Handoff waiting · process active";
+  if (nextAction.id === "none") return "No handoff work";
+  const active = steps.find((s) => s.status === "active");
+  if (active) return `Handoff · ${active.label}`;
+  if (nextAction.id === "create_pr") return "Handoff · Pull request";
+  if (nextAction.id === "push" || nextAction.id === "pull") return "Handoff · Push";
+  if (nextAction.id === "commit" || nextAction.id === "stage") return "Handoff · Commit";
+  if (nextAction.id === "review") return "Handoff · Review findings";
+  return "Handoff pending";
+}
+
+export function buildHandoffFlow(
+  session: Session,
+  job?: AutomationJob | null
+): HandoffFlow {
   const git = session.gitSummary;
   const stagedCount = git?.stagedCount ??
     Object.values(session.files).filter((file) => file.staged).length;
@@ -77,8 +141,25 @@ export function buildHandoffFlow(session: Session): HandoffFlow {
     !!git?.branch &&
     !/^(main|master)$/i.test(git.branch);
 
+  const lifecycleBase = projectRunLifecycle(session, job ?? null);
+  const isDiagnostic = lifecycleBase.isDiagnostic;
+  const validation = buildValidationLane(session).summary;
+  const validationNeedsAttention = validation.needsAttention;
+  const reviewReady =
+    !isDiagnostic && lifecycleBase.lane === "ready_review";
+
   let nextAction: HandoffAction;
-  if (isLive) {
+  if (isDiagnostic) {
+    // Contradictory durable claims — never unlock Git write as success.
+    nextAction = {
+      id: "review",
+      label: "Inspect state",
+      detail:
+        "Process and task claims disagree. Resolve the diagnostic before commit, push, or PR.",
+      disabled: false,
+      privileged: false,
+    };
+  } else if (isLive) {
     nextAction = {
       id: "wait",
       label: "Agent is still working",
@@ -91,6 +172,15 @@ export function buildHandoffFlow(session: Session): HandoffFlow {
       id: "review",
       label: `Inspect ${plural(Math.max(issueCount, conflictCount), "finding")}`,
       detail: "Open the highest-priority finding before deciding whether to hand off.",
+      disabled: false,
+      privileged: false,
+    };
+  } else if (validationNeedsAttention) {
+    nextAction = {
+      id: "review",
+      label: "Review validation",
+      detail:
+        "Failed or blocked validation is distinct from Git handoff — inspect checks first.",
       disabled: false,
       privileged: false,
     };
@@ -146,39 +236,52 @@ export function buildHandoffFlow(session: Session): HandoffFlow {
     };
   }
 
-  const reviewStatus: HandoffStepStatus = isLive
+  const reviewStatus: HandoffStepStatus = isDiagnostic
     ? "blocked"
-    : issueCount > 0 || conflictCount > 0
-      ? "active"
-      : hasHandoffWork || prReady
-        ? "complete"
-        : "pending";
-  const commitStatus: HandoffStepStatus =
-    dirtyCount === 0 && ((git?.ahead ?? 0) > 0 || prReady)
+    : isLive
+      ? "blocked"
+      : issueCount > 0 || conflictCount > 0 || validationNeedsAttention
+        ? "active"
+        : hasHandoffWork || prReady
+          ? "complete"
+          : "pending";
+  const commitStatus: HandoffStepStatus = isDiagnostic
+    ? "blocked"
+    : dirtyCount === 0 && ((git?.ahead ?? 0) > 0 || prReady)
       ? "complete"
       : reviewStatus === "complete" && dirtyCount > 0
         ? "active"
         : reviewStatus === "active" || reviewStatus === "blocked"
           ? "blocked"
           : "pending";
-  const pushStatus: HandoffStepStatus = prReady
-    ? "complete"
-    : commitComplete
+  const pushStatus: HandoffStepStatus = isDiagnostic
+    ? "blocked"
+    : prReady
+      ? "complete"
+      : commitComplete
+        ? "active"
+        : commitStatus === "blocked"
+          ? "blocked"
+          : "pending";
+  const prStatus: HandoffStepStatus = isDiagnostic
+    ? "blocked"
+    : prReady
       ? "active"
-      : commitStatus === "blocked"
-        ? "blocked"
-        : "pending";
-  const prStatus: HandoffStepStatus = prReady ? "active" : "pending";
+      : "pending";
 
   const steps: HandoffStep[] = [
     {
       id: "review",
       label: "Review",
-      detail: isLive
-        ? "Run in progress"
-        : issueCount > 0
-          ? plural(issueCount, "finding")
-          : `${plural(queue.summary.total, "file")} checked`,
+      detail: isDiagnostic
+        ? "Lifecycle diagnostic"
+        : isLive
+          ? "Run in progress"
+          : validationNeedsAttention
+            ? "Validation needs attention"
+            : issueCount > 0
+              ? plural(issueCount, "finding")
+              : `${plural(queue.summary.total, "file")} checked`,
       status: reviewStatus,
     },
     {
@@ -216,17 +319,57 @@ export function buildHandoffFlow(session: Session): HandoffFlow {
     },
   ];
 
-  const headline = isLive
-    ? "Handoff waits for the active run"
-    : issueCount > 0
-      ? `${plural(issueCount, "finding")} need attention`
-      : prReady
-        ? "Branch is ready for a pull request"
-        : dirtyCount > 0
-          ? "Move reviewed changes into a commit"
-          : (git?.ahead ?? 0) > 0
-            ? "Commit is ready to publish"
-            : "Completion path";
+  const handoffLabel = activeHandoffStageLabel(steps, nextAction, isDiagnostic);
+  const layers = projectHandoffLayerLabels({
+    session,
+    job: job ?? null,
+    reviewReady,
+    reviewIssueCount: issueCount,
+    validationNeedsAttention,
+    validationFailed: validation.failed,
+    validationBlocked: validation.blocked,
+    validationTotal: validation.total,
+    handoffLabel,
+    isDiagnostic,
+    reason: lifecycleBase.reason,
+    reasonSource: lifecycleBase.reasonSource,
+  });
+
+  const headline = isDiagnostic
+    ? `Needs attention · ${lifecycleBase.reason}`
+    : isLive
+      ? "Handoff waits for the active run"
+      : issueCount > 0
+        ? `${plural(issueCount, "finding")} need attention`
+        : validationNeedsAttention
+          ? "Validation needs attention before handoff"
+          : prReady
+            ? "Branch is ready for a pull request"
+            : dirtyCount > 0
+              ? "Move reviewed changes into a commit"
+              : (git?.ahead ?? 0) > 0
+                ? "Commit is ready to publish"
+                : "Completion path";
+
+  const lifecycle: HandoffLifecycleProjection = {
+    lifecycleVersion: lifecycleBase.lifecycleVersion,
+    lane: lifecycleBase.lane,
+    laneLabel: lifecycleBase.laneLabel,
+    tone: lifecycleBase.tone,
+    processStatus: lifecycleBase.processStatus,
+    processLabel: lifecycleBase.processLabel,
+    jobStatus: lifecycleBase.jobStatus,
+    taskLabel: lifecycleBase.jobLabel,
+    reviewReady,
+    reviewLabel: layers.reviewLabel,
+    validationLabel: layers.validationLabel,
+    validationNeedsAttention,
+    handoffLabel,
+    layers,
+    reason: lifecycleBase.reason,
+    reasonSource: lifecycleBase.reasonSource,
+    isDiagnostic,
+  };
 
   return {
     steps,
@@ -238,5 +381,6 @@ export function buildHandoffFlow(session: Session): HandoffFlow {
     branch: git?.branch ?? null,
     workspaceLabel: session.config.isolationGuard ? "Isolated worktree" : "Workspace",
     outcome: session.handoffOutcome ?? null,
+    lifecycle,
   };
 }

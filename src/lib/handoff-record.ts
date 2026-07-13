@@ -1,6 +1,12 @@
 import { buildReviewQueue } from "./review-queue";
 import { buildValidationLane } from "./validation-lane";
 import { redactSecrets } from "./security/secrets";
+import { jobStatusLabel } from "./automation/queue";
+import type { AutomationJob } from "./automation/types";
+import {
+  processStatusLabel,
+  type InboxReasonSource,
+} from "./session-lifecycle-projection";
 import type {
   HandoffOutcomeAction,
   HandoffOutcomeRecord,
@@ -20,6 +26,21 @@ export interface HandoffOutcomeEvent {
   pullRequest?: { url?: string; number?: number };
 }
 
+/**
+ * Distinct layer labels for durable handoff evidence and live projection.
+ * Process exit ≠ review readiness ≠ validation ≠ Git handoff stage.
+ */
+export interface HandoffLayerLabels {
+  processLabel: string | null;
+  taskLabel: string | null;
+  reviewLabel: string;
+  validationLabel: string;
+  handoffLabel: string;
+  isDiagnostic: boolean;
+  reason: string;
+  reasonSource: InboxReasonSource;
+}
+
 function cleanOptional(value: string | null | undefined): string | undefined {
   const text = value?.trim();
   return text || undefined;
@@ -28,6 +49,70 @@ function cleanOptional(value: string | null | undefined): string | undefined {
 export function sanitizeHandoffFailure(value: string | undefined): string {
   const clipped = (value || "Handoff action failed").replace(/\s+/g, " ").trim().slice(0, 500);
   return redactSecrets(clipped).text;
+}
+
+/**
+ * Project process / task / review / validation / handoff labels without
+ * collapsing them. Pure helper shared by handoff-flow and tests.
+ */
+export function projectHandoffLayerLabels(input: {
+  session: Session;
+  job?: AutomationJob | null;
+  reviewReady: boolean;
+  reviewIssueCount: number;
+  validationNeedsAttention: boolean;
+  validationFailed: number;
+  validationBlocked: number;
+  validationTotal: number;
+  handoffLabel: string;
+  isDiagnostic: boolean;
+  reason: string;
+  reasonSource: InboxReasonSource;
+}): HandoffLayerLabels {
+  const processLabel = processStatusLabel(input.session.status);
+  const taskLabel = input.job ? jobStatusLabel(input.job.status) : null;
+
+  let reviewLabel: string;
+  if (input.isDiagnostic) {
+    reviewLabel = "Review blocked by diagnostic";
+  } else if (input.reviewIssueCount > 0) {
+    reviewLabel = `${input.reviewIssueCount} finding${
+      input.reviewIssueCount === 1 ? "" : "s"
+    } need attention`;
+  } else if (input.reviewReady) {
+    reviewLabel = "Ready for review";
+  } else {
+    reviewLabel = "Not review-ready";
+  }
+
+  let validationLabel: string;
+  if (input.validationNeedsAttention) {
+    const parts: string[] = [];
+    if (input.validationFailed > 0) {
+      parts.push(`${input.validationFailed} failed`);
+    }
+    if (input.validationBlocked > 0) {
+      parts.push(`${input.validationBlocked} blocked`);
+    }
+    validationLabel = parts.length
+      ? `Validation · ${parts.join(" · ")}`
+      : "Validation needs attention";
+  } else if (input.validationTotal === 0) {
+    validationLabel = "Validation · no checks yet";
+  } else {
+    validationLabel = `Validation · ${input.validationTotal} recorded`;
+  }
+
+  return {
+    processLabel,
+    taskLabel,
+    reviewLabel,
+    validationLabel,
+    handoffLabel: input.handoffLabel,
+    isDiagnostic: input.isDiagnostic,
+    reason: input.reason,
+    reasonSource: input.reasonSource,
+  };
 }
 
 export function captureHandoffReadiness(
@@ -41,6 +126,7 @@ export function captureHandoffReadiness(
   const untracked = git?.untrackedCount ?? files.filter((file) => file.untracked).length;
   const conflicts = git?.conflictCount ?? files.filter((file) => file.conflict).length;
   const validation = buildValidationLane(session).summary;
+  // sessionStatus is the process layer only — not review readiness or handoff state.
   return {
     capturedAt,
     sessionStatus: session.status,
@@ -82,6 +168,7 @@ export function advanceHandoffOutcome(input: {
     branch: cleanOptional(session.gitSummary?.branch) ?? previous?.branch,
     worktreePath: cleanOptional(session.config.worktreePath) ?? previous?.worktreePath,
     mainCheckout: cleanOptional(session.config.mainCheckout) ?? previous?.mainCheckout,
+    // Handoff outcome state is Git-stage only — not process exit or review readiness.
     state: event.ok ? stateForSuccess(event.action) : "failed",
     createdAt: previous?.createdAt ?? recordedAt,
     updatedAt: recordedAt,

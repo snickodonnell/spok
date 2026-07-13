@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   advanceHandoffOutcome,
   captureHandoffReadiness,
+  projectHandoffLayerLabels,
 } from "../../src/lib/handoff-record";
 import type { Session } from "../../src/lib/types";
 
@@ -134,6 +135,31 @@ describe("durable handoff outcome", () => {
     assert.equal(pullRequest.push?.auditId, "audit-push");
     assert.equal(pullRequest.pullRequest?.number, 42);
     assert.deepEqual(JSON.parse(JSON.stringify(pullRequest)), pullRequest);
+  });
+
+  it("projects distinct process/review/validation/handoff labels", () => {
+    const layers = projectHandoffLayerLabels({
+      session: session({ status: "completed" }),
+      job: null,
+      reviewReady: true,
+      reviewIssueCount: 0,
+      validationNeedsAttention: false,
+      validationFailed: 0,
+      validationBlocked: 0,
+      validationTotal: 1,
+      handoffLabel: "Handoff · Commit",
+      isDiagnostic: false,
+      reason: "1 file changed",
+      reasonSource: "review",
+    });
+    assert.equal(layers.processLabel, "Process exited");
+    assert.equal(layers.taskLabel, null);
+    assert.equal(layers.reviewLabel, "Ready for review");
+    assert.match(layers.validationLabel, /validation/i);
+    assert.equal(layers.handoffLabel, "Handoff · Commit");
+    // Labels must not collapse into one success string.
+    assert.notEqual(layers.processLabel, layers.reviewLabel);
+    assert.notEqual(layers.reviewLabel, layers.handoffLabel);
   });
 
   it("retains prior evidence and redacts an audit-safe failure", () => {
