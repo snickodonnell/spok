@@ -44,6 +44,12 @@ import type {
   ScheduleIntervalUnit,
 } from "@/lib/automation/types";
 import { AUTOMATION_CONCURRENCY_RANGE } from "@/lib/automation/types";
+import {
+  projectJobLifecycle,
+  type LifecyclePresentationTone,
+  type SessionLifecycleProjection,
+} from "@/lib/session-lifecycle-projection";
+import type { Session } from "@/lib/types";
 import { saveSettings } from "@/lib/settings-client";
 import { toast } from "sonner";
 import {
@@ -65,10 +71,30 @@ import {
   AlertTriangle,
   Pause,
   Copy,
+  ArrowRight,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
 type TabId = "queue" | "schedules" | "channels" | "compare" | "lanes";
+
+function lifecycleBadgeVariant(
+  tone: LifecyclePresentationTone
+): "cyan" | "error" | "amber" | "muted" | "magenta" {
+  switch (tone) {
+    case "failed":
+      return "error";
+    case "running":
+    case "attention":
+      return "amber";
+    case "review":
+    case "finished":
+      return "cyan";
+    case "queued":
+      return "magenta";
+    default:
+      return "muted";
+  }
+}
 
 function JobStatusBadge({ status }: { status: AutomationJob["status"] }) {
   const variant =
@@ -84,7 +110,7 @@ function JobStatusBadge({ status }: { status: AutomationJob["status"] }) {
               ? ("muted" as const)
               : ("muted" as const);
   return (
-    <Badge variant={variant} className="text-[9px]">
+    <Badge variant={variant} className="text-[9px]" title="Job process status">
       {jobStatusLabel(status)}
     </Badge>
   );
@@ -537,6 +563,9 @@ export function MonitorPanel() {
                       <JobCard
                         key={job.id}
                         job={job}
+                        session={
+                          job.sessionId ? sessions[job.sessionId] : undefined
+                        }
                         selected={selectedJobId === job.id}
                         onOpen={
                           job.sessionId
@@ -584,6 +613,9 @@ export function MonitorPanel() {
                       <JobCard
                         key={job.id}
                         job={job}
+                        session={
+                          job.sessionId ? sessions[job.sessionId] : undefined
+                        }
                         selected={selectedJobId === job.id}
                         onOpen={
                           job.sessionId
@@ -972,28 +1004,51 @@ export function MonitorPanel() {
 
 function JobCard({
   job,
+  session,
   selected = false,
   onOpen,
   onCancel,
   queueReason,
 }: {
   job: AutomationJob;
+  session?: Session;
   selected?: boolean;
   onOpen?: () => void;
   onCancel?: () => void;
   queueReason?: string;
 }) {
+  const lifecycle: SessionLifecycleProjection = useMemo(
+    () => projectJobLifecycle(job, session),
+    [job, session]
+  );
+  // Queue capacity reason enriches job-only queued rows without losing provenance.
+  const displayReason =
+    queueReason && lifecycle.lane === "queued" ? queueReason : lifecycle.reason;
+  // Exactly one safest next action — prefer opening the linked session when present.
+  const primaryAction = onOpen
+    ? {
+        label: lifecycle.nextAction.label,
+        onClick: onOpen,
+      }
+    : null;
+
   return (
     <div
       id={`monitor-job-${job.id}`}
       tabIndex={selected ? -1 : undefined}
       aria-label={selected ? `Selected job: ${job.title}` : undefined}
       data-selected={selected ? "true" : undefined}
+      data-lifecycle-lane={lifecycle.lane}
+      data-lifecycle-source={lifecycle.reasonSource}
+      data-lifecycle-diagnostic={lifecycle.isDiagnostic ? "true" : "false"}
+      data-testid={`monitor-job-card-${job.id}`}
       className={cn(
         "rounded-lg border bg-black/30 p-3 outline-none transition-colors",
         selected
           ? "border-phosphor-cyan/60 bg-phosphor-cyan/10 ring-1 ring-phosphor-cyan/30"
-          : "border-phosphor-green/15"
+          : lifecycle.isDiagnostic
+            ? "border-phosphor-amber/40"
+            : "border-phosphor-green/15"
       )}
     >
       <div className="flex items-start gap-2">
@@ -1002,6 +1057,15 @@ function JobCard({
             <span className="font-mono text-sm text-phosphor-green">
               {job.title}
             </span>
+            <Badge
+              variant={lifecycleBadgeVariant(lifecycle.tone)}
+              className="text-[9px]"
+              title={`${lifecycle.laneLabel} · ${lifecycle.reasonSource}`}
+              data-testid={`monitor-lifecycle-badge-${job.id}`}
+            >
+              {lifecycle.badgeLabel}
+            </Badge>
+            {/* Job process status remains a distinct layer from operational lane */}
             <JobStatusBadge status={job.status} />
             <Badge variant="muted" className="text-[8px]">
               {job.kind}
@@ -1012,10 +1076,40 @@ function JobCard({
               </Badge>
             )}
           </div>
+          <p
+            className={cn(
+              "mt-1 flex flex-wrap items-center gap-1 font-mono text-[10px]",
+              lifecycle.isDiagnostic ||
+                lifecycle.lane === "failed" ||
+                lifecycle.lane === "waiting"
+                ? "text-phosphor-amber/85"
+                : lifecycle.lane === "ready_review"
+                  ? "text-phosphor-cyan/80"
+                  : "text-phosphor-green/55"
+            )}
+            title={`${lifecycle.reasonSource} · ${displayReason}`}
+            data-testid={`monitor-lifecycle-reason-${job.id}`}
+          >
+            <span className="uppercase tracking-wider text-phosphor-green/45">
+              {lifecycle.reasonSource}
+            </span>
+            <span aria-hidden>·</span>
+            <span className="min-w-0 truncate">{displayReason}</span>
+            {lifecycle.processLabel && (
+              <>
+                <span aria-hidden className="text-phosphor-green/30">
+                  ·
+                </span>
+                <span className="text-phosphor-green/40">
+                  {lifecycle.processLabel}
+                </span>
+              </>
+            )}
+          </p>
           <p className="mt-1 line-clamp-2 text-[11px] text-phosphor-green/50">
             {job.summary || job.prompt}
           </p>
-          {queueReason && (
+          {queueReason && lifecycle.lane !== "queued" && (
             <p className="mt-1 flex items-center gap-1 text-[10px] text-phosphor-cyan/70">
               <Pause className="h-3 w-3 shrink-0" />
               {queueReason}
@@ -1029,16 +1123,27 @@ function JobCard({
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-1">
-          {onOpen && (
+          {primaryAction ? (
             <Button
               size="sm"
               variant="outline"
-              className="h-7 text-[10px]"
-              onClick={onOpen}
+              className="h-7 gap-1 text-[10px]"
+              onClick={primaryAction.onClick}
+              data-testid={`monitor-lifecycle-next-${job.id}`}
+              title={`${primaryAction.label} (${lifecycle.reasonSource})`}
             >
               <ExternalLink className="h-3 w-3" />
-              Open
+              {primaryAction.label}
             </Button>
+          ) : (
+            <span
+              className="inline-flex h-7 items-center gap-1 px-1 font-mono text-[10px] text-phosphor-cyan/70"
+              data-testid={`monitor-lifecycle-next-${job.id}`}
+              title="Safest next action for this lifecycle state"
+            >
+              {lifecycle.nextAction.label}
+              <ArrowRight className="h-3 w-3" />
+            </span>
           )}
           {onCancel && (
             <Button

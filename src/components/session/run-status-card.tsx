@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Folder,
   GitBranch,
@@ -13,13 +13,19 @@ import {
   Layers,
   FileCode2,
   ShieldAlert,
+  ArrowRight,
 } from "lucide-react";
 import { useSpokStore } from "@/lib/store";
 import { localFetch } from "@/lib/local-api-client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { SessionStatus } from "@/lib/types";
+import {
+  findLinkedJob,
+  projectRunLifecycle,
+  type LifecyclePresentationTone,
+  type SessionLifecycleProjection,
+} from "@/lib/session-lifecycle-projection";
 
 type CliStatus = {
   command: string;
@@ -27,40 +33,23 @@ type CliStatus = {
   version: string | null;
 };
 
-function statusLabel(status: SessionStatus): string {
-  switch (status) {
+function lifecycleToneClass(tone: LifecyclePresentationTone): string {
+  switch (tone) {
     case "running":
-      return "Running";
-    case "starting":
-      return "Starting";
-    case "completed":
-      return "Completed";
-    case "error":
-      return "Error";
-    case "stopped":
-      return "Stopped";
-    case "paused":
-      return "Paused";
-    case "ready":
-      return "Ready";
-    default:
-      return status;
-  }
-}
-
-function statusTone(status: SessionStatus): string {
-  switch (status) {
-    case "running":
-    case "starting":
       return "border-phosphor-amber/40 bg-phosphor-amber/8 text-phosphor-amber";
-    case "error":
-      return "border-red-500/40 bg-red-500/10 text-red-400";
-    case "completed":
-      return "border-phosphor-green/35 bg-phosphor-green/8 text-phosphor-green";
-    case "stopped":
-      return "border-phosphor-green/20 bg-black/30 text-phosphor-green/55";
-    default:
+    case "queued":
       return "border-phosphor-cyan/30 bg-phosphor-cyan/5 text-phosphor-cyan/90";
+    case "attention":
+      return "border-phosphor-amber/45 bg-phosphor-amber/12 text-phosphor-amber";
+    case "failed":
+      return "border-red-500/40 bg-red-500/10 text-red-400";
+    case "review":
+      return "border-phosphor-cyan/40 bg-phosphor-cyan/10 text-phosphor-cyan";
+    case "finished":
+      return "border-phosphor-green/35 bg-phosphor-green/8 text-phosphor-green";
+    case "ready":
+    default:
+      return "border-phosphor-green/25 bg-phosphor-green/5 text-phosphor-green/85";
   }
 }
 
@@ -72,8 +61,9 @@ function shortenPath(p: string): string {
 }
 
 /**
- * Unified run header: status, cwd, branch, permission, CLI, dirty count, queue, stop.
- * Answers "what is running and what can I do next?" within a few seconds.
+ * Unified run header: canonical lifecycle, cwd, branch, permission, CLI,
+ * dirty count, queue, stop.
+ * Process status stays a distinct layer from lane / review / diagnostic.
  */
 export function RunStatusCard({
   onStop,
@@ -83,20 +73,13 @@ export function RunStatusCard({
   queueCount?: number;
 }) {
   const sessionId = useSpokStore((s) => s.activeSessionId);
-  const status = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId!]?.status : undefined
+  const session = useSpokStore((s) =>
+    s.activeSessionId ? s.sessions[s.activeSessionId!] : undefined
   );
-  const cwd = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId!]?.config.cwd : undefined
-  );
-  const command = useSpokStore((s) =>
-    s.activeSessionId
-      ? s.sessions[s.activeSessionId!]?.config.command || "grok"
-      : "grok"
-  );
-  const gitSummary = useSpokStore((s) =>
-    s.activeSessionId ? s.sessions[s.activeSessionId!]?.gitSummary : undefined
-  );
+  const status = session?.status;
+  const cwd = session?.config.cwd;
+  const command = session?.config.command || "grok";
+  const gitSummary = session?.gitSummary;
   const filesChanged = useSpokStore((s) => {
     const id = s.activeSessionId;
     if (!id) return 0;
@@ -116,6 +99,7 @@ export function RunStatusCard({
       )
   );
   const appPermissionMode = useSpokStore((s) => s.appPermissionMode);
+  const automationJobs = useSpokStore((s) => s.automationJobs);
   const activeJobCount = useSpokStore(
     (s) =>
       s.automationJobs.filter((j) =>
@@ -126,6 +110,13 @@ export function RunStatusCard({
   const setMonitorOpen = useSpokStore((s) => s.setMonitorOpen);
   const setWorkspaceRightTab = useSpokStore((s) => s.setWorkspaceRightTab);
   const setCausalDrawerOpen = useSpokStore((s) => s.setCausalDrawerOpen);
+  const setViewMode = useSpokStore((s) => s.setViewMode);
+
+  const lifecycle: SessionLifecycleProjection | null = useMemo(() => {
+    if (!session) return null;
+    const job = findLinkedJob(session.id, automationJobs);
+    return projectRunLifecycle(session, job);
+  }, [session, automationJobs]);
 
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [cliLoading, setCliLoading] = useState(false);
@@ -154,7 +145,7 @@ export function RunStatusCard({
     };
   }, [sessionId, command]);
 
-  if (!sessionId || !status) return null;
+  if (!sessionId || !status || !lifecycle) return null;
 
   const isLive = status === "running" || status === "starting";
   const branch = gitSummary?.branch;
@@ -165,24 +156,85 @@ export function RunStatusCard({
     : filesChanged;
   const bgJobs = activeJobCount;
 
+  const runNextAction = () => {
+    if (lifecycle.nextAction.kind === "review_changes") {
+      setViewMode("diff");
+      setWorkspaceRightTab("changes");
+      return;
+    }
+    if (lifecycle.nextAction.kind === "open_job" && lifecycle.jobId) {
+      setMonitorOpen(true);
+      return;
+    }
+    // open_session / default — already on the active session; open workspace.
+    setViewMode("workspace");
+  };
+
   return (
     <div
       className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-phosphor-green/15 bg-crt-panel/90 px-3 py-2"
       role="region"
       aria-label="Current run"
       data-testid="run-status-card"
+      data-lifecycle-lane={lifecycle.lane}
+      data-lifecycle-source={lifecycle.reasonSource}
+      data-lifecycle-diagnostic={lifecycle.isDiagnostic ? "true" : "false"}
     >
       <Badge
         className={cn(
           "h-6 gap-1.5 border px-2 font-mono text-[10px] uppercase tracking-wider",
-          statusTone(status)
+          lifecycleToneClass(lifecycle.tone)
         )}
+        data-testid="run-lifecycle-badge"
+        title={
+          lifecycle.isDiagnostic
+            ? `Diagnostic · ${lifecycle.reason}`
+            : `${lifecycle.laneLabel} · ${lifecycle.reason}`
+        }
       >
-        {isLive && (
+        {(lifecycle.tone === "running" || isLive) && !lifecycle.isDiagnostic && (
           <span className="live-dot h-1.5 w-1.5 rounded-full bg-current" />
         )}
-        {statusLabel(status)}
+        {lifecycle.badgeLabel}
       </Badge>
+
+      <span
+        className={cn(
+          "inline-flex min-w-0 max-w-[280px] items-center gap-1 font-mono text-[10px]",
+          lifecycle.isDiagnostic ||
+            lifecycle.lane === "failed" ||
+            lifecycle.lane === "waiting"
+            ? "text-phosphor-amber/85"
+            : lifecycle.lane === "ready_review"
+              ? "text-phosphor-cyan/80"
+              : "text-phosphor-green/55"
+        )}
+        title={`${lifecycle.reasonSource} · ${lifecycle.reason}`}
+        data-testid="run-lifecycle-reason"
+      >
+        <span className="uppercase tracking-wider text-phosphor-green/45">
+          {lifecycle.reasonSource}
+        </span>
+        <span aria-hidden>·</span>
+        <span className="truncate">{lifecycle.reason}</span>
+      </span>
+
+      {/* Process layer — kept distinct from operational lane / review readiness */}
+      {lifecycle.processLabel && (
+        <span
+          className="hidden items-center gap-1 font-mono text-[10px] text-phosphor-green/40 sm:inline-flex"
+          title="Process status (distinct from task outcome / review readiness)"
+          data-testid="run-process-layer"
+        >
+          {lifecycle.processLabel}
+          {lifecycle.jobLabel && (
+            <>
+              <span aria-hidden>·</span>
+              <span title="Job status layer">Job {lifecycle.jobLabel}</span>
+            </>
+          )}
+        </span>
+      )}
 
       <span
         className="inline-flex min-w-0 max-w-[220px] items-center gap-1 text-[11px] text-phosphor-green/70"
@@ -285,6 +337,17 @@ export function RunStatusCard({
       )}
 
       <div className="ml-auto flex items-center gap-1.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 text-[10px] text-phosphor-cyan/90"
+          onClick={runNextAction}
+          title={`${lifecycle.nextAction.label} (${lifecycle.reasonSource})`}
+          data-testid="run-lifecycle-next-action"
+        >
+          {lifecycle.nextAction.label}
+          <ArrowRight className="h-3 w-3" />
+        </Button>
         {fileSelected && (
           <Button
             variant="ghost"
@@ -308,7 +371,7 @@ export function RunStatusCard({
             Stop
           </Button>
         )}
-        {!isLive && status === "ready" && (
+        {!isLive && status === "ready" && lifecycle.lane === "idle" && (
           <span className="text-[10px] text-phosphor-green/40">
             Prompt below to run
           </span>
