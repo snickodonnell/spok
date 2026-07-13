@@ -50,6 +50,19 @@ import {
   enqueueBackgroundJob,
 } from "@/lib/background-runner";
 import { performInboxJobAction } from "@/lib/inbox-actions";
+import {
+  fetchMission,
+  fetchMissionCheckpoint,
+  fetchMissionList,
+  missionEmptyStoreMessage,
+  missionLoadRecoveryMessage,
+  missionStatusLabel,
+  projectMissionLeadershipView,
+  workItemStatusLabel,
+  type MissionClientError,
+  type MissionLeadershipView,
+} from "@/lib/missions/client";
+import type { MissionMeta } from "@/lib/missions/types";
 import { useSpokStore } from "@/lib/store";
 import type { AutomationJob } from "@/lib/automation/types";
 import type { Session, TraceNode } from "@/lib/types";
@@ -166,6 +179,110 @@ export function EnterpriseScreen() {
   const [submitted, setSubmitted] = useState(false);
   const [selectedPersonId, setSelectedPersonId] = useState("spok");
   const [followup, setFollowup] = useState("");
+
+  /** Mission v1 durable store — leadership evidence before spectacle. */
+  type DurableListState =
+    | { status: "loading" }
+    | { status: "ready"; missions: MissionMeta[] }
+    | { status: "error"; error: MissionClientError };
+  type DurableDetailState =
+    | { status: "idle" }
+    | { status: "loading"; missionId: string }
+    | {
+        status: "ready";
+        missionId: string;
+        view: MissionLeadershipView;
+      }
+    | { status: "error"; missionId: string; error: MissionClientError };
+
+  const [durableList, setDurableList] = useState<DurableListState>({
+    status: "loading",
+  });
+  const [selectedDurableId, setSelectedDurableId] = useState<string | null>(
+    null
+  );
+  const [durableDetail, setDurableDetail] = useState<DurableDetailState>({
+    status: "idle",
+  });
+  const [durableListNonce, setDurableListNonce] = useState(0);
+  const [durableDetailNonce, setDurableDetailNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ctrl = new AbortController();
+    setDurableList({ status: "loading" });
+    void (async () => {
+      const result = await fetchMissionList({ signal: ctrl.signal });
+      if (cancelled) return;
+      if (!result.ok) {
+        setDurableList({ status: "error", error: result.error });
+        return;
+      }
+      setDurableList({ status: "ready", missions: result.value.missions });
+      setSelectedDurableId((prev) => {
+        if (prev && result.value.missions.some((m) => m.id === prev)) {
+          return prev;
+        }
+        return result.value.missions[0]?.id ?? null;
+      });
+    })();
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+  }, [durableListNonce]);
+
+  useEffect(() => {
+    if (!selectedDurableId) {
+      setDurableDetail({ status: "idle" });
+      return;
+    }
+    let cancelled = false;
+    const ctrl = new AbortController();
+    const missionId = selectedDurableId;
+    setDurableDetail({ status: "loading", missionId });
+    void (async () => {
+      const [missionResult, checkpointResult] = await Promise.all([
+        fetchMission(missionId, { signal: ctrl.signal }),
+        fetchMissionCheckpoint(missionId, { signal: ctrl.signal }),
+      ]);
+      if (cancelled) return;
+      if (!missionResult.ok) {
+        setDurableDetail({
+          status: "error",
+          missionId,
+          error: missionResult.error,
+        });
+        return;
+      }
+      const checkpoint = checkpointResult.ok
+        ? checkpointResult.value.checkpoint
+        : null;
+      const persisted = checkpointResult.ok
+        ? checkpointResult.value.persisted === false
+          ? false
+          : checkpointResult.value.persisted === true
+            ? true
+            : null
+        : null;
+      const view = projectMissionLeadershipView(
+        missionResult.value.mission,
+        checkpoint,
+        { checkpointPersisted: persisted }
+      );
+      setDurableDetail({ status: "ready", missionId, view });
+    })();
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+  }, [selectedDurableId, durableDetailNonce]);
+
+  const durableMissions =
+    durableList.status === "ready" ? durableList.missions : [];
+  const hasDurableMissions = durableMissions.length > 0;
+  const durableListBlocking =
+    durableList.status === "loading" || durableList.status === "error";
 
   const lanes = useMemo(
     () => (selectedJob ? enterpriseLanes(selectedJob, selectedSessions) : []),
@@ -322,7 +439,9 @@ export function EnterpriseScreen() {
     }
   };
 
-  const showingDraft = draftMode || baseTeams.length === 0;
+  const showingDraft =
+    draftMode ||
+    (baseTeams.length === 0 && !hasDurableMissions && !durableListBlocking);
 
   if (showingDraft) {
     return (
@@ -349,7 +468,7 @@ export function EnterpriseScreen() {
         onLaunch={launchMission}
         onOpenRepo={() => setLaunchOpen(true)}
         onBack={
-          baseTeams.length
+          baseTeams.length || hasDurableMissions
             ? () => {
                 setDraftMode(false);
                 setActiveTeamId(baseTeams[0]?.id ?? null);
@@ -360,14 +479,51 @@ export function EnterpriseScreen() {
     );
   }
 
+  /** Durable-only control room when Mission v1 has records but no live job team. */
   if (!team) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-        <Rocket className="h-9 w-9 text-phosphor-cyan/70" />
-        <h1 className="text-lg font-semibold text-phosphor-green">
-          No mission selected
-        </h1>
-        <Button onClick={() => setDraftMode(true)}>Create mission</Button>
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_50%_40%,color-mix(in_srgb,var(--phosphor-cyan)_7%,transparent),transparent_55%)]">
+        <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-phosphor-cyan/20 bg-crt-panel px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <Rocket className="h-4 w-4 shrink-0 text-phosphor-cyan" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="font-mono text-sm font-semibold tracking-[0.18em] text-phosphor-cyan">
+                  MISSIONS
+                </h1>
+                <Badge variant="magenta">Spok leads</Badge>
+              </div>
+              <p className="truncate text-[10px] text-phosphor-green/40">
+                Durable Mission v1 evidence · live job turns appear when Spok
+                launches an isolated run
+              </p>
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button variant="outline" size="sm" onClick={() => setDraftMode(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              New live turn
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setProductMode("run")}>
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Run
+            </Button>
+          </div>
+        </header>
+        <main
+          className="min-h-0 flex-1 overflow-y-auto p-3"
+          aria-label="Spok mission control"
+        >
+          <DurableMissionLeadershipPanel
+            listState={durableList}
+            detailState={durableDetail}
+            selectedId={selectedDurableId}
+            onSelect={setSelectedDurableId}
+            onRetryList={() => setDurableListNonce((n) => n + 1)}
+            onRetryDetail={() => setDurableDetailNonce((n) => n + 1)}
+            onCreateLive={() => setDraftMode(true)}
+          />
+        </main>
       </div>
     );
   }
@@ -442,10 +598,20 @@ export function EnterpriseScreen() {
         />
 
         <main className="enterprise-center min-h-0 overflow-y-auto p-3" aria-label="Spok mission control">
+          <DurableMissionLeadershipPanel
+            listState={durableList}
+            detailState={durableDetail}
+            selectedId={selectedDurableId}
+            onSelect={setSelectedDurableId}
+            onRetryList={() => setDurableListNonce((n) => n + 1)}
+            onRetryDetail={() => setDurableDetailNonce((n) => n + 1)}
+            onCreateLive={() => setDraftMode(true)}
+          />
+
           <section className="mb-3 rounded-lg border border-phosphor-green/15 bg-black/25 p-3">
             <div className="mb-1 flex items-center gap-1.5 text-[9px] uppercase tracking-widest text-phosphor-green/40">
               <ShieldCheck className="h-3 w-3" />
-              Project outcome
+              Live turn outcome
             </div>
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-phosphor-green/80">
               {team.goal}
@@ -640,6 +806,510 @@ export function EnterpriseScreen() {
         />
       </div>
     </div>
+  );
+}
+
+function durableMissionStatusVariant(
+  status: MissionLeadershipView["status"] | MissionMeta["status"]
+) {
+  if (status === "completed" || status === "archived") return "success" as const;
+  if (status === "review_ready") return "cyan" as const;
+  if (status === "failed" || status === "cancelled") return "error" as const;
+  if (status === "blocked") return "error" as const;
+  if (status === "active") return "cyan" as const;
+  if (status === "draft") return "muted" as const;
+  return "amber" as const;
+}
+
+function workItemEvidenceBadge(
+  wi: MissionLeadershipView["milestones"][number]["workItems"][number]
+) {
+  if (wi.processExitOnly) return "Process exit only · not completion";
+  if (wi.hasTerminalEvidence) return "Terminal evidence recorded";
+  if (wi.expectedEvidence.length > 0) {
+    return `Expected evidence · ${wi.expectedEvidence.length}`;
+  }
+  return "No evidence yet";
+}
+
+/**
+ * Durable Mission v1 leadership evidence — always above optional team map.
+ * Loading/empty/error are actionable; specialists are plan owners only.
+ */
+function DurableMissionLeadershipPanel({
+  listState,
+  detailState,
+  selectedId,
+  onSelect,
+  onRetryList,
+  onRetryDetail,
+  onCreateLive,
+}: {
+  listState:
+    | { status: "loading" }
+    | { status: "ready"; missions: MissionMeta[] }
+    | { status: "error"; error: MissionClientError };
+  detailState:
+    | { status: "idle" }
+    | { status: "loading"; missionId: string }
+    | {
+        status: "ready";
+        missionId: string;
+        view: MissionLeadershipView;
+      }
+    | { status: "error"; missionId: string; error: MissionClientError };
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onRetryList: () => void;
+  onRetryDetail: () => void;
+  onCreateLive: () => void;
+}) {
+  if (listState.status === "loading") {
+    return (
+      <section
+        className="mb-3 rounded-lg border border-phosphor-cyan/20 bg-crt-panel p-3"
+        data-testid="durable-mission-panel"
+        aria-label="Durable mission leadership"
+        aria-busy="true"
+      >
+        <div className="flex items-start gap-2">
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-phosphor-cyan" />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-xs font-semibold text-phosphor-green">
+              Loading durable missions
+            </h2>
+            <p className="mt-0.5 text-[10px] text-phosphor-green/45">
+              Fetching Mission v1 outcome, plan, and checkpoint from the local
+              store. This times out into a retryable error — never an infinite
+              spinner.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRetryList}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  if (listState.status === "error") {
+    const recovery = missionLoadRecoveryMessage(listState.error);
+    return (
+      <section
+        role="alert"
+        className="mb-3 rounded-lg border border-red-400/25 bg-red-500/5 p-3"
+        data-testid="durable-mission-panel"
+        aria-label="Durable mission leadership"
+      >
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-xs font-semibold text-red-300">
+              {recovery.title}
+            </h2>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-phosphor-green/50">
+              {recovery.body}
+            </p>
+            <p className="mt-1 text-[10px] text-phosphor-green/35">
+              Live job turns (if any) still appear below. Decorative team maps
+              are not execution evidence.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRetryList}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  if (listState.missions.length === 0) {
+    const empty = missionEmptyStoreMessage();
+    return (
+      <section
+        className="mb-3 rounded-lg border border-dashed border-phosphor-green/25 bg-black/20 p-3"
+        data-testid="durable-mission-panel"
+        aria-label="Durable mission leadership"
+      >
+        <div className="flex items-start gap-2">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-phosphor-cyan/70" />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-xs font-semibold text-phosphor-green">
+              {empty.title}
+            </h2>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-phosphor-green/45">
+              {empty.body}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={onCreateLive}>
+            <Plus className="h-3.5 w-3.5" />
+            New live turn
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  const view =
+    detailState.status === "ready" &&
+    detailState.missionId === selectedId
+      ? detailState.view
+      : null;
+
+  return (
+    <section
+      className="mb-3 rounded-lg border border-phosphor-cyan/25 bg-crt-panel p-3"
+      data-testid="durable-mission-panel"
+      aria-label="Durable mission leadership"
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-widest text-phosphor-cyan/70">
+            <ShieldCheck className="h-3 w-3" />
+            Durable leadership evidence · Mission v1
+          </div>
+          <p className="mt-0.5 text-[10px] text-phosphor-green/40">
+            Spok owns plan truth. Requested specialists are plan owners — not
+            running agents without provider lanes.
+          </p>
+        </div>
+        {listState.missions.length > 1 && (
+          <select
+            aria-label="Durable mission"
+            value={selectedId ?? listState.missions[0]?.id ?? ""}
+            onChange={(event) => onSelect(event.target.value)}
+            className="h-8 max-w-64 rounded border border-phosphor-green/20 bg-black/40 px-2 font-mono text-[10px] text-phosphor-green outline-none focus:border-phosphor-cyan/50"
+          >
+            {listState.missions.map((m) => (
+              <option key={m.id} value={m.id}>
+                {missionStatusLabel(m.status)} ·{" "}
+                {m.outcome.length > 48
+                  ? `${m.outcome.slice(0, 47)}…`
+                  : m.outcome}
+              </option>
+            ))}
+          </select>
+        )}
+        <Button variant="ghost" size="sm" onClick={onRetryList}>
+          <RotateCcw className="h-3.5 w-3.5" />
+          Refresh
+        </Button>
+      </div>
+
+      {detailState.status === "loading" && (
+        <div
+          className="flex items-center gap-2 rounded border border-phosphor-green/15 bg-black/25 px-3 py-3 text-[11px] text-phosphor-green/55"
+          aria-busy="true"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-phosphor-cyan" />
+          Loading mission plan, milestones, and checkpoint…
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            onClick={onRetryDetail}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {detailState.status === "error" && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded border border-red-400/25 bg-red-500/5 px-3 py-2.5"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold text-red-300">
+              {missionLoadRecoveryMessage(detailState.error).title}
+            </p>
+            <p className="mt-0.5 text-[10px] text-phosphor-green/50">
+              {missionLoadRecoveryMessage(detailState.error).body}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRetryDetail}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {view && (
+        <div className="space-y-3" data-testid="durable-mission-evidence">
+          <div className="rounded border border-phosphor-green/15 bg-black/30 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={durableMissionStatusVariant(view.status)}>
+                {view.statusLabel}
+              </Badge>
+              <Badge variant="muted" className="font-mono text-[8px]">
+                {view.statusSource}
+              </Badge>
+              <span className="font-mono text-[9px] text-phosphor-green/35">
+                {view.id}
+              </span>
+            </div>
+            <h3 className="mt-2 text-sm font-semibold text-phosphor-green">
+              {view.outcome}
+            </h3>
+            {view.statusReason && (
+              <p className="mt-1 text-[10px] leading-relaxed text-phosphor-green/50">
+                <span className="uppercase tracking-wider text-phosphor-green/35">
+                  Reason ·{" "}
+                </span>
+                {view.statusReason}
+              </p>
+            )}
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div className="rounded border border-phosphor-cyan/20 bg-phosphor-cyan/5 px-2.5 py-2">
+                <span className="block text-[9px] uppercase tracking-widest text-phosphor-cyan/70">
+                  Next action
+                </span>
+                <span className="mt-0.5 block text-xs text-phosphor-green/80">
+                  {view.nextAction.label}
+                </span>
+                <span className="mt-0.5 block font-mono text-[9px] text-phosphor-green/35">
+                  {view.nextAction.kind}
+                </span>
+              </div>
+              <div className="rounded border border-phosphor-green/10 bg-black/20 px-2.5 py-2">
+                <span className="block text-[9px] uppercase tracking-widest text-phosphor-green/45">
+                  Repository (authority-neutral read)
+                </span>
+                <span className="mt-0.5 block truncate font-mono text-[10px] text-phosphor-green/65">
+                  {view.repository || "—"}
+                </span>
+              </div>
+            </div>
+            {view.definitionOfDone.length > 0 && (
+              <ul className="mt-2 list-inside list-disc text-[10px] text-phosphor-green/55">
+                {view.definitionOfDone.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {view.checkpoint && (
+            <div
+              className="rounded border border-phosphor-amber/20 bg-black/25 p-3"
+              data-testid="durable-mission-checkpoint"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-xs font-semibold text-phosphor-green">
+                  Latest checkpoint
+                </h4>
+                <Badge variant="muted" className="text-[8px]">
+                  {view.checkpoint.persisted === false
+                    ? "Materialised · not yet persisted"
+                    : view.checkpoint.persisted === true
+                      ? "Persisted"
+                      : "Checkpoint"}
+                </Badge>
+                <span className="font-mono text-[9px] text-phosphor-green/35">
+                  {formatRelativeTime(view.checkpoint.at)}
+                </span>
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                <div>
+                  <span className="text-[9px] uppercase tracking-widest text-phosphor-green/40">
+                    Active
+                  </span>
+                  <p className="mt-0.5 font-mono text-[10px] text-phosphor-green/70">
+                    {view.checkpoint.active.length
+                      ? view.checkpoint.active.join(", ")
+                      : "None"}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase tracking-widest text-phosphor-green/40">
+                    Completed
+                  </span>
+                  <p className="mt-0.5 font-mono text-[10px] text-phosphor-green/70">
+                    {view.checkpoint.completed.length
+                      ? view.checkpoint.completed.join(", ")
+                      : "None"}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase tracking-widest text-phosphor-green/40">
+                    Evidence refs
+                  </span>
+                  <p className="mt-0.5 font-mono text-[10px] text-phosphor-green/70">
+                    {view.checkpoint.evidenceRefs.length
+                      ? view.checkpoint.evidenceRefs.join(", ")
+                      : "None recorded"}
+                  </p>
+                </div>
+              </div>
+              {view.checkpoint.blocked.length > 0 && (
+                <ul className="mt-2 space-y-1" aria-label="Checkpoint blockers">
+                  {view.checkpoint.blocked.map((b) => (
+                    <li
+                      key={b.id}
+                      className="flex items-start gap-1.5 text-[10px] text-red-300/90"
+                    >
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      <span>
+                        <span className="font-mono">{b.id}</span> · {b.reason}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {view.checkpoint.risks.length > 0 && (
+                <div className="mt-2">
+                  <span className="text-[9px] uppercase tracking-widest text-phosphor-amber/70">
+                    Risks
+                  </span>
+                  <ul className="mt-1 list-inside list-disc text-[10px] text-phosphor-green/55">
+                    {view.checkpoint.risks.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {view.checkpoint.nextDecisions.length > 0 && (
+                <div className="mt-2">
+                  <span className="text-[9px] uppercase tracking-widest text-phosphor-cyan/70">
+                    Next decisions
+                  </span>
+                  <ul className="mt-1 list-inside list-disc text-[10px] text-phosphor-green/65">
+                    {view.checkpoint.nextDecisions.map((d) => (
+                      <li key={d}>{d}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(view.milestones.length > 0 ||
+            view.workItemsWithoutMilestone.length > 0) && (
+            <div data-testid="durable-mission-plan">
+              <h4 className="mb-1.5 text-xs font-semibold text-phosphor-green">
+                Plan · milestones & work items
+              </h4>
+              <div className="space-y-2">
+                {view.milestones.map((ms) => (
+                  <div
+                    key={ms.id}
+                    className="rounded border border-phosphor-green/15 bg-black/25 p-2.5"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-medium text-phosphor-green/85">
+                        {ms.title}
+                      </span>
+                      <Badge variant="muted" className="text-[8px]">
+                        {ms.status}
+                      </Badge>
+                      <span className="font-mono text-[8px] text-phosphor-green/30">
+                        {ms.id}
+                      </span>
+                    </div>
+                    {ms.exitCriteria.length > 0 && (
+                      <p className="mt-1 text-[9px] text-phosphor-green/40">
+                        Exit · {ms.exitCriteria.join("; ")}
+                      </p>
+                    )}
+                    {ms.unsatisfiedDeps.length > 0 && (
+                      <p className="mt-1 text-[9px] text-phosphor-amber/80">
+                        Unsatisfied deps · {ms.unsatisfiedDeps.join(", ")}
+                      </p>
+                    )}
+                    <ul className="mt-2 space-y-1.5">
+                      {ms.workItems.map((wi) => (
+                        <li
+                          key={wi.id}
+                          className="rounded border border-phosphor-green/10 bg-black/20 px-2 py-1.5"
+                        >
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] text-phosphor-green/80">
+                              {wi.title}
+                            </span>
+                            <Badge variant="muted" className="text-[8px]">
+                              {workItemStatusLabel(wi.status)}
+                            </Badge>
+                            <Badge
+                              variant={wi.ownerIsSpok ? "cyan" : "muted"}
+                              className="text-[8px]"
+                            >
+                              {wi.ownerIsSpok
+                                ? "Spok"
+                                : `${wi.owner} · plan only`}
+                            </Badge>
+                          </div>
+                          <p className="mt-0.5 text-[9px] text-phosphor-green/40">
+                            Deps · {wi.dependencyState}
+                            {wi.unsatisfiedDeps.length
+                              ? ` (waiting on ${wi.unsatisfiedDeps.join(", ")})`
+                              : ""}
+                            {" · "}
+                            {workItemEvidenceBadge(wi)}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                {view.workItemsWithoutMilestone.map((wi) => (
+                  <div
+                    key={wi.id}
+                    className="rounded border border-phosphor-green/10 bg-black/20 px-2 py-1.5"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] text-phosphor-green/80">
+                        {wi.title}
+                      </span>
+                      <Badge variant="muted" className="text-[8px]">
+                        {workItemStatusLabel(wi.status)}
+                      </Badge>
+                      <Badge
+                        variant={wi.ownerIsSpok ? "cyan" : "muted"}
+                        className="text-[8px]"
+                      >
+                        {wi.ownerIsSpok ? "Spok" : `${wi.owner} · plan only`}
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 text-[9px] text-phosphor-green/40">
+                      Deps · {wi.dependencyState} · {workItemEvidenceBadge(wi)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {view.isEmptyPlan && (
+            <p className="rounded border border-dashed border-phosphor-green/20 bg-black/15 px-3 py-2 text-[10px] text-phosphor-green/45">
+              This durable mission has no milestones or work items yet. That is
+              an empty plan — not decorative progress.
+            </p>
+          )}
+
+          {view.specialistPlanOwners.length > 0 && (
+            <div className="rounded border border-phosphor-magenta/15 bg-black/20 px-2.5 py-2">
+              <span className="text-[9px] uppercase tracking-widest text-phosphor-magenta/70">
+                Specialist plan owners (not running agents)
+              </span>
+              <ul className="mt-1 space-y-0.5 text-[10px] text-phosphor-green/50">
+                {view.specialistPlanOwners.map((s) => (
+                  <li key={s.owner}>
+                    <span className="font-medium text-phosphor-green/70">
+                      {s.owner}
+                    </span>
+                    {" · "}
+                    {s.workItemIds.join(", ")} — {s.note}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
