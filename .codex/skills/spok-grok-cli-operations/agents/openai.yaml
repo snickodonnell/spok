@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spok Grok CLI Operations"
+  short_description: "Run bounded Grok CLI work with compact evidence"
+  default_prompt: "Use $spok-grok-cli-operations to plan and run this Grok CLI task safely and efficiently."

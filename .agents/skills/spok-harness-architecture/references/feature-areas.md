@@ -22,6 +22,8 @@ Use this reference when choosing where a roadmap item belongs.
 
 - Runtime, process lifecycle, cwd, env, filesystem, git route, Tauri, permissions, CSP, or secrets -> use `$spok-secure-runtime`.
 - Parser, stream schema, raw events, coalescing, replay, fixtures, file-change links, or diff contracts -> use `$spok-stream-contracts`.
+- Grok CLI capability/version, argv, prompt files/JSON, sessions, leader backend, worktree commands, report schema, diagnostics, or CLI cleanup -> use `$spok-grok-cli-operations`.
+- Mission decomposition, work-item receipts, dependency scheduling, context/token budgets, provider-lane truth, retries, leader synthesis, or role-attributed handoff -> use `$spok-agent-orchestration`.
 - Missions, Spok leadership, project/milestone/work-item/checkpoint contracts, session UX, roadmap sequencing, worktrees, automations, performance, skills/plugins/MCP/hook product shape, or cross-module architecture -> use this skill.
 - UX audits, startup/loading/recovery, navigation hierarchy, status vocabulary, next-action design, accessibility, or responsive/adaptive behavior -> use this skill; add `$spok-secure-runtime` when lifecycle authority/trust/cancellation is involved and `$spok-stream-contracts` when state provenance comes from events.
 

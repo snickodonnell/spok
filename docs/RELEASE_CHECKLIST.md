@@ -15,6 +15,7 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 ## Pre-Release
 
 - [ ] Roadmap, UX audit, security posture, and architecture docs are current; no shipped behavior is still described more favorably than direct dogfood evidence.
+- [ ] Grok CLI/agent correction roadmap, root `AGENTS.md`, and canonical `.agents/skills` agree with the installed supported CLI contract; `.codex/skills` entries are compatibility shims only.
 - [ ] Version bumped in relevant package metadata.
 - [ ] `npm test` green.
 - [ ] `npm run build` green.
@@ -38,12 +39,17 @@ This checklist covers the current internal web/Tauri packaging path and the futu
 - [ ] Durable automation ledger roundtrip, overwrite, redaction, trust denial, corrupt input, and interrupted-run reconciliation tests pass.
 - [ ] Fleet capacity persists across restart; lowering it does not cancel active work, and queued rows explain capacity plus priority/FIFO position.
 - [ ] Mission metadata, ordered turns, and accepted state roundtrip safely; requested specialists never masquerade as emitted lanes; historical person traces remain inspectable; follow-up re-verifies the existing managed worktree and uses Grok continuation.
+- [ ] Mission preflight records CLI version/capabilities and exact session/worktree intent; unsupported required behavior fails before launch with one corrective action.
+- [ ] Non-trivial mission prompts use redacted runtime-managed file/JSON transport, leaves are bounded and cannot create unbudgeted subagents, and structured returns stay outside raw transcript replay.
+- [ ] Requested lanes, provider-running lanes, queued work, execution spend, and protected integration/recovery reserve are distinct and truthful in mission state/UI.
+- [ ] Agent reports are reconciled against Git/check/artifact evidence before review readiness; retries are bounded, attributable, and do not restart healthy siblings.
 - [ ] Long-project fixture/checkpoint restore shows useful mission state without replaying the full history; hot memory and rendered DOM remain bounded.
 - [ ] Cancelling a run while it waits for approval removes that exact request and cannot later launch the process.
 - [ ] Performance budgets checked when the release includes UI/runtime changes: `npm run test:perf`; manual smoke for progressive restore (last session opens without replaying every durable log), actionable restore failure, and live stream responsiveness.
 - [ ] Core loop passes keyboard-only use, visible selected/focus semantics, AA contrast in every theme, reduced motion, 200% zoom, and screen-reader smoke.
 - [ ] Compact, standard, and wide layouts are checked at 390, 768, 1024, and 1440 px without losing safety state or task context.
 - [ ] Representative mission-control budgets pass: 100 jobs, 10 active agent lanes, 10k hot events, common destination switch under 250 ms, and inbox projection under 16 ms.
+- [ ] Dogfood handoff leaves the intended clean checkout inventory with no unaccepted agent worktrees/branches, prompt artifacts, generated reports, or temporary repositories.
 
 ## Internal Tauri Build
 
@@ -111,6 +117,8 @@ Internal builds can link to release notes and instruct users to install the new 
 11. Complete the core loop by keyboard at 200% zoom and verify operational contrast in all themes.
 12. Confirm release notes match the shipped behavior.
 13. Restart the client during active host work and confirm the mission continues; reopen from the latest durable checkpoint and verify pending approvals did not revive.
+14. Compare requested crew with provider-emitted lanes and confirm actual capacity, remaining synthesis reserve, integration status, and one safest next action are truthful.
+15. Complete previewed handoff/cleanup and confirm the final summary attributes Spok coordination, real agent work, leader verification/repairs, and remaining risk.
 
 ## Rollback
 

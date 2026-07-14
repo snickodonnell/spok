@@ -27,6 +27,7 @@ Spok is a privileged local harness and multi-agent leader for Grok Build. It can
 | Secrets | Secrets are stored locally, redacted from exports/logs where possible, and treated as sensitive even after redaction. |
 | Desktop | Tauri is an interim shell. It must not gain arbitrary process spawn permissions. The long-term product is native UI plus the shared local runtime. |
 | Grok login | External. Users authenticate through the native Grok CLI; Spok does not store Grok API keys or run Grok OAuth. |
+| Grok invocation | Spok compiles a versioned, sanitized run receipt from discovered CLI capabilities. Non-trivial prompts use runtime-managed files/JSON rather than process argv; leaves receive bounded turns/tools/permissions and no nested delegation by default. Unsupported required capabilities fail before launch. |
 
 ## Privileged Routes
 
@@ -88,6 +89,17 @@ Client presentation must show the effective policy and its scope before launch o
 
 Mission launch and every material plan escalation must show the effective repository/worktree, permission mode, approval behavior, concurrency/resource budget, and destructive limits. A leader may schedule only work whose dependency, isolation, and authority requirements are currently satisfied.
 
+## Grok CLI Invocation Boundary
+
+The CLI adapter is privileged policy, not presentation convenience. Before mission launch it records the installed version/capability snapshot and compiles an immutable run spec with cwd/worktree, session intent, prompt artifact, output/report contract, maximum turns, model/effort, tool/web/sandbox policy, permission mode, subagent policy, and debug retention.
+
+- Non-trivial prompts use runtime-owned `--prompt-file` or `--prompt-json` artifacts. Audit and UI records contain a redacted summary/hash, never full secret-bearing prompt text or oversized argv.
+- Unattended resume/fork identifies the exact session and verifies its worktree/base. Ambiguous “continue latest” is interactive only.
+- Leaf agents cannot create descendants unless a separate work-item receipt grants bounded nested delegation.
+- A leader backend is used only after health/capability inspection; failure produces an explicit checkpoint or denial, not broader fallback authority.
+- Raw streaming/trace/export data is redacted and kept outside hot leader context. Retention is failure- or handoff-driven.
+- Prompt/report artifacts and managed worktrees participate in previewed cleanup. Dirty/unpushed state is preserved unless its disposition is explicitly approved.
+
 ## Desktop Boundary
 
 Current Tauri permissions should stay narrow:
@@ -140,6 +152,9 @@ Focused checks:
 10. Attempt scoped and global stop/cleanup actions and confirm authorization, impact preview, audit identity, and unrelated-run preservation.
 11. Delegate a work item and confirm its command, path, environment, approval, concurrency, and retry scope cannot exceed the mission receipt.
 12. Restart during a long mission and confirm checkpoints remain inspectable while pending approvals and execution authority do not revive.
+13. Compile a long/secret-bearing Grok prompt and confirm process argv, audit events, approvals, diagnostics, and UI show only a redacted artifact receipt.
+14. Request a leaf descendant or unsupported CLI flag and confirm the launch is denied before spawn without falling back to broader policy or main checkout.
+15. Resume/fork and clean up a mission, confirming exact session/worktree identity, dry-run impact, dirty/unpushed preservation, and prompt-artifact removal.
 
 ## Residual Risks
 

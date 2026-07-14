@@ -124,6 +124,10 @@ describe("Spok mission contract", () => {
     assert.match(prompt, /native subagent capabilities/i);
     assert.match(prompt, /do not claim an agent ran/i);
     assert.match(prompt, /at most 4 subagents/i);
+    assert.match(prompt, /AGENTS\.md/i);
+    assert.match(prompt, /reserve at least 25%/i);
+    assert.match(prompt, /specialists as leaf agents/i);
+    assert.match(prompt, /owned and excluded scope/i);
     assert.match(prompt, /durable checkpoint/i);
   });
 
@@ -339,6 +343,8 @@ describe("Spok mission contract", () => {
     assert.match(prompt, /Continue the Spok-led Grok mission/i);
     assert.match(prompt, /close the validation gaps/i);
     assert.match(prompt, /No provider-emitted subagent lanes/i);
+    assert.match(prompt, /Preserve at least 25%/i);
+    assert.match(prompt, /retry at most once/i);
   });
 
   it("renders contradictory job and session states as mission diagnostics", () => {

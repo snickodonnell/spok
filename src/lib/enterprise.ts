@@ -190,14 +190,18 @@ export function buildEnterpriseMissionPrompt(input: {
     crewBlock(crew),
     "Optional specialist suggestions:",
     manifest,
+    "Before delegating, read and follow the repository AGENTS.md and the canonical .agents/skills/spok-agent-orchestration/SKILL.md and .agents/skills/spok-grok-cli-operations/SKILL.md when present. Load only the references they route to; do not paste the skill bodies or repository history into agent prompts.",
     "Lead this mission using your native subagent capabilities:",
     "- restate the outcome, constraints, definition of done, risks, and the next meaningful checkpoint before delegating;",
     "- create bounded work items, identify dependencies, and parallelize only independent work;",
     "- create and lead real subagents for useful specialist assignments; preserve suggested names when the provider allows it;",
     `- keep the active team to at most ${MAX_ENTERPRISE_CREW} subagents and prefer the smallest effective team;`,
-    "- give each agent the smallest sufficient context, expected evidence, and a clear return condition;",
+    "- reserve at least 25% of the available turn/context budget for your integration, validation, and one bounded recovery; do not allocate that reserve to initial specialists;",
+    "- give each agent one compact receipt with owned and excluded scope, dependencies, verified cwd/worktree, authority, maximum turns, exact checks, expected evidence, and a clear return condition;",
+    "- keep specialists as leaf agents: they must not create subagents unless you issue a separate visible, budgeted work item;",
+    "- reference paths, symbols, decisions, and artifacts instead of replaying the mission transcript; require compact reports rather than raw chatter;",
     "- keep work inside the isolated worktree Spok provides;",
-    "- supervise blockers and failed work, but do not retry indefinitely or broaden authority;",
+    "- supervise blockers and failed work; retry at most once by default with a narrower observed failure, and never broaden authority;",
     "- integrate and review agent results yourself rather than merely listing them;",
     "- validate the smallest useful scope and surface conflicts or policy blocks;",
     "- do not claim an agent ran unless a real provider-emitted subagent lane exists;",
@@ -584,7 +588,7 @@ export function buildEnterpriseFollowupPrompt(input: {
     ? input.lanes
         .map(
           (lane) =>
-            `${lane.label} [${lane.status}] — ${clip(lane.summary, 800) || "No lane summary"}`
+            `${lane.label} [${lane.status}] — ${clip(lane.summary, 400) || "No lane summary"}`
         )
         .join("\n")
     : "No provider-emitted subagent lanes were captured in the previous turn.";
@@ -593,11 +597,11 @@ export function buildEnterpriseFollowupPrompt(input: {
     goalBlock(input.team.goal),
     crewBlock(input.team.requestedCrew),
     input.team.summary
-      ? `Previous team summary:\n${clip(input.team.summary, 6_000)}`
+      ? `Previous team summary:\n${clip(input.team.summary, 3_000)}`
       : "The prior turn ended without a substantial team summary.",
     `Previous crew evidence:\n${laneEvidence}`,
     `Captain's follow-up:\n${input.followup.trim()}`,
-    "Re-plan dependencies before delegating. Coordinate real subagents only when the request benefits from them. Finish with an updated durable checkpoint that distinguishes new evidence from prior work and names the safest next action.",
+    "Re-plan dependencies before delegating. Preserve at least 25% of this turn for integration/validation. Coordinate real leaf subagents only when the request benefits from them, send checkpoint deltas rather than the prior transcript, and retry at most once with a narrower observed failure. Finish with an updated durable checkpoint that distinguishes new evidence from prior work and names the safest next action.",
   ].join("\n\n");
 }
 

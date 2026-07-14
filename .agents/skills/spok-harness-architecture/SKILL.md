@@ -7,7 +7,7 @@ description: Use when planning or implementing Spok's Grok Build roadmap, Spok-l
 
 ## Start Here
 
-Read `docs/HARNESS_AUDIT_AND_ROADMAP.md` and `docs/UX_AUDIT.md` before roadmap, UX, or cross-cutting product work. Spok is the accountable leader of long-running Grok 4.5 projects; agents contribute bounded work and never become the source of product truth. Frame the change as one part of Spok's core loop:
+Read `docs/HARNESS_AUDIT_AND_ROADMAP.md` and `docs/UX_AUDIT.md` before roadmap, UX, or cross-cutting product work. For CLI or multi-agent correction work, also read `docs/GROK_CLI_AND_AGENT_ORCHESTRATION_ROADMAP.md`. Spok is the accountable leader of long-running Grok 4.5 projects; agents contribute bounded work and never become the source of product truth. Frame the change as one part of Spok's core loop:
 
 1. trust/open repository;
 2. define an outcome, definition of done, constraints, and explicit policy;
@@ -39,17 +39,19 @@ Until the active audit closes, P0/P1 recoverability, lifecycle intent, state coh
 6. Define intent and scope for lifecycle actions. Client hide, disconnect, unload, freeze, navigation, or layout transition is never intent to stop work. Global/destructive actions need a complete impact preview.
 7. Keep provider parsing behind adapters and keep privileged runtime logic out of presentation components.
 8. Design hot/cold data flow before high-volume UI work. Subscribe through stable projections/fingerprints, virtualize history, checkpoint long missions, and prove the roadmap budget with representative fixtures.
-9. Use `$spok-secure-runtime` for process, filesystem, Git/worktree, Tauri/native capabilities, delegated authority/budgets, permissions, secrets, approvals, trust, cancellation, cleanup, or audit changes.
-10. Use `$spok-stream-contracts` for parser, replay, event schema, raw-event preservation, agent/mission provenance, diff-linking, terminal-state provenance, checkpoint materialization, or fixture changes.
-11. Add focused tests for the main transition and at least one failure/recovery path. Required UI E2E must fail on missing/blocked UI rather than conditionally skip. Run the smallest suite first, then broader verification in proportion to risk.
-12. Close the work by updating the roadmap and UX audit status, then cleaning related docs. Remove replaced plans and completed checklists instead of accumulating historical clutter.
+9. Use `$spok-grok-cli-operations` for capability preflight, provider argv/prompt transport, sessions, leader/worktree commands, bounded runs, diagnostics, or CLI cleanup.
+10. Use `$spok-agent-orchestration` for mission decomposition, work-item receipts, dependency scheduling, context/token budgets, provider-lane truth, supervision, synthesis, or role-attributed handoff.
+11. Use `$spok-secure-runtime` for process, filesystem, Git/worktree, Tauri/native capabilities, delegated authority/budgets, permissions, secrets, approvals, trust, cancellation, cleanup, or audit changes.
+12. Use `$spok-stream-contracts` for parser, replay, event schema, raw-event preservation, agent/mission provenance, diff-linking, terminal-state provenance, checkpoint materialization, or fixture changes.
+13. Add focused tests for the main transition and at least one failure/recovery path. Required UI E2E must fail on missing/blocked UI rather than conditionally skip. Run the smallest suite first, then broader verification in proportion to risk.
+14. Close the work by updating the roadmap and UX audit status, then cleaning related docs. Remove replaced plans and completed checklists instead of accumulating historical clutter.
 
 ## Architecture Rules
 
 - Treat Spok as a privileged local desktop harness, not a normal untrusted web app.
 - Treat Spok—not any child agent—as owner of the mission plan, dependency transitions, synthesis, readiness claim, and next action.
 - Requested specialists are plan metadata. Show them as running only after provider evidence creates a real lane.
-- Parallelize only work items whose dependencies, repository locks, isolation, authority, and budgets allow it.
+- Parallelize only work items whose dependencies, repository locks, verified isolation, authority, and reserved integration budget allow it. A failed worktree check launches nothing and never falls back to main or another shared checkout.
 - Long missions reopen checkpoint-first. Append-only cold evidence must not sit on the hot render path or require full replay for first useful content.
 - Review readiness—not process exit—is the meaningful success state.
 - Concurrent/background work is worktree-isolated by default; failure to establish isolation means no process launch.
@@ -71,7 +73,7 @@ Until the active audit closes, P0/P1 recoverability, lifecycle intent, state coh
 
 ## Parallel Work
 
-When parallel agents are explicitly requested, split by ownership boundary (for example runtime, orchestration, review UI, documentation), name excluded files, and integrate through existing contracts. Avoid assigning two agents to the same high-churn file. The coordinating agent owns final verification and documentation truth.
+When parallel agents are explicitly requested, first use `$spok-agent-orchestration`. Split by ownership boundary (for example runtime, orchestration, review UI, documentation), name excluded files, issue a bounded receipt, force leaves to remain leaves, and integrate through existing contracts. Avoid assigning two agents to the same high-churn file. Requested crew is not evidence that an agent ran. The coordinating agent preserves synthesis budget and owns final verification, cleanup, and documentation truth.
 
 ## Definition Of Done
 

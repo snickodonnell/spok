@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-13
 
-This is the product and engineering source of truth for Spok. Completed implementation detail belongs in code, tests, and Git history. `docs/UX_AUDIT.md` is the active interaction-remediation contract; this document owns product direction and delivery order.
+This is the product and engineering source of truth for Spok. Completed implementation detail belongs in code, tests, and Git history. `docs/UX_AUDIT.md` is the active interaction-remediation contract; `docs/GROK_CLI_AND_AGENT_ORCHESTRATION_ROADMAP.md` owns the detailed correction track for provider use and agent management; this document owns product direction and delivery order.
 
 ## North Star
 
@@ -64,8 +64,9 @@ Spok already has a broad capability spine:
 - Effective-policy summaries across composer, Settings, Topbar, Run Status, and Status Line share one risk model; high-risk selector and slash-command changes require scope/duration confirmation before mutation.
 - Deterministic long-project performance gates for 100 jobs, 10 lanes, 10k hot events, and checkpoint-first projection under 500 ms. Production `session.nodes` is bounded to `MAX_HOT_NODES = 8000`, including reduce, replay, and hydrate paths.
 - An experimental Spok-led multi-agent mission implementation with durable turns, real provider-lane linkage, same-worktree continuation, and accepted summaries. Its internal name and evidence hierarchy are being migrated; it is not yet the long-project contract.
+- A repository-wide agent operating contract plus canonical Grok CLI and agent-orchestration skills. These define capability preflight, compact receipts, leaf-agent limits, synthesis reserves, provider-lane truth, and clean handoff; the runtime adapter and scheduler work remains on the correction track.
 
-Direct dogfood evidence still shows release-blocking product defects. Startup/lifecycle/trust defects UX-001, UX-002, UX-003, and UX-008 are closed. UX-004–UX-007 and UX-009–UX-017 remain the current gate. UX-005/UX-006 now span Inbox, Missions, Monitor, Run, review readiness, and handoff but stay open until remaining row E2E/a11y criteria pass.
+Direct dogfood evidence still shows release-blocking product defects. Startup/lifecycle/trust defects UX-001, UX-002, UX-003, and UX-008 are closed. UX-004–UX-007, UX-009–UX-017, and UX-023 remain the current gate. UX-005/UX-006 now span Inbox, Missions, Monitor, Run, review readiness, and handoff but stay open until remaining row E2E/a11y criteria pass. UX-023 and the CLI/orchestration correction roadmap capture the latest mission's requested-vs-real lane, resource reserve, synthesis, and cleanup burden.
 
 ## Ordered Delivery Plan
 
@@ -104,11 +105,12 @@ Build in this order:
 1. Replace prompt-only mission metadata with a versioned mission record: outcome, definition of done, constraints, policy, repository/worktree, status provenance, next action, and checkpoint. **Domain/API slice landed** (`MISSION_SCHEMA_VERSION = 1`, FS persist under `$SPOK_HOME/missions`, privileged list/create/read/update/checkpoint routes). Not yet the user-facing Missions store.
 2. Add durable milestones and work items with dependencies, owner, requested capability, authority, time/token/tool budget, expected evidence, retries, and terminal outcome. **Domain/API slice landed** with validation that refuses false dependency completion without evidence and keeps terminal provenance distinct from process exit. Scheduler and UI wiring remain open.
 3. Let Spok propose and revise the plan. Plan changes retain rationale and require user approval only when authority, destructive scope, cost, or declared outcome changes.
-4. Add a scheduler for ready work items with dependency, capacity, repository-lock, and worktree constraints. Spok may parallelize only independent work.
-5. Add checkpoint summaries that make a mission resumable without replaying its full transcript: completed, active, blocked, changed assumptions, evidence, risks, and next decisions.
-6. Add context packets and artifact references so agents receive the smallest sufficient context, not the whole project history.
-7. Add supervision: stalled-run detection, bounded retry, agent replacement, plan repair, budget pressure, approval expiry, and human escalation.
-8. Add leader synthesis that verifies reports against repository/evidence state before marking a milestone or mission ready for review.
+4. Replace ad hoc Grok argv/prose with a versioned run spec: capability snapshot, prompt file/JSON, exact session intent, structured stream/report, leaf `--no-subagents`, bounded turns/tools/policy, redacted audit receipt, and native worktree/session cleanup.
+5. Add a scheduler for ready work items with dependency, provider capacity, repository-lock, verified worktree, and reserved integration/recovery budget constraints. Spok may parallelize only independent work.
+6. Add checkpoint summaries that make a mission resumable without replaying its full transcript: completed, active, blocked, changed assumptions, evidence, risks, budget use, cleanup state, and next decisions.
+7. Add compact context packets and artifact references so agents receive the smallest sufficient context, not the whole project history; measure packet and return size.
+8. Add supervision: provider-evidenced stall detection, one bounded error-specific retry by default, agent replacement, plan repair, budget pressure, approval expiry, and human escalation.
+9. Add leader synthesis that verifies structured reports against repository/evidence state before marking a milestone or mission ready for review.
 
 Exit criteria:
 
@@ -191,6 +193,7 @@ High-frequency UI subscribes to stable projections/fingerprints, not whole sessi
 
 - This roadmap owns product outcomes, order, exit criteria, and budgets.
 - `docs/UX_AUDIT.md` owns observed interaction defects and closure evidence.
+- `docs/GROK_CLI_AND_AGENT_ORCHESTRATION_ROADMAP.md` owns the detailed CLI/agent correction sequence, budgets, and dogfood acceptance scenario.
 - `docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md` owns runtime/native boundaries and migration.
 - `docs/SECURITY_POSTURE.md` owns authority, trust, delegation, containment, and audit controls.
 - `docs/RELEASE_CHECKLIST.md` owns shippable verification.

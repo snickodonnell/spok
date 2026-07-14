@@ -7,13 +7,14 @@ The product goal is to be the most useful, user-friendly, and performant Grok Bu
 ## Current Plan
 
 - Product and performance roadmap: [docs/HARNESS_AUDIT_AND_ROADMAP.md](docs/HARNESS_AUDIT_AND_ROADMAP.md)
+- Grok CLI and agent-orchestration correction track: [docs/GROK_CLI_AND_AGENT_ORCHESTRATION_ROADMAP.md](docs/GROK_CLI_AND_AGENT_ORCHESTRATION_ROADMAP.md)
 - Active UX audit and remediation contract: [docs/UX_AUDIT.md](docs/UX_AUDIT.md)
 - Low-overhead runtime and native desktop architecture: [docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md](docs/LOW_OVERHEAD_DESKTOP_ARCHITECTURE.md)
 - Security posture: [docs/SECURITY_POSTURE.md](docs/SECURITY_POSTURE.md)
 - Release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - Desktop updater notes: [docs/UPDATER_AND_DESKTOP.md](docs/UPDATER_AND_DESKTOP.md)
 
-The fast local harness and Review Workbench foundations are implemented: batched/virtualized streams, snapshot-first persistence, durable trust, trace-linked diffs, isolated background launch, a durable job ledger, concurrent approvals, fleet controls, an experimental Spok-led mission flow, and guided Git handoff. Direct dogfood testing also found release-blocking lifecycle, navigation, authority, accessibility, and adaptive-layout defects. The current milestone makes mission control truthful, fast, and usable before expanding the long-project engine.
+The fast local harness and Review Workbench foundations are implemented: batched/virtualized streams, snapshot-first persistence, durable trust, trace-linked diffs, isolated background launch, a durable job ledger, concurrent approvals, fleet controls, an experimental Spok-led mission flow, and guided Git handoff. Direct dogfood testing also found release-blocking lifecycle, navigation, authority, accessibility, adaptive-layout, CLI-utilization, and agent-management defects. The current milestone makes mission control truthful, fast, token-efficient, and usable before expanding the long-project engine.
 
 ## Why Spok
 
@@ -110,6 +111,7 @@ Key areas:
 - `samples`: replayable stream fixtures.
 - `tests`: parser, API, security, perf, session, stream, and regression coverage.
 - `scripts`: catalog checks, LAN helpers, Rust path, automation scripts.
+- `.agents/skills`: canonical project guidance for harness architecture, secure runtime, stream contracts, Grok CLI operation, and agent orchestration. Root `AGENTS.md` is the concise repository-wide operating contract; `.codex/skills` contains compatibility shims only.
 - `src-tauri`: interim desktop packaging only.
 
 ## Security Model
@@ -126,4 +128,4 @@ Daily driver commands today: `npm run dev:app` (standalone runtime + browser UI)
 
 ## Documentation Policy
 
-Documentation should stay current and compact. Product direction and performance budgets belong in the roadmap, interaction defects in the UX audit, runtime details in the low-overhead architecture plan, delegation/security controls in the posture document, and release steps in the checklist. Snapshot handoff docs and completed milestone trackers should be removed or archived outside active docs.
+Documentation should stay current and compact. Product direction and performance budgets belong in the main roadmap, detailed Grok CLI/agent corrections in the correction track, interaction defects in the UX audit, runtime details in the low-overhead architecture plan, delegation/security controls in the posture document, and release steps in the checklist. Snapshot handoff docs and completed milestone trackers should be removed or archived outside active docs.

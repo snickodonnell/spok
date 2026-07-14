@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spok Agent Orchestration"
+  short_description: "Delegate and synthesize bounded Grok agent work"
+  default_prompt: "Use $spok-agent-orchestration to plan, delegate, supervise, and hand off this Spok mission."

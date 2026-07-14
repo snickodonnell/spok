@@ -13,6 +13,7 @@ Spok has broad harness capability, but the current interface is not yet a depend
 - Missions, Run, Review, Automate, and Extend do not yet share one navigation model;
 - session, job, run, turn, mission, review, and handoff states can contradict one another;
 - trust, permission, isolation, stop, delete, and cleanup consequences are fragmented or implicit;
+- requested specialists, real provider lanes, remaining execution reserve, synthesis progress, and cleanup responsibility are not presented as one truthful mission contract;
 - dense, low-contrast, frequently 9–10 px controls and hover-only actions prevent the advertised keyboard/AA quality bar;
 - smoke tests can pass or skip while the usable workspace is still blocked.
 
@@ -308,15 +309,29 @@ Required outcome:
 - add success plus failure/recovery E2E for launch, restore, approval, stop, review, handoff, archive/cleanup, and phone disconnect;
 - add automated accessibility checks plus manual screen-reader/high-contrast gates.
 
+#### UX-023 — Agent management exposes mechanics while hiding execution truth
+
+The 2026-07-13 roadmap dogfood mission produced useful integrated work, but the operator still had to reconcile requested crew with actual Grok lanes, recover from worktree/continuation interruptions, preserve enough provider balance for synthesis, remove extra checkouts/artifacts, and ask for a role-attributed quality assessment. A configured crew can suggest parallel capacity that never existed, while raw agent activity is easier to find than ownership, remaining budget, integration status, or the single action required from the user.
+
+Required outcome:
+
+- start from the user outcome and let Spok propose the smallest dependency-aware team; naming agents is optional expert control;
+- distinguish requested, assigned, provider-running, reported, verified, failed, replaced, and integrated states with direct provenance;
+- show actual concurrency, queue pressure, remaining execution/synthesis reserve, worktree identity, and integration owner without exposing raw prompt administration by default;
+- group equivalent approvals and ask the user only when authority, destructive scope, material cost, or the requested outcome changes;
+- end with a previewed Git/cleanup handoff and a concise summary of Spok coordination, real agent contributions, leader verification/repairs, and remaining risk;
+- prove the flow with a dogfood/E2E scenario covering lane mismatch, isolation failure, resource exhaustion, restart, synthesis, and clean repository inventory.
+
 ## Cross-Cutting Remediation Model
 
-Work should land as five vertical slices:
+Work should land as six vertical slices:
 
 1. **Recoverable shell:** fix hydration, explicit disconnected/error states, truthful stale shells, and non-skipping startup E2E.
 2. **Safe lifecycle:** remove passive mobile cancellation, scope stop/delete/cleanup, separate restore from trust, and add previews/audit.
 3. **Coherent control room:** make Missions the durable core destination, simplify primary navigation, canonicalize state/outcomes, and rebuild rows around the next safe action.
-4. **Review-centered core loop:** simplify launch/composer, unify review evidence/validation/handoff, and make continuation preserve prior evidence.
-5. **Accessible adaptive surfaces:** raise typography/contrast, complete keyboard/semantics, establish compact/standard/wide layouts, and then reshape Missions/Automate/Extend on shared primitives.
+4. **Efficient agent leadership:** compile bounded CLI/work-item receipts, show real lanes and reserves, keep leaf context compact, and make Spok own retries, synthesis, and cleanup.
+5. **Review-centered core loop:** simplify launch/composer, unify review evidence/validation/handoff, and make continuation preserve prior evidence.
+6. **Accessible adaptive surfaces:** raise typography/contrast, complete keyboard/semantics, establish compact/standard/wide layouts, and then reshape Missions/Automate/Extend on shared primitives.
 
 ## Global UX Acceptance Criteria
 
@@ -327,6 +342,7 @@ Work should land as five vertical slices:
 - Every inbox row shows identity, location, state reason, attention, and one safest next action.
 - Process, task, review, and handoff states never contradict; every terminal outcome includes provenance.
 - A new user can launch an isolated task in under 30 seconds without understanding worktree internals.
+- Requested crew never masquerades as real concurrency; Spok preserves and displays an integration/recovery reserve and owns previewed cleanup.
 - The full core loop works by keyboard and at 200% zoom; all themes meet AA for operational content.
 - Compact, standard, and wide layouts preserve task context and expose the same safety state.
 - Required E2E tests fail on missing/blocked UI rather than conditionally skipping.
@@ -342,6 +358,7 @@ Work should land as five vertical slices:
 | Launch/composer | launch dialog, directory navigator, prompt composer, settings/policy presentation |
 | Review/evidence | diff/review queue, validation runner, Git completion/handoff |
 | Missions/Automate/Extend | mission screen (`enterprise` migration module), monitor, extensions dialog, shared lifecycle contracts |
+| Agent management/CLI efficiency | Grok command adapter, background runner, mission scheduler/domain, context artifacts, lane projection, Git/worktree handoff |
 | Accessibility/responsive | global tokens/components, dialog/navigation primitives, desktop/mobile layout contracts |
 | Verification | `e2e`, harness lifecycle tests, accessibility and responsive release gates |
 
