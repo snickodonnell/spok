@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { handleHealthGet } from "../../src/server/routes/health";
 import { handleCliStatusGet } from "../../src/server/routes/cli-status";
+import { handleSessionStartPost } from "../../src/server/routes/session-start";
 import { dispatchRequest } from "../../src/server/router";
 import { CAPABILITY_HEADER } from "../../src/lib/security/local-api-shared";
 
@@ -126,5 +127,47 @@ describe("server handler extraction", () => {
     assert.equal(arbitraryCommand.status, 403);
     const commandBody = (await arbitraryCommand.json()) as { code?: string };
     assert.equal(commandBody.code, "command_not_allowed");
+  });
+
+  it("rejects invalid or ambiguous GrokRunSpec requests before launch", async () => {
+    const health = await handleHealthGet(
+      new Request("http://127.0.0.1:7788/api/health", {
+        headers: { host: "127.0.0.1:7788" },
+      })
+    );
+    const { localToken } = (await health.json()) as { localToken: string };
+    const headers = {
+      host: "127.0.0.1:7788",
+      "content-type": "application/json",
+      [CAPABILITY_HEADER]: localToken,
+    };
+
+    const invalid = await handleSessionStartPost(
+      new Request("http://127.0.0.1:7788/api/session/start", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ sessionId: "host-1", runSpec: {} }),
+      })
+    );
+    assert.equal(invalid.status, 400);
+    const invalidBody = (await invalid.json()) as { code?: string; policy?: string };
+    assert.equal(invalidBody.code, "invalid_run_spec");
+    assert.equal(invalidBody.policy, "provider_contract");
+
+    const ambiguous = await handleSessionStartPost(
+      new Request("http://127.0.0.1:7788/api/session/start", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          sessionId: "host-2",
+          runSpec: {},
+          command: "grok",
+          args: [],
+        }),
+      })
+    );
+    assert.equal(ambiguous.status, 400);
+    const ambiguousBody = (await ambiguous.json()) as { code?: string };
+    assert.equal(ambiguousBody.code, "invalid_run_spec");
   });
 });

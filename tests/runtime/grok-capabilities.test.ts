@@ -12,8 +12,12 @@ const GROK_0_2_99_HELP = `
 Grok Build TUI
 
 Options:
+  -p, --prompt <PROMPT>
+      --single
       --prompt-file <PATH>
       --prompt-json <JSON>
+      --model <MODEL>
+      --agent <AGENT>
       --output-format <OUTPUT_FORMAT>  [possible values: text, json, streaming-json]
       --json-schema <SCHEMA>
       --max-turns <N>
@@ -25,7 +29,9 @@ Options:
       --sandbox <PROFILE>
       --no-subagents
       --no-memory
+      --no-plan
       --check
+  -c, --continue
   -r, --resume [<SESSION_ID>]
   -s, --session-id <SESSION_ID>
       --fork-session

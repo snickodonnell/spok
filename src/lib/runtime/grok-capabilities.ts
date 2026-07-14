@@ -17,8 +17,11 @@ export const GROK_CAPABILITY_SNAPSHOT_VERSION = 1 as const;
 
 export const GROK_CAPABILITY_IDS = [
   "inspect_json",
+  "inline_prompt",
   "prompt_file",
   "prompt_json",
+  "model_selection",
+  "agent_selection",
   "streaming_json",
   "structured_report",
   "max_turns",
@@ -29,7 +32,9 @@ export const GROK_CAPABILITY_IDS = [
   "sandbox",
   "no_subagents",
   "no_memory",
+  "no_plan",
   "check",
+  "continue_latest",
   "exact_session",
   "fork_session",
   "leader_socket",
@@ -311,8 +316,11 @@ function capabilityMap(input: {
         : helpAvailable && !hasCommand("inspect")
           ? "unsupported"
           : "unknown",
+    inline_prompt: fromHelp(hasFlag("--prompt")),
     prompt_file: fromHelp(hasFlag("--prompt-file")),
     prompt_json: fromHelp(hasFlag("--prompt-json")),
+    model_selection: fromHelp(hasFlag("--model")),
+    agent_selection: fromHelp(hasFlag("--agent")),
     streaming_json: fromHelp(
       hasFlag("--output-format") && /\bstreaming-json\b/i.test(helpText)
     ),
@@ -329,7 +337,9 @@ function capabilityMap(input: {
     sandbox: fromHelp(hasFlag("--sandbox")),
     no_subagents: fromHelp(hasFlag("--no-subagents")),
     no_memory: fromHelp(hasFlag("--no-memory")),
+    no_plan: fromHelp(hasFlag("--no-plan")),
     check: fromHelp(hasFlag("--check")),
+    continue_latest: fromHelp(hasFlag("--continue")),
     exact_session: fromHelp(
       hasFlag("--session-id") && hasFlag("--resume")
     ),
@@ -545,8 +555,13 @@ export function inferGrokCapabilitiesFromArgs(
 ): GrokCapabilityId[] {
   const required = new Set<GrokCapabilityId>();
   const has = (flag: string) => args.includes(flag);
+  if (has("--single") || has("--prompt") || has("-p")) {
+    required.add("inline_prompt");
+  }
   if (has("--prompt-file")) required.add("prompt_file");
   if (has("--prompt-json")) required.add("prompt_json");
+  if (has("--model")) required.add("model_selection");
+  if (has("--agent")) required.add("agent_selection");
   if (
     args.some(
       (value, index) =>
@@ -564,7 +579,9 @@ export function inferGrokCapabilitiesFromArgs(
   if (has("--sandbox")) required.add("sandbox");
   if (has("--no-subagents")) required.add("no_subagents");
   if (has("--no-memory")) required.add("no_memory");
+  if (has("--no-plan")) required.add("no_plan");
   if (has("--check")) required.add("check");
+  if (has("--continue")) required.add("continue_latest");
   if (has("--resume") || has("-r") || has("--session-id") || has("-s")) {
     required.add("exact_session");
   }

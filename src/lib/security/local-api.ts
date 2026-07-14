@@ -20,6 +20,8 @@ export type LocalPolicyCode =
   | "invalid_host"
   | "untrusted_cwd"
   | "command_not_allowed"
+  | "invalid_run_spec"
+  | "capability_mismatch"
   | "path_denied"
   | "approval_required"
   | "forbidden";
@@ -27,7 +29,13 @@ export type LocalPolicyCode =
 export type LocalPolicyDenial = {
   error: string;
   code: LocalPolicyCode;
-  policy: "local_capability" | "origin_host" | "workspace_trust" | "command_profile" | "path_policy";
+  policy:
+    | "local_capability"
+    | "origin_host"
+    | "workspace_trust"
+    | "command_profile"
+    | "provider_contract"
+    | "path_policy";
   action?: string;
   details?: Record<string, unknown>;
 };

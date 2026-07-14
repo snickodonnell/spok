@@ -107,6 +107,44 @@ describe("approval grants and once tokens", () => {
     assert.equal(again, null);
   });
 
+  it("keeps privileged argv out of approval display without weakening the token", () => {
+    const secretPrompt = "private prompt body";
+    const req = createApprovalRequest(
+      {
+        action: "spawn",
+        command: "grok",
+        args: ["--prompt", "<inline-prompt sha256=abc>"],
+        cwd: "/tmp/r",
+        risk: "high",
+        reason: "t",
+        policy: "x",
+        preview: "redacted preview",
+      },
+      { fingerprintArgs: ["--prompt", secretPrompt] }
+    );
+    assert.ok(!JSON.stringify(req).includes(secretPrompt));
+
+    const { onceToken } = decideApproval(req.id, "allow_once");
+    assert.ok(onceToken);
+    assert.equal(
+      consumeOnceToken(onceToken, {
+        action: "spawn",
+        command: "grok",
+        args: ["--prompt", "different prompt"],
+        cwd: "/tmp/r",
+      }),
+      null
+    );
+    assert.ok(
+      consumeOnceToken(onceToken, {
+        action: "spawn",
+        command: "grok",
+        args: ["--prompt", secretPrompt],
+        cwd: "/tmp/r",
+      })
+    );
+  });
+
   it("persists allow_always across getActiveGrants", () => {
     clearApprovalGrants();
     const req = createApprovalRequest({

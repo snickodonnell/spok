@@ -21,11 +21,16 @@ function approvalsPath(): string {
 
 /** In-process pending requests awaiting UI decision */
 const pending = new Map<string, ApprovalRequest>();
+/**
+ * Fingerprints may be calculated from privileged argv that is intentionally
+ * not copied into the user-visible approval request (for example prompt JSON).
+ */
+const pendingFingerprints = new Map<string, { exact: string; loose: string }>();
 
 /** One-shot tokens issued after allow (consumed on successful use) */
 const onceTokens = new Map<
   string,
-  { fingerprint: string; fingerprintLoose: string; expiresAt: number }
+  { fingerprint: string; expiresAt: number }
 >();
 
 function loadGrants(): ApprovalGrant[] {
@@ -68,7 +73,8 @@ export function clearApprovalGrants(): void {
 }
 
 export function createApprovalRequest(
-  partial: Omit<ApprovalRequest, "id" | "timestamp">
+  partial: Omit<ApprovalRequest, "id" | "timestamp">,
+  options: { fingerprintArgs?: string[] } = {}
 ): ApprovalRequest {
   const req: ApprovalRequest = {
     ...partial,
@@ -76,8 +82,12 @@ export function createApprovalRequest(
     timestamp: Date.now(),
   };
   pending.set(req.id, req);
+  pendingFingerprints.set(req.id, fingerprintsFor(req, options.fingerprintArgs));
   // expire stale pending after 10 minutes
-  const t = setTimeout(() => pending.delete(req.id), 10 * 60 * 1000);
+  const t = setTimeout(() => {
+    pending.delete(req.id);
+    pendingFingerprints.delete(req.id);
+  }, 10 * 60 * 1000);
   if (typeof t === "object" && "unref" in t) {
     (t as NodeJS.Timeout).unref();
   }
@@ -88,14 +98,14 @@ export function getPendingApproval(id: string): ApprovalRequest | undefined {
   return pending.get(id);
 }
 
-function fingerprintsFor(req: ApprovalRequest): {
+function fingerprintsFor(req: ApprovalRequest, args = req.args): {
   exact: string;
   loose: string;
 } {
   const base = {
     action: req.action,
     command: req.command,
-    args: req.args,
+    args,
     cwd: req.cwd,
   };
   return {
@@ -104,11 +114,10 @@ function fingerprintsFor(req: ApprovalRequest): {
   };
 }
 
-function issueOnceToken(exact: string, loose: string): string {
+function issueOnceToken(exact: string): string {
   const onceToken = randomBytes(16).toString("base64url");
   onceTokens.set(onceToken, {
     fingerprint: exact,
-    fingerprintLoose: loose,
     expiresAt: Date.now() + 2 * 60 * 1000,
   });
   return onceToken;
@@ -128,15 +137,17 @@ export function decideApproval(
     return { ok: false, error: "Approval request not found or expired" };
   }
   pending.delete(requestId);
+  const fingerprints = pendingFingerprints.get(requestId);
+  pendingFingerprints.delete(requestId);
 
   if (decision === "deny") {
     return { ok: true };
   }
 
-  const { exact, loose } = fingerprintsFor(req);
-  // Always issue a one-shot token so the immediate retry is reliable
-  // even if disk grants lag or args differ slightly.
-  const onceToken = issueOnceToken(exact, loose);
+  const { exact, loose } = fingerprints ?? fingerprintsFor(req);
+  // Always issue an exact one-shot token so the immediate retry is reliable
+  // without authorizing a different argv payload.
+  const onceToken = issueOnceToken(exact);
 
   if (decision === "allow_once") {
     const grant: ApprovalGrant = {
@@ -208,21 +219,7 @@ export function consumeOnceToken(
     },
     { includeArgs: true }
   );
-  const loose = actionFingerprint(
-    {
-      action: expected.action as ApprovalRequest["action"],
-      command: expected.command,
-      args: expected.args,
-      cwd: expected.cwd,
-    },
-    { includeArgs: false }
-  );
-
-  if (
-    entry.fingerprint !== exact &&
-    entry.fingerprintLoose !== loose &&
-    entry.fingerprint !== loose
-  ) {
+  if (entry.fingerprint !== exact) {
     // Token is for a different action — do not consume
     return null;
   }

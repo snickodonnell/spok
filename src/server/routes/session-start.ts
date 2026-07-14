@@ -23,6 +23,15 @@ import {
 } from "@/lib/security/approvals";
 import { appendAuditEvent } from "@/lib/security/audit";
 import { resolveCommandProfile } from "@/lib/security/command-profiles";
+import { probeGrokCapabilities } from "@/lib/runtime/grok-capabilities";
+import {
+  compileGrokRunSpec,
+  formatGrokRunReceipt,
+  GrokRunSpecError,
+  parseGrokRunSpec,
+  type GrokRunReceipt,
+  type GrokRunSpec,
+} from "@/lib/runtime/grok-run-spec";
 import {
   defaultRunTimeoutMs,
   killProcessTree,
@@ -40,6 +49,8 @@ import {
 
 type StartBody = {
   sessionId: string;
+  /** Preferred, capability-pinned Grok launch contract. */
+  runSpec?: unknown;
   cwd?: string;
   command?: string;
   args?: string[];
@@ -63,6 +74,23 @@ function quoteArg(arg: string): string {
 
 function formatCommandLine(command: string, args: string[]): string {
   return [command, ...args.map(quoteArg)].join(" ");
+}
+
+function runSpecDenial(error: GrokRunSpecError): Response {
+  return policyDenialResponse(error.category === "capability" ? 409 : 400, {
+    error: error.message,
+    code:
+      error.code === "invalid_run_spec"
+        ? "invalid_run_spec"
+        : "capability_mismatch",
+    policy: "provider_contract",
+    action: "session_start",
+    details: {
+      category: error.category,
+      issues: error.issues,
+      correctiveAction: error.correctiveAction,
+    },
+  });
 }
 
 /**
@@ -94,13 +122,46 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   }
 
   const sessionId = body.sessionId || crypto.randomUUID();
-  const command = body.command || process.env.SPOK_GROK_CMD || "grok";
-  // Coerce every arg to string; drop null/undefined; never re-split
-  const args = (body.args ?? [])
-    .filter((a): a is string => a != null && String(a).length >= 0)
-    .map((a) => String(a));
+  let parsedRunSpec: GrokRunSpec | null = null;
+  let command: string;
+  let args: string[];
+  let requestedCwd: string;
 
-  const trust = requireTrustedCwd(body.cwd || process.cwd());
+  if (body.runSpec !== undefined) {
+    const ambiguous = (["command", "args", "cwd"] as const).filter(
+      (field) => body[field] !== undefined
+    );
+    if (ambiguous.length > 0) {
+      return policyDenialResponse(400, {
+        error: "GrokRunSpec cannot be combined with legacy launch fields.",
+        code: "invalid_run_spec",
+        policy: "provider_contract",
+        action: "session_start",
+        details: {
+          fields: ambiguous,
+          correctiveAction: "Send runSpec as the sole source of command, cwd, and argv.",
+        },
+      });
+    }
+    try {
+      parsedRunSpec = parseGrokRunSpec(body.runSpec);
+    } catch (error) {
+      if (error instanceof GrokRunSpecError) return runSpecDenial(error);
+      throw error;
+    }
+    command = parsedRunSpec.command;
+    args = [];
+    requestedCwd = parsedRunSpec.cwd;
+  } else {
+    command = body.command || process.env.SPOK_GROK_CMD || "grok";
+    // Coerce every arg to string; drop null/undefined; never re-split
+    args = (body.args ?? [])
+      .filter((a): a is string => a != null && String(a).length >= 0)
+      .map((a) => String(a));
+    requestedCwd = body.cwd || process.cwd();
+  }
+
+  const trust = requireTrustedCwd(requestedCwd);
   if (!trust.ok) {
     appendAuditEvent({
       type: "policy_denial",
@@ -130,6 +191,63 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
     );
   }
 
+  let runReceipt: GrokRunReceipt | null = null;
+  if (parsedRunSpec) {
+    if (resolveCommandProfile(command).id !== "grok") {
+      return policyDenialResponse(400, {
+        error: "GrokRunSpec command must resolve to the Grok CLI profile.",
+        code: "invalid_run_spec",
+        policy: "provider_contract",
+        action: "session_start",
+        details: {
+          correctiveAction: "Use the discovered grok, grok.cmd, or grok.exe command.",
+        },
+      });
+    }
+    try {
+      const capabilitySnapshot = await probeGrokCapabilities({
+        command,
+        cwd,
+        includeLeaderHealth: !!parsedRunSpec.execution.leaderSocket,
+      });
+      const compiled = compileGrokRunSpec(parsedRunSpec, capabilitySnapshot);
+      command = compiled.command;
+      args = [...compiled.args];
+      runReceipt = compiled.receipt;
+    } catch (error) {
+      if (error instanceof GrokRunSpecError) {
+        appendAuditEvent({
+          type: "policy_denial",
+          timestamp: Date.now(),
+          sessionId,
+          action: "spawn",
+          cwd,
+          command,
+          args: [],
+          policy: "provider_contract",
+          decision: "blocked",
+          details: {
+            code: error.code,
+            issues: error.issues,
+            correctiveAction: error.correctiveAction,
+          },
+        });
+        return runSpecDenial(error);
+      }
+      return policyDenialResponse(409, {
+        error: "Grok capability preflight failed before launch.",
+        code: "capability_mismatch",
+        policy: "provider_contract",
+        action: "session_start",
+        details: {
+          correctiveAction: "Repair the Grok CLI preflight and rebuild the run spec.",
+        },
+      });
+    }
+  }
+
+  const auditArgs = runReceipt ? [...runReceipt.argvPreview] : args;
+
   const settings = getResolvedSettings(cwd);
   const once = consumeOnceToken(body.approvalToken, {
     action: "spawn",
@@ -157,12 +275,12 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       action: "spawn",
       cwd,
       command,
-      args,
+      args: auditArgs,
       profile: decision.profile,
       policy: decision.policy,
       decision: "blocked",
       risk: decision.risk,
-      details: { reason: decision.reason },
+      details: { reason: decision.reason, runReceipt },
     });
     return policyDenialResponse(403, {
       error: decision.reason,
@@ -171,7 +289,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       action: "session_start",
       details: {
         command,
-        args,
+        args: auditArgs,
         cwd,
         profile: decision.profile,
         policy: decision.policy,
@@ -181,19 +299,24 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   }
 
   if (decision.decision === "ask") {
-    const preview = buildSpawnPreview(command, args, cwd);
-    const request = createApprovalRequest({
-      action: "spawn",
-      sessionId,
-      cwd,
-      command,
-      args,
-      profile: profile.id,
-      risk: decision.risk,
-      reason: decision.reason,
-      policy: decision.policy,
-      preview,
-    });
+    const preview = runReceipt
+      ? formatGrokRunReceipt(runReceipt)
+      : buildSpawnPreview(command, args, cwd);
+    const request = createApprovalRequest(
+      {
+        action: "spawn",
+        sessionId,
+        cwd,
+        command,
+        args: auditArgs,
+        profile: profile.id,
+        risk: decision.risk,
+        reason: decision.reason,
+        policy: decision.policy,
+        preview,
+      },
+      runReceipt ? { fingerprintArgs: args } : {}
+    );
     appendAuditEvent({
       type: "approval_request",
       timestamp: Date.now(),
@@ -201,11 +324,11 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       action: "spawn",
       cwd,
       command,
-      args,
+      args: auditArgs,
       profile: profile.id,
       policy: decision.policy,
       risk: decision.risk,
-      details: { requestId: request.id },
+      details: { requestId: request.id, runReceipt },
     });
     // Keep `approval` at top level for the client overlay; also mirror details.
     return Response.json(
@@ -219,8 +342,9 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
           profile: profile.id,
           risk: decision.risk,
           command,
-          args,
+          args: auditArgs,
           cwd,
+          runReceipt,
         },
       },
       { status: 403 }
@@ -234,11 +358,12 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
     action: "spawn",
     cwd,
     command,
-    args,
+    args: auditArgs,
     profile: decision.profile,
     policy: decision.policy,
     decision: "allowed",
     risk: decision.risk,
+    details: { runReceipt },
   });
 
   // Client-supplied env is ignored (safer default). Process inherits server env only.
@@ -253,7 +378,9 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   let child: ChildProcessWithoutNullStreams | null = null;
   let closed = false;
   const cmdline = formatCommandLine(command, args);
-  const safeArgvPreview = redactSecrets(JSON.stringify([command, ...args])).text;
+  const safeArgvPreview = runReceipt
+    ? JSON.stringify([command, ...auditArgs])
+    : redactSecrets(JSON.stringify([command, ...args])).text;
 
   const stream = new ReadableStream({
     start(controller) {
@@ -272,7 +399,9 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
           type: "system",
           timestamp: Date.now(),
           title: "Harness",
-          content: `Spawning: ${redactSecrets(cmdline).text}\ncwd=${cwd}\nargv=${safeArgvPreview}`,
+          content: runReceipt
+            ? formatGrokRunReceipt(runReceipt)
+            : `Spawning: ${redactSecrets(cmdline).text}\ncwd=${cwd}\nargv=${safeArgvPreview}`,
           status: "running",
         },
       });
@@ -310,7 +439,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
               sessionId,
               pid: c.pid,
               command,
-              args,
+              args: auditArgs,
               cwd,
               startedAt: Date.now(),
               timeoutMs,
