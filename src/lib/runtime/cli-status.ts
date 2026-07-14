@@ -16,6 +16,23 @@ import { spawn } from "child_process";
 import { platform } from "os";
 import { CLI_AUTH_GUIDANCE } from "./auth-hints";
 
+export type CliCaptureResult = {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  error?: string;
+};
+
+export type CliCaptureOptions = {
+  cwd?: string;
+  timeoutMs?: number;
+  /** Bound provider-controlled probe output before it reaches runtime memory. */
+  maxOutputBytes?: number;
+};
+
+const DEFAULT_PROBE_TIMEOUT_MS = 8_000;
+const DEFAULT_PROBE_OUTPUT_BYTES = 256 * 1024;
+
 export type CliStatus = {
   command: string;
   found: boolean;
@@ -39,20 +56,22 @@ export { CLI_AUTH_GUIDANCE };
 function runCapture(
   command: string,
   args: string[],
-  timeoutMs = 8000
-): Promise<{ code: number | null; stdout: string; stderr: string; error?: string }> {
+  options: CliCaptureOptions = {}
+): Promise<CliCaptureResult> {
   return new Promise((resolve) => {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+    const maxOutputBytes = Math.max(
+      1,
+      options.maxOutputBytes ?? DEFAULT_PROBE_OUTPUT_BYTES
+    );
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const finish = (result: {
-      code: number | null;
-      stdout: string;
-      stderr: string;
-      error?: string;
-    }) => {
+    const timerRef: { current?: ReturnType<typeof setTimeout> } = {};
+    const finish = (result: CliCaptureResult) => {
       if (settled) return;
       settled = true;
+      if (timerRef.current) clearTimeout(timerRef.current);
       resolve(result);
     };
 
@@ -62,6 +81,7 @@ function runCapture(
         shell: false,
         windowsHide: true,
         env: process.env,
+        cwd: options.cwd,
       });
     } catch (e) {
       finish({
@@ -73,7 +93,7 @@ function runCapture(
       return;
     }
 
-    const timer = setTimeout(() => {
+    timerRef.current = setTimeout(() => {
       try {
         child.kill();
       } catch {
@@ -86,18 +106,37 @@ function runCapture(
         error: "probe_timeout",
       });
     }, timeoutMs);
-    timer.unref?.();
+    timerRef.current.unref?.();
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (c: string) => {
-      stdout += c;
-    });
-    child.stderr?.on("data", (c: string) => {
-      stderr += c;
-    });
+    const append = (target: "stdout" | "stderr", chunk: string) => {
+      const remaining = Math.max(
+        0,
+        maxOutputBytes - Buffer.byteLength(stdout) - Buffer.byteLength(stderr)
+      );
+      if (remaining > 0) {
+        const clipped = Buffer.from(chunk).subarray(0, remaining).toString("utf8");
+        if (target === "stdout") stdout += clipped;
+        else stderr += clipped;
+      }
+      if (Buffer.byteLength(chunk) > remaining) {
+        try {
+          child.kill();
+        } catch {
+          /* ignore */
+        }
+        finish({
+          code: null,
+          stdout,
+          stderr,
+          error: "probe_output_limit",
+        });
+      }
+    };
+    child.stdout?.on("data", (c: string) => append("stdout", c));
+    child.stderr?.on("data", (c: string) => append("stderr", c));
     child.on("error", (err) => {
-      clearTimeout(timer);
       finish({
         code: 1,
         stdout,
@@ -106,18 +145,18 @@ function runCapture(
       });
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
       finish({ code, stdout, stderr });
     });
   });
 }
 
 /** Windows: try bare command, then .cmd via cmd.exe if ENOENT. */
-async function probeCommand(
+export async function captureCliCommand(
   command: string,
-  args: string[]
-): Promise<{ code: number | null; stdout: string; stderr: string; error?: string }> {
-  const first = await runCapture(command, args);
+  args: string[],
+  options: CliCaptureOptions = {}
+): Promise<CliCaptureResult> {
+  const first = await runCapture(command, args, options);
   if (
     platform() === "win32" &&
     first.error &&
@@ -126,7 +165,7 @@ async function probeCommand(
     const quoted = [command, ...args]
       .map((a) => (/\s/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
       .join(" ");
-    return runCapture("cmd.exe", ["/d", "/s", "/c", quoted]);
+    return runCapture("cmd.exe", ["/d", "/s", "/c", quoted], options);
   }
   return first;
 }
@@ -156,7 +195,8 @@ function looksLikeMissingBinary(stdout: string, stderr: string, error?: string):
 }
 
 export async function probeCliStatus(
-  command = process.env.SPOK_GROK_CMD?.trim() || "grok"
+  command = process.env.SPOK_GROK_CMD?.trim() || "grok",
+  options: CliCaptureOptions = {}
 ): Promise<CliStatus> {
   const started = Date.now();
   const base: Omit<CliStatus, "found" | "version" | "versionRaw" | "probeMs" | "error"> = {
@@ -168,7 +208,7 @@ export async function probeCliStatus(
 
   // Prefer --version; fall back to -V / version / --help
   for (const args of [["--version"], ["-V"], ["version"], ["--help"]] as string[][]) {
-    const result = await probeCommand(command, args);
+    const result = await captureCliCommand(command, args, options);
     const combined = `${result.stdout}\n${result.stderr}`;
     if (looksLikeMissingBinary(result.stdout, result.stderr, result.error)) {
       return {
@@ -223,5 +263,3 @@ export async function probeCliStatus(
     error: "not_found",
   };
 }
-
-

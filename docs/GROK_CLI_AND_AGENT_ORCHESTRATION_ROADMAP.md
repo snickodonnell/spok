@@ -54,11 +54,13 @@ This correction package lands the instructional layer before runtime changes:
 
 These files define expected behavior; they do not claim that the current runtime already implements every item below.
 
+The first runtime slice, CLI-001, landed on 2026-07-13: `grok-capabilities` now captures a versioned, fingerprinted snapshot from bounded `--version`, `--help`, and `inspect --json` probes, optionally checks `leader list --json`, reports auth as explicitly unknown, and gates declared requirements before a caller launches work. The privileged status route limits detailed discovery to the configured Grok executable and a trusted cwd, audits only sanitized capability evidence, and keeps raw inspect/help content out of API state. Mission/run attachment of that fingerprint begins with CLI-002 rather than being inferred from this probe.
+
 ## P0 — Versioned Grok Run Contract
 
 Outcome: every provider launch is reproducible, bounded, redacted, and compatible with the installed CLI.
 
-1. Add a runtime capability probe that records CLI version, `inspect --json`, supported flags/commands, auth state, leader health when requested, and explicit unknowns.
+1. Add a runtime capability probe that records CLI version, `inspect --json`, supported flags/commands, auth state, leader health when requested, and explicit unknowns. **Landed 2026-07-13:** the v1 sanitized snapshot, fingerprint, requirement gate, trusted runtime route, output/time bounds, real-CLI preflight, and supported/unsupported/malformed/timeout fixtures are in place. CLI-002 will pin the snapshot fingerprint to each compiled run.
 2. Introduce a versioned `GrokRunSpec` and compiler. It owns cwd/worktree, prompt transport, session intent, model/effort, maximum turns, tool/web/sandbox/permission policy, subagent policy, output format, final report schema, and debug retention.
 3. Replace large `-p` mission argv with runtime-managed `--prompt-file`/`--prompt-json` artifacts. Store only redacted metadata and a content hash in logs; delete ephemeral prompt files after durable handoff.
 4. Keep `streaming-json` for live ingestion and add a typed specialist return path. Because Grok's `--json-schema` implies JSON rather than streaming output, the run compiler must choose explicitly between a live stream and a JSON-only/report turn instead of emitting incompatible intent. Preserve unrecognized raw events without feeding them into every leader turn.
@@ -139,7 +141,7 @@ Exit criteria:
 
 | ID | Priority | Deliverable | Primary ownership | Required proof |
 | --- | --- | --- | --- | --- |
-| CLI-001 | P0 | Capability snapshot and compatibility gate | runtime health/provider adapter | version fixtures; unsupported-capability denial |
+| CLI-001 | P0 | Capability snapshot and compatibility gate — **landed 2026-07-13** | runtime health/provider adapter | v0.2.99 fixture, unsupported/unknown denial, malformed inspect, timeout, missing binary, and real installed-CLI preflight |
 | CLI-002 | P0 | Versioned `GrokRunSpec` plus argv compiler | `src/lib/grok-commands.ts`, runtime spawn boundary | table-driven safe argv/redaction tests |
 | CLI-003 | P0 | Runtime-managed prompt file/JSON lifecycle | session-start/runtime artifacts | long prompt, secret redaction, cleanup, crash recovery |
 | CLI-004 | P0 | Structured specialist report schema | provider adapter/stream contracts | valid, partial, malformed, repair fixtures |

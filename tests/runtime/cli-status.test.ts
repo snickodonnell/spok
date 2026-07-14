@@ -4,7 +4,10 @@ import {
   detectAuthFailureHint,
   CLI_AUTH_GUIDANCE,
 } from "../../src/lib/runtime/auth-hints";
-import { probeCliStatus } from "../../src/lib/runtime/cli-status";
+import {
+  captureCliCommand,
+  probeCliStatus,
+} from "../../src/lib/runtime/cli-status";
 
 describe("auth failure heuristics", () => {
   it("detects common auth phrases", () => {
@@ -39,5 +42,15 @@ describe("cli probe", () => {
     assert.equal(status.found, true);
     // version may or may not parse from --version
     assert.equal(status.authChecked, false);
+  });
+
+  it("bounds provider-controlled probe output", async () => {
+    const capture = await captureCliCommand(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(4096))"],
+      { maxOutputBytes: 64 }
+    );
+    assert.equal(capture.error, "probe_output_limit");
+    assert.ok(Buffer.byteLength(capture.stdout) <= 64);
   });
 });

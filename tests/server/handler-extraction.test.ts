@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { handleHealthGet } from "../../src/server/routes/health";
+import { handleCliStatusGet } from "../../src/server/routes/cli-status";
 import { dispatchRequest } from "../../src/server/router";
 import { CAPABILITY_HEADER } from "../../src/lib/security/local-api-shared";
 
@@ -80,5 +81,50 @@ describe("server handler extraction", () => {
     assert.equal(authed.status, 200);
     const body = (await authed.json()) as { sessions?: unknown[] };
     assert.ok(Array.isArray(body.sessions));
+  });
+
+  it("keeps detailed Grok discovery behind auth and a fixed capability vocabulary", async () => {
+    const denied = await handleCliStatusGet(
+      new Request("http://127.0.0.1:7788/api/runtime/cli-status?capabilities=1", {
+        headers: { host: "127.0.0.1:7788" },
+      })
+    );
+    assert.ok(denied.status === 401 || denied.status === 403);
+
+    const health = await handleHealthGet(
+      new Request("http://127.0.0.1:7788/api/health", {
+        headers: { host: "127.0.0.1:7788" },
+      })
+    );
+    const { localToken } = (await health.json()) as { localToken: string };
+    const invalid = await handleCliStatusGet(
+      new Request(
+        "http://127.0.0.1:7788/api/runtime/cli-status?required=not_a_capability",
+        {
+          headers: {
+            host: "127.0.0.1:7788",
+            [CAPABILITY_HEADER]: localToken,
+          },
+        }
+      )
+    );
+    assert.equal(invalid.status, 400);
+    const invalidBody = (await invalid.json()) as { code?: string };
+    assert.equal(invalidBody.code, "invalid_capability_requirement");
+
+    const arbitraryCommand = await handleCliStatusGet(
+      new Request(
+        "http://127.0.0.1:7788/api/runtime/cli-status?capabilities=1&command=spok-not-configured-cli",
+        {
+          headers: {
+            host: "127.0.0.1:7788",
+            [CAPABILITY_HEADER]: localToken,
+          },
+        }
+      )
+    );
+    assert.equal(arbitraryCommand.status, 403);
+    const commandBody = (await arbitraryCommand.json()) as { code?: string };
+    assert.equal(commandBody.code, "command_not_allowed");
   });
 });

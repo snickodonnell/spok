@@ -93,6 +93,8 @@ Mission launch and every material plan escalation must show the effective reposi
 
 The CLI adapter is privileged policy, not presentation convenience. Before mission launch it records the installed version/capability snapshot and compiles an immutable run spec with cwd/worktree, session intent, prompt artifact, output/report contract, maximum turns, model/effort, tool/web/sandbox policy, permission mode, subagent policy, and debug retention.
 
+The landed v1 capability probe bounds subprocess time/output, requires local-route authorization plus a trusted cwd for detailed discovery, limits detailed execution to the configured Grok command, and returns sanitized summaries with content hashes rather than raw `inspect`/help output. It reports native CLI auth as unknown because the discovered inspect contract does not expose login state. Requirement support that is missing or unknown returns one corrective action and no launch authority; CLI-002 remains responsible for pinning the snapshot fingerprint into an immutable run spec before spawn.
+
 - Non-trivial prompts use runtime-owned `--prompt-file` or `--prompt-json` artifacts. Audit and UI records contain a redacted summary/hash, never full secret-bearing prompt text or oversized argv.
 - Unattended resume/fork identifies the exact session and verifies its worktree/base. Ambiguous “continue latest” is interactive only.
 - Leaf agents cannot create descendants unless a separate work-item receipt grants bounded nested delegation.
