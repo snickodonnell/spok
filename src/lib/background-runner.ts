@@ -8,7 +8,7 @@
 
 import { useSpokStore } from "./store";
 import { runHarness } from "./harness";
-import { defaultGrokFlags, baseFlagsArgs } from "./grok-commands";
+import { buildLeafGrokRunRequest } from "./runtime/grok-run-request-client";
 import {
   createJob,
   mergeRecoveredJobs,
@@ -464,14 +464,9 @@ async function runJob(jobId: string): Promise<void> {
         mainCheckout,
       });
     } else {
-      const policy = await checkAutomationPolicy({
-        cwd: job.cwd,
-        requireTrusted: true,
-        isolate: false,
-      });
-      if (!policy.ok) {
-        throw new Error(policy.reason || "Automation policy denied the job");
-      }
+      throw new Error(
+        "Unattended jobs require a verified isolated worktree; shared-checkout launch is disabled"
+      );
     }
   } catch (e) {
     if (!ac.signal.aborted) {
@@ -587,8 +582,7 @@ async function runJob(jobId: string): Promise<void> {
       job.isolate
         ? `Isolation: active${branch ? ` · ${branch}` : ""}`
         : "Isolation: off",
-      "",
-      job.prompt.slice(0, 2000),
+      `Prompt: managed by runtime (${job.prompt.length} characters)`,
     ].join("\n"),
     status: "running",
     provider: "spok",
@@ -638,18 +632,20 @@ async function runJob(jobId: string): Promise<void> {
     return;
   }
 
-  const flags = defaultGrokFlags();
-  if (job.enterprise?.phase === "followup") {
-    flags.continueSession = true;
-  }
-  const args = [...baseFlagsArgs(flags), "-p", job.prompt];
+  const runRequest = buildLeafGrokRunRequest({
+    id: `run-${job.id}`,
+    cwd: executionCwd,
+    branch,
+    baseRevision: isolatedWorkspace?.status.branch.headOid || undefined,
+    prompt: job.prompt,
+  });
 
   try {
     const result = await runHarness({
       sessionId,
       cwd: executionCwd,
       command: "grok",
-      args,
+      runRequest,
       label: job.title,
       signal: ac.signal,
     });

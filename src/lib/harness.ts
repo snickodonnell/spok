@@ -17,6 +17,12 @@ import {
   flushStreamBatch,
 } from "./stream-batch";
 import type { StreamEvent } from "./types";
+import type { GrokRunRequest } from "./runtime/grok-run-request";
+import {
+  parseSpecialistReport,
+  specialistReportToEvent,
+  type SpecialistReport,
+} from "./runtime/specialist-report";
 
 export type HarnessHandle = {
   sessionId: string;
@@ -32,12 +38,17 @@ export async function runHarness(opts: {
   sessionId: string;
   cwd: string;
   command?: string;
-  args: string[];
+  args?: string[];
+  runRequest?: GrokRunRequest;
   label?: string;
   signal?: AbortSignal;
-}): Promise<{ code: number | null }> {
-  const { sessionId, cwd, args, label } = opts;
+}): Promise<{ code: number | null; report?: SpecialistReport }> {
+  const { sessionId, cwd, label } = opts;
+  const args = opts.args ?? [];
   const command = opts.command || "grok";
+  if (!!opts.runRequest === !!opts.args) {
+    throw new Error("runHarness requires exactly one of args or runRequest");
+  }
   const store = useSpokStore.getState();
   const ingest = new GrokStreamIngestor(cwd);
 
@@ -46,9 +57,13 @@ export async function runHarness(opts: {
     type: "system",
     timestamp: Date.now(),
     title: "Run",
-    content: label
-      ? `${label}\n$ ${command} ${args.map(shellQuote).join(" ")}`
-      : `$ ${command} ${args.map(shellQuote).join(" ")}`,
+    content: opts.runRequest
+      ? [label, `Managed Grok run ${opts.runRequest.id}`, `cwd=${cwd}`]
+          .filter(Boolean)
+          .join("\n")
+      : label
+        ? `${label}\n$ ${command} ${args.map(shellQuote).join(" ")}`
+        : `$ ${command} ${args.map(shellQuote).join(" ")}`,
     status: "running",
     severity: "info",
     provider: "harness",
@@ -60,6 +75,7 @@ export async function runHarness(opts: {
     cwd,
     command,
     args,
+    runRequest: opts.runRequest,
     signal: opts.signal,
     approvalToken,
   });
@@ -166,6 +182,7 @@ export async function runHarness(opts: {
         cwd,
         command,
         args,
+        runRequest: opts.runRequest,
         signal: opts.signal,
         approvalToken,
       });
@@ -224,6 +241,8 @@ export async function runHarness(opts: {
   let exitCode: number | null = null;
   let authHintEmitted = false;
   let timedOut = false;
+  let reportOutput = "";
+  let specialistReport: SpecialistReport | undefined;
 
   const maybeAuthHint = (text: string) => {
     if (authHintEmitted || !text) return;
@@ -300,6 +319,13 @@ export async function runHarness(opts: {
             typeof maybe.data === "string"
           ) {
             maybeAuthHint(maybe.data);
+            if (
+              maybe.type === "stdout" &&
+              opts.runRequest?.output.mode === "report" &&
+              reportOutput.length < 256 * 1024
+            ) {
+              reportOutput += maybe.data.slice(0, 256 * 1024 - reportOutput.length);
+            }
           }
         } catch {
           /* not json envelope */
@@ -349,6 +375,18 @@ export async function runHarness(opts: {
     }
     // Ensure UI sees final stream state before status/hooks settle.
     flushStreamBatch();
+
+    if (opts.runRequest?.output.mode === "report") {
+      const reportResult = parseSpecialistReport(reportOutput);
+      if (reportResult.ok) specialistReport = reportResult.report;
+      store.applyStreamEvent(
+        sessionId,
+        specialistReportToEvent({
+          result: reportResult,
+          runId: opts.runRequest.id,
+        })
+      );
+    }
   } catch (e) {
     flushStreamBatch();
     if (opts.signal?.aborted) {
@@ -433,7 +471,7 @@ export async function runHarness(opts: {
     /* optional */
   }
 
-  return { code: exitCode };
+  return { code: exitCode, report: specialistReport };
 }
 
 /** Run trusted hooks and materialize their trace events into the session. */
@@ -462,19 +500,28 @@ async function startProcess(opts: {
   cwd: string;
   command: string;
   args: string[];
+  runRequest?: GrokRunRequest;
   signal?: AbortSignal;
   approvalToken?: string;
 }): Promise<Response> {
   return localFetch("/api/session/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionId: opts.sessionId,
-      cwd: opts.cwd,
-      command: opts.command,
-      args: opts.args,
-      approvalToken: opts.approvalToken,
-    }),
+    body: JSON.stringify(
+      opts.runRequest
+        ? {
+            sessionId: opts.sessionId,
+            runRequest: opts.runRequest,
+            approvalToken: opts.approvalToken,
+          }
+        : {
+            sessionId: opts.sessionId,
+            cwd: opts.cwd,
+            command: opts.command,
+            args: opts.args,
+            approvalToken: opts.approvalToken,
+          }
+    ),
     signal: opts.signal,
   });
 }

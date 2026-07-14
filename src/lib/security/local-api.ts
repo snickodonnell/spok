@@ -22,6 +22,7 @@ export type LocalPolicyCode =
   | "command_not_allowed"
   | "invalid_run_spec"
   | "capability_mismatch"
+  | "invalid_receipt"
   | "path_denied"
   | "approval_required"
   | "forbidden";

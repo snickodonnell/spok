@@ -97,6 +97,7 @@ function baseSpec(): GrokRunSpec {
       maxTurns: 8,
       tools: { allow: ["read", "edit"], deny: ["web"] },
       webSearch: "disabled",
+      alwaysApprove: false,
       permissionMode: "default",
       sandbox: "workspace-write",
       noMemory: true,

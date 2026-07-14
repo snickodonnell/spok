@@ -19,6 +19,9 @@ import {
   handleHealthGet,
   handleMissionCheckpointGet,
   handleMissionCheckpointPost,
+  handleMissionReceiptsGet,
+  handleMissionReceiptsPost,
+  handleMissionSchedulePost,
   handleMissionIdGet,
   handleMissionIdPut,
   handleMissionsGet,
@@ -139,6 +142,35 @@ function match(
         params: { id },
       };
     }
+  }
+
+  const missionReceipts = pathname.match(/^\/api\/missions\/([^/]+)\/receipts$/);
+  if (missionReceipts) {
+    const id = decodeURIComponent(missionReceipts[1]);
+    if (m === "GET") {
+      return {
+        handler: (req) =>
+          handleMissionReceiptsGet(req, { params: Promise.resolve({ id }) }),
+        params: { id },
+      };
+    }
+    if (m === "POST") {
+      return {
+        handler: (req) =>
+          handleMissionReceiptsPost(req, { params: Promise.resolve({ id }) }),
+        params: { id },
+      };
+    }
+  }
+
+  const missionSchedule = pathname.match(/^\/api\/missions\/([^/]+)\/schedule$/);
+  if (missionSchedule && m === "POST") {
+    const id = decodeURIComponent(missionSchedule[1]);
+    return {
+      handler: (req) =>
+        handleMissionSchedulePost(req, { params: Promise.resolve({ id }) }),
+      params: { id },
+    };
   }
 
   const missionId = pathname.match(/^\/api\/missions\/([^/]+)$/);

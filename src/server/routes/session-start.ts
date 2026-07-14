@@ -25,10 +25,22 @@ import { appendAuditEvent } from "@/lib/security/audit";
 import { resolveCommandProfile } from "@/lib/security/command-profiles";
 import { probeGrokCapabilities } from "@/lib/runtime/grok-capabilities";
 import {
+  finalizeGrokPromptArtifact,
+  verifyGrokPromptArtifact,
+  type GrokPromptArtifact,
+} from "@/lib/runtime/grok-prompt-artifacts";
+import { prepareGrokRun } from "@/lib/runtime/grok-run-preparation";
+import {
+  GrokRunRequestError,
+  parseGrokRunRequest,
+  type GrokRunRequest,
+} from "@/lib/runtime/grok-run-request";
+import {
   compileGrokRunSpec,
   formatGrokRunReceipt,
   GrokRunSpecError,
   parseGrokRunSpec,
+  type CompiledGrokRun,
   type GrokRunReceipt,
   type GrokRunSpec,
 } from "@/lib/runtime/grok-run-spec";
@@ -51,6 +63,8 @@ type StartBody = {
   sessionId: string;
   /** Preferred, capability-pinned Grok launch contract. */
   runSpec?: unknown;
+  /** Prompt-bearing request compiled by the privileged runtime. */
+  runRequest?: unknown;
   cwd?: string;
   command?: string;
   args?: string[];
@@ -93,6 +107,20 @@ function runSpecDenial(error: GrokRunSpecError): Response {
   });
 }
 
+function runRequestDenial(error: GrokRunRequestError): Response {
+  return policyDenialResponse(400, {
+    error: error.message,
+    code: "invalid_run_spec",
+    policy: "provider_contract",
+    action: "session_start",
+    details: {
+      category: "validation",
+      issues: error.issues,
+      correctiveAction: "Correct the managed run request before requesting launch.",
+    },
+  });
+}
+
 /**
  * Spawn without a shell so multi-word argv (e.g. -p "Audit this repo…")
  * is preserved. shell:true on Windows re-tokenizes and breaks prompts.
@@ -123,12 +151,13 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
 
   const sessionId = body.sessionId || crypto.randomUUID();
   let parsedRunSpec: GrokRunSpec | null = null;
+  let parsedRunRequest: GrokRunRequest | null = null;
   let command: string;
   let args: string[];
   let requestedCwd: string;
 
   if (body.runSpec !== undefined) {
-    const ambiguous = (["command", "args", "cwd"] as const).filter(
+    const ambiguous = (["runRequest", "command", "args", "cwd"] as const).filter(
       (field) => body[field] !== undefined
     );
     if (ambiguous.length > 0) {
@@ -152,6 +181,31 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
     command = parsedRunSpec.command;
     args = [];
     requestedCwd = parsedRunSpec.cwd;
+  } else if (body.runRequest !== undefined) {
+    const ambiguous = (["command", "args", "cwd"] as const).filter(
+      (field) => body[field] !== undefined
+    );
+    if (ambiguous.length > 0) {
+      return policyDenialResponse(400, {
+        error: "Managed Grok run request cannot be combined with legacy launch fields.",
+        code: "invalid_run_spec",
+        policy: "provider_contract",
+        action: "session_start",
+        details: {
+          fields: ambiguous,
+          correctiveAction: "Send runRequest as the sole source of command, cwd, and prompt intent.",
+        },
+      });
+    }
+    try {
+      parsedRunRequest = parseGrokRunRequest(body.runRequest);
+    } catch (error) {
+      if (error instanceof GrokRunRequestError) return runRequestDenial(error);
+      throw error;
+    }
+    command = parsedRunRequest.command;
+    args = [];
+    requestedCwd = parsedRunRequest.cwd;
   } else {
     command = body.command || process.env.SPOK_GROK_CMD || "grok";
     // Coerce every arg to string; drop null/undefined; never re-split
@@ -192,7 +246,9 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   }
 
   let runReceipt: GrokRunReceipt | null = null;
-  if (parsedRunSpec) {
+  let promptArtifact: GrokPromptArtifact | null = null;
+  let preparationWarnings: string[] = [];
+  if (parsedRunSpec || parsedRunRequest) {
     if (resolveCommandProfile(command).id !== "grok") {
       return policyDenialResponse(400, {
         error: "GrokRunSpec command must resolve to the Grok CLI profile.",
@@ -205,16 +261,40 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       });
     }
     try {
-      const capabilitySnapshot = await probeGrokCapabilities({
-        command,
-        cwd,
-        includeLeaderHealth: !!parsedRunSpec.execution.leaderSocket,
-      });
-      const compiled = compileGrokRunSpec(parsedRunSpec, capabilitySnapshot);
+      let compiled: CompiledGrokRun;
+      if (parsedRunRequest) {
+        const prepared = await prepareGrokRun(parsedRunRequest, sessionId);
+        compiled = prepared.compiled;
+        promptArtifact = prepared.artifact;
+        preparationWarnings = prepared.warnings;
+      } else {
+        const spec = parsedRunSpec!;
+        if (spec.prompt.transport !== "file" || !spec.prompt.artifactId) {
+          throw new GrokRunSpecError({
+            code: "invalid_run_spec",
+            category: "validation",
+            message: "Runtime launches require a managed prompt artifact.",
+            correctiveAction: "Create the prompt through runRequest and retry with its pinned artifact.",
+          });
+        }
+        promptArtifact = verifyGrokPromptArtifact({
+          id: spec.prompt.artifactId,
+          path: spec.prompt.path,
+          sha256: spec.prompt.sha256,
+          bytes: spec.prompt.bytes,
+        });
+        const capabilitySnapshot = await probeGrokCapabilities({
+          command,
+          cwd,
+          includeLeaderHealth: !!spec.execution.leaderSocket,
+        });
+        compiled = compileGrokRunSpec(spec, capabilitySnapshot);
+      }
       command = compiled.command;
       args = [...compiled.args];
       runReceipt = compiled.receipt;
     } catch (error) {
+      if (error instanceof GrokRunRequestError) return runRequestDenial(error);
       if (error instanceof GrokRunSpecError) {
         appendAuditEvent({
           type: "policy_denial",
@@ -235,7 +315,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
         return runSpecDenial(error);
       }
       return policyDenialResponse(409, {
-        error: "Grok capability preflight failed before launch.",
+        error: error instanceof Error ? error.message : "Grok preparation failed before launch.",
         code: "capability_mismatch",
         policy: "provider_contract",
         action: "session_start",
@@ -268,6 +348,13 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   });
 
   if (decision.decision === "deny") {
+    if (promptArtifact) {
+      try {
+        finalizeGrokPromptArtifact(promptArtifact, "cancelled");
+      } catch {
+        /* recovery reconciles */
+      }
+    }
     appendAuditEvent({
       type: "policy_denial",
       timestamp: Date.now(),
@@ -377,6 +464,35 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   const encoder = new TextEncoder();
   let child: ChildProcessWithoutNullStreams | null = null;
   let closed = false;
+  let promptFinalized = false;
+  const finalizePrompt = (outcome: "completed" | "cancelled" | "failed") => {
+    if (!promptArtifact || promptFinalized) return;
+    promptFinalized = true;
+    try {
+      const result = finalizeGrokPromptArtifact(promptArtifact, outcome);
+      appendAuditEvent({
+        type: "runtime_action",
+        timestamp: Date.now(),
+        sessionId,
+        action: "prompt_artifact_finalize",
+        decision: "allowed",
+        details: { artifactId: promptArtifact.id, outcome, ...result },
+      });
+    } catch (error) {
+      appendAuditEvent({
+        type: "runtime_action",
+        timestamp: Date.now(),
+        sessionId,
+        action: "prompt_artifact_finalize",
+        decision: "blocked",
+        details: {
+          artifactId: promptArtifact.id,
+          outcome,
+          reason: error instanceof Error ? error.message : "cleanup failed",
+        },
+      });
+    }
+  };
   const cmdline = formatCommandLine(command, args);
   const safeArgvPreview = runReceipt
     ? JSON.stringify([command, ...auditArgs])
@@ -405,6 +521,19 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
           status: "running",
         },
       });
+      if (preparationWarnings.length > 0) {
+        push({
+          type: "event",
+          event: {
+            type: "system",
+            timestamp: Date.now(),
+            title: "Attachment notes",
+            content: preparationWarnings.join("\n"),
+            status: "success",
+            severity: "info",
+          },
+        });
+      }
 
       try {
         child = spawnCli(command, args, {
@@ -412,6 +541,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
           env: childEnv,
         });
       } catch (e) {
+        finalizePrompt("failed");
         push({
           type: "event",
           event: {
@@ -566,6 +696,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       function onClose(code: number | null, signal: NodeJS.Signals | null) {
         if (timeoutTimer) clearTimeout(timeoutTimer);
         unregisterProcess(sessionId);
+        finalizePrompt(timedOut || (code ?? (signal ? 1 : 0)) !== 0 ? "failed" : "completed");
         push({
           type: "exit",
           code: timedOut ? 124 : code ?? (signal ? 1 : 0),
@@ -589,6 +720,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       closed = true;
       stopSessionProcess(sessionId, { force: true });
       unregisterProcess(sessionId);
+      finalizePrompt("cancelled");
     },
   });
 

@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { dispatchRequest } from "../../src/server/router";
 import { getLocalCapabilityToken } from "../../src/lib/security/local-api";
 import { CAPABILITY_HEADER } from "../../src/lib/security/local-api-shared";
+import {
+  clearTrustedRoots,
+  trustWorkspaceRoot,
+} from "../../src/lib/security/workspace-trust";
 
 let root = "";
 let workspace = "";
@@ -17,9 +21,11 @@ beforeEach(() => {
   workspace = path.join(root, "workspace");
   mkdirSync(workspace, { recursive: true });
   process.env.SPOK_HOME = path.join(root, "home");
+  clearTrustedRoots();
 });
 
 afterEach(() => {
+  clearTrustedRoots();
   if (previousSpokHome === undefined) delete process.env.SPOK_HOME;
   else process.env.SPOK_HOME = previousSpokHome;
   if (existsSync(root)) rmSync(root, { recursive: true, force: true });
@@ -286,5 +292,127 @@ describe("mission routes", { concurrency: false }, () => {
     assert.equal(dep.status, 400);
     const depJson = (await dep.json()) as { code?: string };
     assert.equal(depJson.code, "missing_evidence");
+  });
+
+  it("compiles durable receipts and schedules only verified ready work", async () => {
+    const worktree = path.join(workspace, "worktrees", "route-agent");
+    mkdirSync(worktree, { recursive: true });
+    trustWorkspaceRoot(workspace);
+
+    const created = await dispatchRequest(
+      request("POST", "/api/missions", {
+        mission: {
+          id: "msn_route_orchestration",
+          outcome: "Compile and schedule a bounded route work item",
+          definitionOfDone: ["The route check passes"],
+          policyRef: "policy.manual.v1",
+          repository: workspace,
+          worktreePath: worktree,
+          budgets: { tokens: 5_000, retries: 1 },
+          authority: {
+            policyRef: "policy.manual.v1",
+            capabilities: ["read_repo", "edit_src", "run_tests"],
+            repository: workspace,
+            worktreePath: worktree,
+          },
+          workItems: [
+            {
+              id: "wi_route_orchestration",
+              title: "Implement the bounded route",
+              owner: "route-agent",
+              requestedCapability: "edit_src",
+              authorityReceipt: {
+                policyRef: "policy.manual.v1",
+                capabilities: ["read_repo", "edit_src", "run_tests"],
+                repository: workspace,
+                worktreePath: worktree,
+              },
+              budgets: { tokens: 3_000, retries: 1 },
+              expectedEvidence: ["test:mission-routes"],
+            },
+          ],
+        },
+      })
+    );
+    assert.equal(created.status, 200);
+
+    const compiled = await dispatchRequest(
+      request("POST", "/api/missions/msn_route_orchestration/receipts", {
+        id: "receipt_route_1",
+        repositoryBase: "abc123",
+        integrationOwner: "spok",
+        validation: ["npm test -- mission-routes"],
+        nextCheckpoint: "After the specialist report is reconciled",
+        budget: {
+          totalTokens: 5_000,
+          integrationReserveTokens: 1_000,
+          recoveryReserveTokens: 500,
+        },
+        workItems: [
+          {
+            workItemId: "wi_route_orchestration",
+            integrationOwner: "spok",
+            priority: 10,
+            scope: { own: ["src/server/routes"], exclude: ["src/components"] },
+            execution: {
+              cwd: worktree,
+              baseRevision: "abc123",
+              isolation: "verified",
+              session: {
+                intent: "new",
+                sessionId: "33333333-3333-4333-8333-333333333333",
+              },
+              allowSubagents: false,
+            },
+            authority: {
+              permission: "default",
+              tools: ["read_repo", "edit_src", "run_tests"],
+              destructive: false,
+            },
+            budget: { maxTurns: 6, tokens: 3_000, retry: 1 },
+            context: ["src/server/routes/mission-orchestration.ts"],
+            definitionOfDone: ["Route tests pass"],
+            checks: ["npm test -- mission-routes"],
+            returnWhen: "complete",
+          },
+        ],
+      })
+    );
+    assert.equal(compiled.status, 201);
+    const compiledJson = (await compiled.json()) as {
+      bundle?: { mission?: { id?: string }; workItems?: Array<{ reportSchema?: string }> };
+    };
+    assert.equal(compiledJson.bundle?.mission?.id, "receipt_route_1");
+    assert.equal(compiledJson.bundle?.workItems?.[0]?.reportSchema, "specialist-v1");
+
+    const scheduled = await dispatchRequest(
+      request("POST", "/api/missions/msn_route_orchestration/schedule", {
+        receiptId: "receipt_route_1",
+        schedule: {
+          providerCapacity: 1,
+          activeLanes: [
+            {
+              workItemId: "requested-placeholder",
+              providerEmitted: false,
+              reservedTokens: 0,
+            },
+          ],
+          verifiedIsolation: { wi_route_orchestration: true },
+        },
+      })
+    );
+    assert.equal(scheduled.status, 200);
+    const scheduledJson = (await scheduled.json()) as {
+      schedule?: {
+        selected?: string[];
+        capacity?: { requestedLanes?: number; realActiveLanes?: number };
+        budget?: { integrationReserveTokens?: number; recoveryReserveTokens?: number };
+      };
+    };
+    assert.deepEqual(scheduledJson.schedule?.selected, ["wi_route_orchestration"]);
+    assert.equal(scheduledJson.schedule?.capacity?.requestedLanes, 1);
+    assert.equal(scheduledJson.schedule?.capacity?.realActiveLanes, 0);
+    assert.equal(scheduledJson.schedule?.budget?.integrationReserveTokens, 1_000);
+    assert.equal(scheduledJson.schedule?.budget?.recoveryReserveTokens, 500);
   });
 });

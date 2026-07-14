@@ -28,6 +28,7 @@ export const GROK_CAPABILITY_IDS = [
   "reasoning_effort",
   "tool_policy",
   "web_policy",
+  "always_approve",
   "permission_mode",
   "sandbox",
   "no_subagents",
@@ -333,6 +334,7 @@ function capabilityMap(input: {
       hasFlag("--tools") && hasFlag("--disallowed-tools")
     ),
     web_policy: fromHelp(hasFlag("--disable-web-search")),
+    always_approve: fromHelp(hasFlag("--always-approve")),
     permission_mode: fromHelp(hasFlag("--permission-mode")),
     sandbox: fromHelp(hasFlag("--sandbox")),
     no_subagents: fromHelp(hasFlag("--no-subagents")),
@@ -575,6 +577,7 @@ export function inferGrokCapabilitiesFromArgs(
   if (has("--reasoning-effort")) required.add("reasoning_effort");
   if (has("--tools") || has("--disallowed-tools")) required.add("tool_policy");
   if (has("--disable-web-search")) required.add("web_policy");
+  if (has("--always-approve")) required.add("always_approve");
   if (has("--permission-mode")) required.add("permission_mode");
   if (has("--sandbox")) required.add("sandbox");
   if (has("--no-subagents")) required.add("no_subagents");

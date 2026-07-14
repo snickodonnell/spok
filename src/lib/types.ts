@@ -354,6 +354,7 @@ export type StreamEventType =
   | "plan_update"
   | "subagent_start"
   | "subagent_end"
+  | "agent_report"
   | "message"
   | "file_change"
   | "diff"

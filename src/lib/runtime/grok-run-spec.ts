@@ -75,6 +75,7 @@ const promptSchema = z.discriminatedUnion("transport", [
   z
     .object({
       transport: z.literal("file"),
+      artifactId: z.string().regex(/^gpa_[a-f0-9]{24}$/).optional(),
       path: absolutePathSchema,
       sha256: sha256Schema,
       bytes: z.number().int().nonnegative().max(16 * 1024 * 1024),
@@ -167,6 +168,7 @@ export const grokRunSpecSchema = z
           .object({ allow: uniqueTokensSchema, deny: uniqueTokensSchema })
           .strict(),
         webSearch: z.enum(["enabled", "disabled"]),
+        alwaysApprove: z.boolean().default(false),
         permissionMode: safeTokenSchema.optional(),
         sandbox: safeTokenSchema.optional(),
         noMemory: z.boolean(),
@@ -233,7 +235,11 @@ export const grokRunSpecSchema = z
         });
       }
     }
-    if (spec.execution.delegation.mode === "allow" && spec.role !== "leader") {
+    if (
+      spec.execution.delegation.mode === "allow" &&
+      spec.role !== "leader" &&
+      !(spec.role === "interactive" && !spec.unattended)
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["execution", "delegation"],
@@ -266,6 +272,13 @@ export const grokRunSpecSchema = z
         code: "custom",
         path: ["execution", "leaderSocket"],
         message: "leader sockets may be assigned only to leader runs",
+      });
+    }
+    if (spec.execution.alwaysApprove && spec.execution.permissionMode) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["execution"],
+        message: "always-approve and permission-mode are mutually exclusive",
       });
     }
     const deniedTools = new Set(spec.execution.tools.deny);
@@ -324,6 +337,7 @@ export type GrokRunReceipt = {
     sha256: string;
     bytes: number;
     path?: string;
+    artifactId?: string;
     ephemeral?: boolean;
   };
   execution: Omit<GrokRunSpec["execution"], "leaderSocket"> & { leaderSocket?: string };
@@ -449,7 +463,11 @@ export function compileGrokRunSpec(
       sha256: spec.prompt.sha256,
       bytes: spec.prompt.bytes,
       ...(spec.prompt.transport === "file"
-        ? { path: spec.prompt.path, ephemeral: spec.prompt.ephemeral }
+        ? {
+            path: spec.prompt.path,
+            artifactId: spec.prompt.artifactId,
+            ephemeral: spec.prompt.ephemeral,
+          }
         : {}),
     },
     execution: spec.execution,
@@ -495,6 +513,7 @@ function compileArgs(spec: GrokRunSpec): string[] {
     args.push("--disallowed-tools", spec.execution.tools.deny.join(","));
   }
   if (spec.execution.webSearch === "disabled") args.push("--disable-web-search");
+  if (spec.execution.alwaysApprove) args.push("--always-approve");
   if (spec.execution.permissionMode) args.push("--permission-mode", spec.execution.permissionMode);
   if (spec.execution.sandbox) args.push("--sandbox", spec.execution.sandbox);
   if (spec.execution.delegation.mode === "deny") args.push("--no-subagents");

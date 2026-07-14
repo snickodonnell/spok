@@ -66,10 +66,10 @@ import type { CustomAgentConfig, SkillDescriptor } from "@/lib/extensions/types"
 import { enqueueBackgroundJob } from "@/lib/background-runner";
 import {
   formatAttachmentSize,
-  prepareAttachedPrompt,
   removeAttachment,
   uploadAttachments,
 } from "@/lib/attachments-client";
+import { buildInteractiveGrokRunRequest } from "@/lib/runtime/grok-run-request-client";
 import type { PromptAttachmentRef } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -542,31 +542,9 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
         }
       }
 
-      // Attachments → ACP content blocks via --prompt-file (vision + documents)
-      if (
-        turnAttachments.length > 0 &&
-        resolved.type === "prompt"
-      ) {
-        try {
-          const prepared = await prepareAttachedPrompt({
-            sessionId: session.id,
-            turnId,
-            prompt: effectivePrompt,
-            attachmentIds: turnAttachments.map((a) => a.id),
-            baseArgs: runArgs,
-          });
-          runArgs = prepared.args;
-          if (prepared.warnings.length) {
-            applyStreamEvent(session.id, {
-              type: "system",
-              timestamp: Date.now(),
-              title: "Attachment notes",
-              content: prepared.warnings.join("\n"),
-              status: "success",
-              severity: "info",
-              provider: "spok",
-            });
-          }
+      // The privileged runtime materializes prompt + attachment blocks into a
+      // deterministic managed artifact; prompt content never enters process argv.
+      if (turnAttachments.length > 0 && resolved.type === "prompt") {
           applyStreamEvent(session.id, {
             type: "system",
             timestamp: Date.now(),
@@ -590,12 +568,6 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
               })),
             },
           });
-        } catch (e) {
-          toast.error(
-            e instanceof Error ? e.message : "Failed to prepare attachments"
-          );
-          return;
-        }
       }
 
       const attachLabel =
@@ -637,14 +609,33 @@ export function PromptComposer({ variant = "desktop" }: PromptComposerProps) {
           /* non-fatal */
         }
 
-        await runHarness({
-          sessionId: session.id,
-          cwd: session.config.cwd,
-          command: session.config.command || "grok",
-          args: runArgs,
-          label: resolved.label,
-          signal: ac.signal,
-        });
+        await runHarness(
+          resolved.type === "prompt"
+            ? {
+                sessionId: session.id,
+                cwd: session.config.cwd,
+                command: session.config.command || "grok",
+                runRequest: buildInteractiveGrokRunRequest({
+                  id: `run-${turnId}`,
+                  cwd: session.config.cwd,
+                  command: session.config.command || "grok",
+                  prompt: effectivePrompt,
+                  attachmentIds: turnAttachments.map((attachment) => attachment.id),
+                  flags,
+                  resolvedArgs: runArgs,
+                }),
+                label: resolved.label,
+                signal: ac.signal,
+              }
+            : {
+                sessionId: session.id,
+                cwd: session.config.cwd,
+                command: session.config.command || "grok",
+                args: runArgs,
+                label: resolved.label,
+                signal: ac.signal,
+              }
+        );
         updatePromptTurn(session.id, turnId, { status: "success" });
       } catch (e) {
         if (!ac.signal.aborted) {

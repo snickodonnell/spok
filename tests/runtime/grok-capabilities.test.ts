@@ -25,6 +25,7 @@ Options:
       --tools <TOOLS>
       --disallowed-tools <TOOLS>
       --disable-web-search
+      --always-approve
       --permission-mode <MODE>
       --sandbox <PROFILE>
       --no-subagents

@@ -1,6 +1,6 @@
 # Spok Security Posture
 
-Date: 2026-07-12
+Date: 2026-07-13
 
 Spok is a privileged local harness and multi-agent leader for Grok Build. It can browse workspaces, run Git, start and supervise agent sessions, store local secrets, and eventually manage MCP servers, hooks, plugins, and remote runners. The security model is local-first, least-privilege, visible to the user, and tested at the API boundary. Leadership never implies unlimited authority: every mission, work item, agent run, and retry is bounded by repository, policy, budget, and explicit user intent.
 
@@ -16,7 +16,7 @@ Spok is a privileged local harness and multi-agent leader for Grok Build. It can
 | Workspace | Filesystem, Git write, and spawn operations must resolve inside a trusted workspace root. Trust is **durable** in `~/.spok/workspace-trust.json` (schema v1) and survives process restart. |
 | Background isolation | Concurrent/unattended jobs that request isolation must create, trust, and verify a Spok-managed linked worktree before process launch. Failure runs no agent process and never falls back to the main checkout. |
 | Job recovery | Active job records are sanitized and persisted before privileged preparation/process launch. On restart, stale in-flight work becomes an explicit interrupted failure; queued work resumes only while its workspace remains trusted. |
-| Spok-led missions | Current mission linkage adds sanitized, versioned team/turn/acceptance metadata to a normal durable background job. It grants no new command, filesystem, approval, or process authority; initial turns require verified isolation and follow-ups re-verify the same managed worktree. Future milestones/work items must carry their own bounded authority and budget receipt. |
+| Spok-led missions | Mission/work-item intent compiles into a durable v1 receipt with exact worktree/session/base identity, owned/excluded scope, bounded tools/permission/turns/tokens/retry, checks, return condition, and integration owner. Compilation and scheduling grant no trust or execution authority; trusted worktrees are revalidated, at least 20% remains reserved for integration plus a separate recovery reserve, and only dependency/isolation/approval/capacity/lock/budget-ready work may be selected. |
 | Delegation | A child agent cannot broaden the leader’s policy, trusted roots, environment access, approval duration, destructive scope, or resource budget. Spok may narrow authority per work item; escalation returns to an explicit user decision. |
 | Long-project recovery | Checkpoints and restored mission data are authority-neutral. Restart drops pending approvals, reconciles active runs, and never turns an old plan or retry instruction into fresh execution authority. |
 | Concurrent approvals | Each pending approval is bound to one session/run and its abort signal. Cancelling a run denies/removes only its request; a later approval cannot supersede or revive another run. |
@@ -43,6 +43,7 @@ The privileged API surface must call the shared authorization helpers:
 - `/api/sessions/*`
 - `/api/extensions/*`
 - `/api/automation/*`
+- `/api/missions/*`
 - `/api/diagnostics`
 - `/api/secrets`
 
@@ -93,9 +94,10 @@ Mission launch and every material plan escalation must show the effective reposi
 
 The CLI adapter is privileged policy, not presentation convenience. Before mission launch it records the installed version/capability snapshot and compiles an immutable run spec with cwd/worktree, session intent, prompt artifact, output/report contract, maximum turns, model/effort, tool/web/sandbox policy, permission mode, subagent policy, and debug retention.
 
-The landed v1 capability probe bounds subprocess time/output, requires local-route authorization plus a trusted cwd for detailed discovery, limits detailed execution to the configured Grok command, and returns sanitized summaries with content hashes rather than raw `inspect`/help output. It reports native CLI auth as unknown because the discovered inspect contract does not expose login state. Requirement support that is missing or unknown returns one corrective action and no launch authority; CLI-002 remains responsible for pinning the snapshot fingerprint into an immutable run spec before spawn.
+The landed v1 capability probe bounds subprocess time/output, requires local-route authorization plus a trusted cwd for detailed discovery, limits detailed execution to the configured Grok command, and returns sanitized summaries with content hashes rather than raw `inspect`/help output. It reports native CLI auth as unknown because the discovered inspect contract does not expose login state. Requirement support that is missing or unknown returns one corrective action and no launch authority; the immutable run spec pins the snapshot fingerprint and repeats capability/trust verification before spawn.
 
-- Non-trivial prompts use runtime-owned `--prompt-file` or `--prompt-json` artifacts. Audit and UI records contain a redacted summary/hash, never full secret-bearing prompt text or oversized argv.
+- Non-trivial prompts use deterministic runtime-owned `--prompt-file` or `--prompt-json` artifacts with atomic mode-restricted writes, containment/realpath/hash verification, idempotent retry, and bounded size. Audit, approval, process, and UI records contain artifact identity/hash/size only, never full secret-bearing prompt text or oversized argv. Ephemeral success/cancellation artifacts are removed; failed diagnostic evidence is retained and stale crash/approval artifacts are recovered.
+- Live streaming and JSON-schema specialist reports are mutually exclusive launch contracts. Reports are size/shape/path bounded and redacted; normalized `agent_report` events are evidence only and cannot advance mission lifecycle without leader verification. Malformed output receives at most one format-only repair turn with no repository context replay.
 - Unattended resume/fork identifies the exact session and verifies its worktree/base. Ambiguous “continue latest” is interactive only.
 - Leaf agents cannot create descendants unless a separate work-item receipt grants bounded nested delegation.
 - A leader backend is used only after health/capability inspection; failure produces an explicit checkpoint or denial, not broader fallback authority.

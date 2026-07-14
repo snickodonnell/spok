@@ -23,6 +23,7 @@ export const STREAM_EVENT_TYPES = [
   "plan_update",
   "subagent_start",
   "subagent_end",
+  "agent_report",
   "message",
   "file_change",
   "diff",
