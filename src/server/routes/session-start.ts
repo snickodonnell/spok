@@ -46,9 +46,10 @@ import {
 } from "@/lib/runtime/grok-run-spec";
 import {
   defaultRunTimeoutMs,
+  getProcessStatus,
   killProcessTree,
+  recordProcessExit,
   registerProcess,
-  unregisterProcess,
   stopSessionProcess,
   scheduleForceKill,
   pruneStaleProcesses,
@@ -75,6 +76,25 @@ type StartBody = {
 
 function ndjson(obj: unknown): string {
   return JSON.stringify(obj) + "\n";
+}
+
+export const SESSION_STREAM_HEARTBEAT_MS = 15_000;
+
+export function startSessionStreamHeartbeat(
+  push: (value: unknown) => void,
+  input: { sessionId: string; runId?: string },
+  intervalMs = SESSION_STREAM_HEARTBEAT_MS
+): () => void {
+  const timer = setInterval(() => {
+    push({
+      type: "heartbeat",
+      sessionId: input.sessionId,
+      ...(input.runId ? { runId: input.runId } : {}),
+      timestamp: Date.now(),
+    });
+  }, Math.max(1, intervalMs));
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 /** Quote for display / Windows cmd if we ever need a shell fallback */
@@ -150,6 +170,26 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   }
 
   const sessionId = body.sessionId || crypto.randomUUID();
+  pruneStaleProcesses();
+  const existingProcess = getProcessStatus(sessionId);
+  if (
+    existingProcess?.state === "running" ||
+    existingProcess?.state === "stopping"
+  ) {
+    return policyDenialResponse(409, {
+      error: `Session ${sessionId} already has an active process.`,
+      code: "session_already_running",
+      policy: "provider_contract",
+      action: "session_start",
+      details: {
+        sessionId,
+        runId: existingProcess.runId,
+        state: existingProcess.state,
+        correctiveAction:
+          "Observe the exact session status or explicitly stop it before launching another run.",
+      },
+    });
+  }
   let parsedRunSpec: GrokRunSpec | null = null;
   let parsedRunRequest: GrokRunRequest | null = null;
   let command: string;
@@ -462,9 +502,11 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   };
 
   const encoder = new TextEncoder();
+  const runId = parsedRunRequest?.id ?? parsedRunSpec?.id;
   let child: ChildProcessWithoutNullStreams | null = null;
   let closed = false;
   let promptFinalized = false;
+  let stopHeartbeat: () => void = () => {};
   const finalizePrompt = (outcome: "completed" | "cancelled" | "failed") => {
     if (!promptArtifact || promptFinalized) return;
     promptFinalized = true;
@@ -567,6 +609,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
           registerProcess(
             {
               sessionId,
+              ...(runId ? { runId } : {}),
               pid: c.pid,
               command,
               args: auditArgs,
@@ -580,6 +623,10 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       };
 
       trackChild(child);
+      stopHeartbeat = startSessionStreamHeartbeat(push, {
+        sessionId,
+        ...(runId ? { runId } : {}),
+      });
 
       if (timeoutMs > 0) {
         timeoutTimer = setTimeout(() => {
@@ -695,11 +742,17 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
 
       function onClose(code: number | null, signal: NodeJS.Signals | null) {
         if (timeoutTimer) clearTimeout(timeoutTimer);
-        unregisterProcess(sessionId);
+        stopHeartbeat();
+        const exitCode = timedOut ? 124 : code ?? (signal ? 1 : 0);
+        recordProcessExit(sessionId, {
+          exitCode,
+          signal: timedOut ? "SIGTERM" : signal,
+          timedOut,
+        });
         finalizePrompt(timedOut || (code ?? (signal ? 1 : 0)) !== 0 ? "failed" : "completed");
         push({
           type: "exit",
-          code: timedOut ? 124 : code ?? (signal ? 1 : 0),
+          code: exitCode,
           signal: timedOut ? "SIGTERM" : signal,
           sessionId,
           timedOut,
@@ -718,9 +771,19 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
     },
     cancel() {
       closed = true;
-      stopSessionProcess(sessionId, { force: true });
-      unregisterProcess(sessionId);
-      finalizePrompt("cancelled");
+      stopHeartbeat();
+      appendAuditEvent({
+        type: "runtime_action",
+        timestamp: Date.now(),
+        sessionId,
+        action: "stream_detach",
+        decision: "allowed",
+        details: {
+          runId,
+          processPreserved: true,
+          stopRequires: "DELETE /api/session/start?sessionId=<exact-session>",
+        },
+      });
     },
   });
 
@@ -734,6 +797,25 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
   });
 }
 
+export function handleSessionStartGet(req: Request): Response {
+  const auth = authorizePrivilegedRequest(req, "session_status");
+  if (!auth.ok) return denyFromAuthorize(auth);
+
+  const { searchParams } = new URL(req.url);
+  const sessionId = searchParams.get("sessionId");
+  if (!sessionId) {
+    return Response.json({ error: "sessionId required" }, { status: 400 });
+  }
+  pruneStaleProcesses();
+  const status = getProcessStatus(sessionId);
+  return Response.json(
+    status
+      ? { ok: true, ...status }
+      : { ok: true, sessionId, state: "unknown" },
+    { headers: { "cache-control": "no-store" } }
+  );
+}
+
 export async function handleSessionStartDelete(req: Request): Promise<Response> {
   const auth = authorizePrivilegedRequest(req, "session_stop");
   if (!auth.ok) return denyFromAuthorize(auth);
@@ -745,7 +827,6 @@ export async function handleSessionStartDelete(req: Request): Promise<Response> 
   }
   pruneStaleProcesses();
   const result = stopSessionProcess(sessionId, { force: true });
-  unregisterProcess(sessionId);
 
   appendAuditEvent({
     type: "runtime_action",

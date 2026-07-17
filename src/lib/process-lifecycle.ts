@@ -8,6 +8,7 @@ import { platform } from "os";
 
 export type ProcessRecord = {
   sessionId: string;
+  runId?: string;
   pid: number;
   command: string;
   args: string[];
@@ -18,6 +19,26 @@ export type ProcessRecord = {
   timedOut?: boolean;
   killed?: boolean;
 };
+
+export type ProcessLifecycleStatus =
+  | {
+      sessionId: string;
+      runId?: string;
+      state: "running" | "stopping";
+      pid: number;
+      startedAt: number;
+      timeoutMs: number;
+    }
+  | {
+      sessionId: string;
+      runId?: string;
+      state: "exited";
+      startedAt: number;
+      endedAt: number;
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+      timedOut: boolean;
+    };
 
 /** Default run timeout: 2 hours. Override with SPOK_RUN_TIMEOUT_MS. */
 export function defaultRunTimeoutMs(): number {
@@ -123,16 +144,81 @@ export function scheduleForceKill(
 
 /** In-memory registry shared by the session start route. */
 const registry = new Map<string, ProcessRecord & { child: ChildProcess }>();
+const terminalRegistry = new Map<
+  string,
+  Extract<ProcessLifecycleStatus, { state: "exited" }>
+>();
+const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
+const MAX_TERMINAL_RECORDS = 512;
 
 export function registerProcess(
   record: ProcessRecord,
   child: ChildProcess
 ): void {
+  terminalRegistry.delete(record.sessionId);
   registry.set(record.sessionId, { ...record, child });
 }
 
 export function getProcess(sessionId: string) {
   return registry.get(sessionId);
+}
+
+/**
+ * Return a sanitized lifecycle projection for exact-session recovery.
+ * Command argv and environment never cross this boundary.
+ */
+export function getProcessStatus(
+  sessionId: string
+): ProcessLifecycleStatus | undefined {
+  pruneTerminalRecords();
+  const entry = registry.get(sessionId);
+  if (entry) {
+    if (entry.child.exitCode != null || entry.child.signalCode != null) {
+      recordProcessExit(sessionId, {
+        exitCode: entry.child.exitCode ?? 1,
+        signal: entry.child.signalCode,
+        timedOut: entry.timedOut === true,
+      });
+      return terminalRegistry.get(sessionId);
+    }
+    return {
+      sessionId,
+      ...(entry.runId ? { runId: entry.runId } : {}),
+      state: entry.killed || entry.child.killed ? "stopping" : "running",
+      pid: entry.pid,
+      startedAt: entry.startedAt,
+      timeoutMs: entry.timeoutMs,
+    };
+  }
+  return terminalRegistry.get(sessionId);
+}
+
+export function recordProcessExit(
+  sessionId: string,
+  outcome: {
+    exitCode: number;
+    signal: NodeJS.Signals | null;
+    timedOut: boolean;
+    endedAt?: number;
+  }
+): void {
+  const entry = registry.get(sessionId);
+  const prior = terminalRegistry.get(sessionId);
+  const endedAt = outcome.endedAt ?? Date.now();
+  terminalRegistry.set(sessionId, {
+    sessionId,
+    ...(entry?.runId || prior?.runId
+      ? { runId: entry?.runId ?? prior?.runId }
+      : {}),
+    state: "exited",
+    startedAt: entry?.startedAt ?? prior?.startedAt ?? endedAt,
+    endedAt,
+    exitCode: outcome.exitCode,
+    signal: outcome.signal,
+    timedOut: outcome.timedOut,
+  });
+  registry.delete(sessionId);
+  pruneTerminalRecords();
 }
 
 export function unregisterProcess(sessionId: string): void {
@@ -190,10 +276,27 @@ export function stopAllProcesses(): number {
 export function pruneStaleProcesses(): number {
   let n = 0;
   for (const [id, entry] of registry) {
-    if (entry.child.exitCode != null || entry.child.killed) {
-      registry.delete(id);
+    if (entry.child.exitCode != null || entry.child.signalCode != null) {
+      recordProcessExit(id, {
+        exitCode: entry.child.exitCode ?? 1,
+        signal: entry.child.signalCode,
+        timedOut: entry.timedOut === true,
+      });
       n++;
     }
   }
   return n;
+}
+
+function pruneTerminalRecords(now = Date.now()): void {
+  for (const [id, record] of terminalRegistry) {
+    if (now - record.endedAt > TERMINAL_RETENTION_MS) {
+      terminalRegistry.delete(id);
+    }
+  }
+  while (terminalRegistry.size > MAX_TERMINAL_RECORDS) {
+    const oldest = terminalRegistry.keys().next().value as string | undefined;
+    if (!oldest) break;
+    terminalRegistry.delete(oldest);
+  }
 }

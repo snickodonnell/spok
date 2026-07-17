@@ -66,6 +66,10 @@ async function webToNodeResponse(
   }
 
   const reader = webRes.body.getReader();
+  const detach = () => {
+    void reader.cancel("HTTP client disconnected").catch(() => undefined);
+  };
+  res.once("close", detach);
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -77,7 +81,8 @@ async function webToNodeResponse(
   } catch {
     /* client aborted */
   } finally {
-    res.end();
+    res.off("close", detach);
+    if (!res.writableEnded) res.end();
   }
 }
 

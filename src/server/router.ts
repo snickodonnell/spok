@@ -32,6 +32,7 @@ import {
   handleSessionIdGet,
   handleSessionIdPut,
   handleSessionStartDelete,
+  handleSessionStartGet,
   handleSessionStartPost,
   handleSessionsListGet,
   handleSessionsListPost,
@@ -70,6 +71,9 @@ function match(
   }
   if (pathname === "/api/session/start" && m === "POST") {
     return { handler: handleSessionStartPost, params: {} };
+  }
+  if (pathname === "/api/session/start" && m === "GET") {
+    return { handler: handleSessionStartGet, params: {} };
   }
   if (pathname === "/api/session/start" && m === "DELETE") {
     return { handler: handleSessionStartDelete, params: {} };

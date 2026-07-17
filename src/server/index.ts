@@ -4,6 +4,7 @@
  */
 
 export {
+  handleSessionStartGet,
   handleSessionStartPost,
   handleSessionStartDelete,
 } from "./routes/session-start";

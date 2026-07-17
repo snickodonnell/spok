@@ -2,7 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   defaultRunTimeoutMs,
+  getProcessStatus,
   killProcessTree,
+  recordProcessExit,
   registerProcess,
   unregisterProcess,
   stopSessionProcess,
@@ -62,6 +64,46 @@ describe("process lifecycle", () => {
     const r = stopSessionProcess("no-such-session");
     assert.equal(r.found, false);
     assert.equal(r.ok, true);
+  });
+
+  it("retains a sanitized terminal outcome for exact-session recovery", () => {
+    const child = fakeChild(424243);
+    const startedAt = Date.now() - 100;
+    const endedAt = Date.now();
+    registerProcess(
+      {
+        sessionId: "sess-terminal-1",
+        runId: "run-terminal-1",
+        pid: 424243,
+        command: "grok",
+        args: ["--prompt-file", "redacted"],
+        cwd: "C:\\tmp",
+        startedAt,
+        timeoutMs: 10_000,
+      },
+      child
+    );
+    assert.equal(getProcessStatus("sess-terminal-1")?.state, "running");
+    recordProcessExit("sess-terminal-1", {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      endedAt,
+    });
+    assert.deepEqual(getProcessStatus("sess-terminal-1"), {
+      sessionId: "sess-terminal-1",
+      runId: "run-terminal-1",
+      state: "exited",
+      startedAt,
+      endedAt,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+    assert.equal(
+      listProcesses().some((p) => p.sessionId === "sess-terminal-1"),
+      false
+    );
   });
 
   it("killProcessTree marks already-dead as ok", () => {

@@ -3,6 +3,7 @@
  */
 import {
   handleSessionStartDelete,
+  handleSessionStartGet,
   handleSessionStartPost,
 } from "@/server/routes/session-start";
 
@@ -11,6 +12,10 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   return handleSessionStartPost(req);
+}
+
+export function GET(req: Request) {
+  return handleSessionStartGet(req);
 }
 
 export async function DELETE(req: Request) {

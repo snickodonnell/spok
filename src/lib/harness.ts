@@ -301,6 +301,7 @@ export async function runHarness(opts: {
             timedOut?: boolean;
             data?: string;
           };
+          if (maybe.type === "heartbeat") continue;
           if (maybe.type === "exit") {
             exitCode = maybe.code ?? null;
             timedOut = !!maybe.timedOut || exitCode === 124;
@@ -390,6 +391,10 @@ export async function runHarness(opts: {
   } catch (e) {
     flushStreamBatch();
     if (opts.signal?.aborted) {
+      await localFetch(
+        `/api/session/start?sessionId=${encodeURIComponent(sessionId)}`,
+        { method: "DELETE" }
+      ).catch(() => undefined);
       store.updateSession(sessionId, { status: "stopped" });
       return { code: null };
     }

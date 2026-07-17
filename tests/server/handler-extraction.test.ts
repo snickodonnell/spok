@@ -2,9 +2,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { handleHealthGet } from "../../src/server/routes/health";
 import { handleCliStatusGet } from "../../src/server/routes/cli-status";
-import { handleSessionStartPost } from "../../src/server/routes/session-start";
+import {
+  handleSessionStartGet,
+  handleSessionStartPost,
+  startSessionStreamHeartbeat,
+} from "../../src/server/routes/session-start";
 import { dispatchRequest } from "../../src/server/router";
 import { CAPABILITY_HEADER } from "../../src/lib/security/local-api-shared";
+import {
+  registerProcess,
+  unregisterProcess,
+} from "../../src/lib/process-lifecycle";
+import type { ChildProcess } from "child_process";
 
 describe("server handler extraction", () => {
   it("health denies non-local hosts without token leakage", async () => {
@@ -169,5 +178,87 @@ describe("server handler extraction", () => {
     assert.equal(ambiguous.status, 400);
     const ambiguousBody = (await ambiguous.json()) as { code?: string };
     assert.equal(ambiguousBody.code, "invalid_run_spec");
+  });
+
+  it("heartbeats silent long-running streams without materializing provider output", async () => {
+    const envelope = await new Promise<Record<string, unknown>>((resolve) => {
+      const stop = startSessionStreamHeartbeat(
+        (value) => {
+          stop();
+          resolve(value as Record<string, unknown>);
+        },
+        { sessionId: "heartbeat-session", runId: "heartbeat-run" },
+        5
+      );
+    });
+    assert.equal(envelope.type, "heartbeat");
+    assert.equal(envelope.sessionId, "heartbeat-session");
+    assert.equal(envelope.runId, "heartbeat-run");
+    assert.equal(typeof envelope.timestamp, "number");
+  });
+
+  it("reports exact run status and rejects a duplicate active-session launch", async () => {
+    const health = await handleHealthGet(
+      new Request("http://127.0.0.1:7788/api/health", {
+        headers: { host: "127.0.0.1:7788" },
+      })
+    );
+    const { localToken } = (await health.json()) as { localToken: string };
+    const child = {
+      pid: 919191,
+      killed: false,
+      exitCode: null,
+      signalCode: null,
+      kill: () => true,
+    } as unknown as ChildProcess;
+    registerProcess(
+      {
+        sessionId: "duplicate-session",
+        runId: "original-run",
+        pid: 919191,
+        command: "grok",
+        args: [],
+        cwd: "C:\\tmp",
+        startedAt: 123,
+        timeoutMs: 10_000,
+      },
+      child
+    );
+    try {
+      const headers = {
+        host: "127.0.0.1:7788",
+        "content-type": "application/json",
+        [CAPABILITY_HEADER]: localToken,
+      };
+      const status = await handleSessionStartGet(
+        new Request(
+          "http://127.0.0.1:7788/api/session/start?sessionId=duplicate-session",
+          { headers }
+        )
+      );
+      assert.equal(status.status, 200);
+      const statusBody = (await status.json()) as {
+        state?: string;
+        runId?: string;
+      };
+      assert.equal(statusBody.state, "running");
+      assert.equal(statusBody.runId, "original-run");
+
+      const duplicate = await handleSessionStartPost(
+        new Request("http://127.0.0.1:7788/api/session/start", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            sessionId: "duplicate-session",
+            runSpec: {},
+          }),
+        })
+      );
+      assert.equal(duplicate.status, 409);
+      const duplicateBody = (await duplicate.json()) as { code?: string };
+      assert.equal(duplicateBody.code, "session_already_running");
+    } finally {
+      unregisterProcess("duplicate-session");
+    }
   });
 });

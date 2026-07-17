@@ -109,7 +109,7 @@ Exit criteria:
 
 Outcome: failures cost bounded work, and Spok—not the user—turns reports into a review-ready repository.
 
-1. Detect stalls from provider heartbeat/progress evidence, not client visibility or missing decoration.
+1. Detect stalls from provider heartbeat/progress evidence, not client visibility or missing decoration. **Compatibility recovery landed 2026-07-16:** managed streams emit transport-only heartbeats during silent tools, exact-session process state remains queryable after stream detachment, and active-session duplicate launch fails closed.
 2. Retry once by default with a narrower error-specific receipt. Preserve the original attempt; do not restart healthy siblings.
 3. Reconcile every report with Git diff, owned paths, tests, artifacts, and dependency exit criteria before advancing a milestone.
 4. Detect conflicting reports or edits and route them to the integration owner with the smallest relevant evidence packet.

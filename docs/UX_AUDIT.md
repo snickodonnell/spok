@@ -100,6 +100,8 @@ Required outcome:
 
 Status: **In progress 2026-07-13.** Inbox, Missions, Monitor, Run, review readiness, and handoff now use the versioned lifecycle presentation or its explicit process/task/review/validation/handoff layers. Diagnostic state wins over optimistic success, reasons retain provenance, and one next action is projected. Focused unit tests cover success, contradiction, recovery, readiness, and durable handoff evidence. The finding remains open pending direct cross-surface dogfood, remaining row E2E, and accessibility evidence.
 
+Lifecycle transport follow-up 2026-07-16: silent provider tools now emit transport-only heartbeats; an HTTP disconnect detaches observation without stopping host work; authenticated exact-session status distinguishes running, stopping, exited, and unknown; and duplicate launch is denied while the original session remains active. Explicit scoped stop is still required to terminate the process.
+
 The observed Enterprise mission simultaneously showed “Needs attention,” “Accepted,” a completed background job, zero emitted lanes, zero visible events, and no substantial summary. Inbox lanes, process status, job status, mission turn status, review readiness, and handoff outcomes use overlapping but non-equivalent labels.
 
 Required outcome:
