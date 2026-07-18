@@ -6,6 +6,7 @@ import {
   isOriginAllowed,
   policyDenialResponse,
 } from "@/lib/security/local-api";
+import { BOUNDED_ARTIFACT_WORKFLOW_CAPABILITY } from "@/lib/runtime/bounded-artifact-workflow-contract";
 
 
 /**
@@ -37,5 +38,6 @@ export async function handleHealthGet(req: Request) {
     time: Date.now(),
     localToken: getLocalCapabilityToken(),
     lanAccess: isLanAccessEnabled(),
+    capabilities: [BOUNDED_ARTIFACT_WORKFLOW_CAPABILITY],
   });
 }

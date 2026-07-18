@@ -5,6 +5,10 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import { platform } from "os";
+import type {
+  BoundedArtifactHandoff,
+  BoundedArtifactWorkflowProgress,
+} from "./runtime/bounded-artifact-workflow-contract";
 
 export type ProcessRecord = {
   sessionId: string;
@@ -16,6 +20,10 @@ export type ProcessRecord = {
   startedAt: number;
   /** Soft timeout ms; 0 = none */
   timeoutMs: number;
+  /** Keep exact-session status non-terminal until the artifact gate records its handoff. */
+  awaitsTerminalHandoff?: boolean;
+  heartbeatAt?: number;
+  progress?: BoundedArtifactWorkflowProgress;
   timedOut?: boolean;
   killed?: boolean;
 };
@@ -28,6 +36,8 @@ export type ProcessLifecycleStatus =
       pid: number;
       startedAt: number;
       timeoutMs: number;
+      heartbeatAt?: number;
+      progress?: BoundedArtifactWorkflowProgress;
     }
   | {
       sessionId: string;
@@ -38,6 +48,7 @@ export type ProcessLifecycleStatus =
       exitCode: number;
       signal: NodeJS.Signals | null;
       timedOut: boolean;
+      handoff?: BoundedArtifactHandoff;
     };
 
 /** Default run timeout: 2 hours. Override with SPOK_RUN_TIMEOUT_MS. */
@@ -174,6 +185,18 @@ export function getProcessStatus(
   const entry = registry.get(sessionId);
   if (entry) {
     if (entry.child.exitCode != null || entry.child.signalCode != null) {
+      if (entry.awaitsTerminalHandoff) {
+        return {
+          sessionId,
+          ...(entry.runId ? { runId: entry.runId } : {}),
+          state: "stopping",
+          pid: entry.pid,
+          startedAt: entry.startedAt,
+          timeoutMs: entry.timeoutMs,
+          ...(entry.heartbeatAt ? { heartbeatAt: entry.heartbeatAt } : {}),
+          ...(entry.progress ? { progress: entry.progress } : {}),
+        };
+      }
       recordProcessExit(sessionId, {
         exitCode: entry.child.exitCode ?? 1,
         signal: entry.child.signalCode,
@@ -188,6 +211,8 @@ export function getProcessStatus(
       pid: entry.pid,
       startedAt: entry.startedAt,
       timeoutMs: entry.timeoutMs,
+      ...(entry.heartbeatAt ? { heartbeatAt: entry.heartbeatAt } : {}),
+      ...(entry.progress ? { progress: entry.progress } : {}),
     };
   }
   return terminalRegistry.get(sessionId);
@@ -200,6 +225,7 @@ export function recordProcessExit(
     signal: NodeJS.Signals | null;
     timedOut: boolean;
     endedAt?: number;
+    handoff?: BoundedArtifactHandoff;
   }
 ): void {
   const entry = registry.get(sessionId);
@@ -216,9 +242,23 @@ export function recordProcessExit(
     exitCode: outcome.exitCode,
     signal: outcome.signal,
     timedOut: outcome.timedOut,
+    ...(outcome.handoff ? { handoff: outcome.handoff } : {}),
   });
   registry.delete(sessionId);
   pruneTerminalRecords();
+}
+
+/** Update observable progress without creating a provider or inference turn. */
+export function updateProcessProgress(
+  sessionId: string,
+  progress: BoundedArtifactWorkflowProgress,
+  heartbeatAt = Date.now()
+): boolean {
+  const entry = registry.get(sessionId);
+  if (!entry) return false;
+  entry.heartbeatAt = heartbeatAt;
+  entry.progress = progress;
+  return true;
 }
 
 export function unregisterProcess(sessionId: string): void {

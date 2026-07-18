@@ -4,6 +4,10 @@ import path from "path";
 import { z } from "zod";
 import { MISSION_SAFE_ID } from "@/lib/missions/types";
 import { MAX_GROK_PROMPT_ARTIFACT_BYTES } from "./grok-prompt-artifacts";
+import {
+  boundedArtifactWorkflowRequestSchema,
+  type BoundedArtifactWorkflowRequest,
+} from "./bounded-artifact-workflow-contract";
 
 export const GROK_RUN_REQUEST_VERSION = 1 as const;
 
@@ -92,11 +96,54 @@ export const grokRunRequestSchema = z
       z.object({ mode: z.literal("stream") }).strict(),
       z.object({ mode: z.literal("report"), schema: z.literal("specialist") }).strict(),
     ]),
+    workflow: boundedArtifactWorkflowRequestSchema.optional(),
     debug: z.object({ retention: z.enum(["none", "failure", "handoff"]) }).strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (!request.workflow) return;
+    if (request.role !== "leader") {
+      context.addIssue({
+        code: "custom",
+        path: ["role"],
+        message: "bounded artifact workflows require one leader run",
+      });
+    }
+    if (request.output.mode !== "report") {
+      context.addIssue({
+        code: "custom",
+        path: ["output"],
+        message: "bounded artifact workflows require a compact report turn",
+      });
+    }
+    if (request.session.intent === "continue_latest" || request.session.intent === "fork") {
+      context.addIssue({
+        code: "custom",
+        path: ["session"],
+        message: "bounded artifact workflows require an exact new or resume session",
+      });
+    }
+    if (
+      (request.session.intent === "new" || request.session.intent === "resume") &&
+      request.session.sessionId !== request.workflow.expectedIdentity.sessionId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["workflow", "expectedIdentity", "sessionId"],
+        message: "must match the exact provider session",
+      });
+    }
+    if (request.id !== request.workflow.expectedIdentity.runId) {
+      context.addIssue({
+        code: "custom",
+        path: ["workflow", "expectedIdentity", "runId"],
+        message: "must match the managed run id",
+      });
+    }
+  });
 
 export type GrokRunRequest = z.infer<typeof grokRunRequestSchema>;
+export type { BoundedArtifactWorkflowRequest };
 
 export class GrokRunRequestError extends Error {
   readonly issues: readonly { path: string; message: string }[];

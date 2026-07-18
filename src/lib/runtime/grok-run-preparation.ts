@@ -17,12 +17,17 @@ import {
 } from "./grok-run-spec";
 import { parseGrokRunRequest, type GrokRunRequest } from "./grok-run-request";
 import { SPECIALIST_REPORT_JSON_SCHEMA_TEXT } from "./specialist-report";
+import {
+  prepareBoundedArtifactWorkflow,
+  type PreparedBoundedArtifactWorkflow,
+} from "./bounded-artifact-workflow";
 
 export type PreparedGrokRun = {
   request: GrokRunRequest;
   artifact: GrokPromptArtifact;
   compiled: CompiledGrokRun;
   warnings: string[];
+  workflow?: PreparedBoundedArtifactWorkflow;
 };
 
 export async function prepareGrokRun(
@@ -30,7 +35,15 @@ export async function prepareGrokRun(
   hostSessionId: string
 ): Promise<PreparedGrokRun> {
   const request = parseGrokRunRequest(input);
-  const prompt = materializePrompt(request, hostSessionId);
+  const workflow = request.workflow
+    ? prepareBoundedArtifactWorkflow({
+        request: request.workflow,
+        cwd: request.cwd,
+        hostSessionId,
+        runId: request.id,
+      })
+    : undefined;
+  const prompt = materializePrompt(request, hostSessionId, workflow);
   const artifact = createGrokPromptArtifact({
     sessionId: hostSessionId,
     runSpecId: request.id,
@@ -92,6 +105,7 @@ export async function prepareGrokRun(
       artifact,
       compiled: compileGrokRunSpec(spec, capabilitySnapshot),
       warnings: prompt.warnings,
+      ...(workflow ? { workflow } : {}),
     };
   } catch (error) {
     try {
@@ -105,14 +119,18 @@ export async function prepareGrokRun(
 
 function materializePrompt(
   request: GrokRunRequest,
-  hostSessionId: string
+  hostSessionId: string,
+  workflow?: PreparedBoundedArtifactWorkflow
 ): { content: string; format: "text" | "json"; warnings: string[] } {
+  const promptText = workflow
+    ? `${workflow.promptBlock}\n\nANALYTICAL POLICY AND HANDOFF CONTRACT\n\n${request.prompt.text}`
+    : request.prompt.text;
   if (request.prompt.attachmentIds.length === 0) {
-    return { content: request.prompt.text, format: "text", warnings: [] };
+    return { content: promptText, format: "text", warnings: [] };
   }
   const materialized = buildPromptContentBlocks(
     hostSessionId,
-    request.prompt.text,
+    promptText,
     request.prompt.attachmentIds
   );
   return {

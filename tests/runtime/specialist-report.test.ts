@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  classifySpecialistReportTerminalState,
   parseSpecialistReport,
   specialistReportToEvent,
 } from "../../src/lib/runtime/specialist-report";
@@ -65,5 +66,15 @@ describe("specialist report contract", () => {
     assert.equal(result.ok, true);
     if (!result.ok) return;
     assert.ok(!JSON.stringify(result.report).includes("sk-not-a-real-secret-value"));
+  });
+
+  it("does not treat exit zero as completion for malformed or partial reports", () => {
+    const malformed = parseSpecialistReport("not-json");
+    const partial = parseSpecialistReport(validReport("partial"));
+    const complete = parseSpecialistReport(validReport("completed"));
+    assert.equal(classifySpecialistReportTerminalState(0, malformed), "malformed");
+    assert.equal(classifySpecialistReportTerminalState(0, partial), "partial");
+    assert.equal(classifySpecialistReportTerminalState(0, complete), "completed");
+    assert.equal(classifySpecialistReportTerminalState(1, complete), "failed");
   });
 });

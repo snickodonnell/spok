@@ -19,9 +19,11 @@ import {
 import type { StreamEvent } from "./types";
 import type { GrokRunRequest } from "./runtime/grok-run-request";
 import {
+  classifySpecialistReportTerminalState,
   parseSpecialistReport,
   specialistReportToEvent,
   type SpecialistReport,
+  type SpecialistReportParseResult,
 } from "./runtime/specialist-report";
 
 export type HarnessHandle = {
@@ -243,6 +245,7 @@ export async function runHarness(opts: {
   let timedOut = false;
   let reportOutput = "";
   let specialistReport: SpecialistReport | undefined;
+  let specialistReportResult: SpecialistReportParseResult | undefined;
 
   const maybeAuthHint = (text: string) => {
     if (authHintEmitted || !text) return;
@@ -379,6 +382,7 @@ export async function runHarness(opts: {
 
     if (opts.runRequest?.output.mode === "report") {
       const reportResult = parseSpecialistReport(reportOutput);
+      specialistReportResult = reportResult;
       if (reportResult.ok) specialistReport = reportResult.report;
       store.applyStreamEvent(
         sessionId,
@@ -417,13 +421,21 @@ export async function runHarness(opts: {
   }
 
   const s = useSpokStore.getState().sessions[sessionId];
+  const reportTerminal =
+    opts.runRequest?.output.mode === "report"
+      ? classifySpecialistReportTerminalState(exitCode, specialistReportResult)
+      : undefined;
   const endStatus = timedOut
     ? "stopped"
-    : exitCode === 0
-      ? "completed"
-      : exitCode == null
-        ? "stopped"
-        : "error";
+    : reportTerminal === "partial" || reportTerminal === "blocked"
+      ? "ready"
+      : reportTerminal === "failed" || reportTerminal === "malformed"
+        ? "error"
+        : exitCode === 0
+          ? "completed"
+          : exitCode == null
+            ? "stopped"
+            : "error";
 
   // Always clear live flags so mobile/desktop banners drop immediately
   if (s) {
@@ -431,9 +443,13 @@ export async function runHarness(opts: {
       status: endStatus,
       error: timedOut
         ? "Run timed out"
-        : exitCode && exitCode !== 0
-          ? s.error
-          : undefined,
+        : reportTerminal === "malformed"
+          ? "Run exited without a valid specialist report"
+          : reportTerminal === "failed"
+            ? specialistReport?.summary || s.error
+            : exitCode && exitCode !== 0
+              ? s.error
+              : undefined,
     });
   }
 
@@ -456,8 +472,15 @@ export async function runHarness(opts: {
       content:
         endStatus === "completed"
           ? "Session finished successfully."
-          : `Process exited (code ${exitCode ?? "—"})`,
-      status: endStatus === "completed" ? "success" : "error",
+          : reportTerminal === "partial" || reportTerminal === "blocked"
+            ? `Specialist returned ${reportTerminal}; exact-session continuation remains available.`
+            : `Process exited (code ${exitCode ?? "—"})`,
+      status:
+        endStatus === "completed"
+          ? "success"
+          : endStatus === "ready"
+            ? "pending"
+            : "error",
       provider: "harness",
     });
   }

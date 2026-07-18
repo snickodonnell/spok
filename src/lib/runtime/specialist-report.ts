@@ -128,6 +128,23 @@ export type SpecialistReportParseResult =
       };
     };
 
+export type SpecialistReportTerminalState =
+  | "completed"
+  | "partial"
+  | "blocked"
+  | "failed"
+  | "malformed";
+
+/** Process exit alone never turns a report-mode run into task completion. */
+export function classifySpecialistReportTerminalState(
+  exitCode: number | null,
+  result: SpecialistReportParseResult | undefined
+): SpecialistReportTerminalState {
+  if (exitCode !== 0) return "failed";
+  if (!result || !result.ok) return "malformed";
+  return result.report.outcome;
+}
+
 export function parseSpecialistReport(input: unknown): SpecialistReportParseResult {
   let value = input;
   if (typeof input === "string") {

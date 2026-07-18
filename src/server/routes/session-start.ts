@@ -31,6 +31,12 @@ import {
 } from "@/lib/runtime/grok-prompt-artifacts";
 import { prepareGrokRun } from "@/lib/runtime/grok-run-preparation";
 import {
+  finalizeBoundedArtifactWorkflow,
+  refreshBoundedArtifactWorkflow,
+  type PreparedBoundedArtifactWorkflow,
+} from "@/lib/runtime/bounded-artifact-workflow";
+import type { BoundedArtifactHandoff } from "@/lib/runtime/bounded-artifact-workflow-contract";
+import {
   GrokRunRequestError,
   parseGrokRunRequest,
   type GrokRunRequest,
@@ -53,6 +59,7 @@ import {
   stopSessionProcess,
   scheduleForceKill,
   pruneStaleProcesses,
+  updateProcessProgress,
 } from "@/lib/process-lifecycle";
 
 /**
@@ -82,15 +89,26 @@ export const SESSION_STREAM_HEARTBEAT_MS = 15_000;
 
 export function startSessionStreamHeartbeat(
   push: (value: unknown) => void,
-  input: { sessionId: string; runId?: string },
+  input: {
+    sessionId: string;
+    runId?: string;
+    status?: () => Record<string, unknown> | undefined;
+  },
   intervalMs = SESSION_STREAM_HEARTBEAT_MS
 ): () => void {
   const timer = setInterval(() => {
+    let status: Record<string, unknown> | undefined;
+    try {
+      status = input.status?.();
+    } catch {
+      /* heartbeat observation must never stop the provider */
+    }
     push({
       type: "heartbeat",
       sessionId: input.sessionId,
       ...(input.runId ? { runId: input.runId } : {}),
       timestamp: Date.now(),
+      ...(status ?? {}),
     });
   }, Math.max(1, intervalMs));
   timer.unref?.();
@@ -287,6 +305,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
 
   let runReceipt: GrokRunReceipt | null = null;
   let promptArtifact: GrokPromptArtifact | null = null;
+  let boundedWorkflow: PreparedBoundedArtifactWorkflow | undefined;
   let preparationWarnings: string[] = [];
   if (parsedRunSpec || parsedRunRequest) {
     if (resolveCommandProfile(command).id !== "grok") {
@@ -307,6 +326,7 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
         compiled = prepared.compiled;
         promptArtifact = prepared.artifact;
         preparationWarnings = prepared.warnings;
+        boundedWorkflow = prepared.workflow;
       } else {
         const spec = parsedRunSpec!;
         if (spec.prompt.transport !== "file" || !spec.prompt.artifactId) {
@@ -616,9 +636,13 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
               cwd,
               startedAt: Date.now(),
               timeoutMs,
+              ...(boundedWorkflow ? { awaitsTerminalHandoff: true } : {}),
             },
             c
           );
+          if (boundedWorkflow) {
+            updateProcessProgress(sessionId, boundedWorkflow.progress);
+          }
         }
       };
 
@@ -626,6 +650,15 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
       stopHeartbeat = startSessionStreamHeartbeat(push, {
         sessionId,
         ...(runId ? { runId } : {}),
+        ...(boundedWorkflow
+          ? {
+              status: () => {
+                const progress = refreshBoundedArtifactWorkflow(boundedWorkflow!);
+                updateProcessProgress(sessionId, progress);
+                return { progress };
+              },
+            }
+          : {}),
       });
 
       if (timeoutMs > 0) {
@@ -744,18 +777,81 @@ export async function handleSessionStartPost(req: Request): Promise<Response> {
         if (timeoutTimer) clearTimeout(timeoutTimer);
         stopHeartbeat();
         const exitCode = timedOut ? 124 : code ?? (signal ? 1 : 0);
+        let handoff: BoundedArtifactHandoff | undefined;
+        if (boundedWorkflow) {
+          try {
+            handoff = finalizeBoundedArtifactWorkflow(boundedWorkflow);
+          } catch (error) {
+            handoff = {
+              state: "invalid",
+              checkedAt: Date.now(),
+              manifestPath: boundedWorkflow.request.resultPath,
+              checkpointPath: boundedWorkflow.checkpointPath,
+              findings: [
+                {
+                  code: "handoff_gate_failed",
+                  severity: "error",
+                  message: error instanceof Error ? error.message : "Handoff gate failed",
+                },
+              ],
+              progress: boundedWorkflow.progress,
+            };
+          }
+          push({
+            type: "event",
+            event: {
+              type: "system",
+              timestamp: handoff.checkedAt,
+              title:
+                handoff.state === "validated"
+                  ? "Artifact handoff validated"
+                  : "Artifact handoff needs repair",
+              content:
+                handoff.state === "validated"
+                  ? `${handoff.progress.verifiedArtifacts}/${handoff.progress.requiredArtifacts} required artifacts verified.`
+                  : handoff.findings
+                      .slice(0, 8)
+                      .map((finding) => `${finding.code}: ${finding.message}`)
+                      .join("\n"),
+              status: handoff.state === "validated" ? "success" : "error",
+              severity: handoff.state === "validated" ? "info" : "warn",
+              meta: { handoff },
+            },
+          });
+          appendAuditEvent({
+            type: "runtime_action",
+            timestamp: handoff.checkedAt,
+            sessionId,
+            action: "artifact_handoff_validate",
+            decision: handoff.state === "validated" ? "allowed" : "blocked",
+            details: {
+              runId,
+              state: handoff.state,
+              findingCodes: handoff.findings.map((finding) => finding.code),
+              progress: handoff.progress,
+            },
+          });
+        }
         recordProcessExit(sessionId, {
           exitCode,
           signal: timedOut ? "SIGTERM" : signal,
           timedOut,
+          ...(handoff ? { handoff } : {}),
         });
-        finalizePrompt(timedOut || (code ?? (signal ? 1 : 0)) !== 0 ? "failed" : "completed");
+        finalizePrompt(
+          timedOut ||
+            (code ?? (signal ? 1 : 0)) !== 0 ||
+            (handoff !== undefined && handoff.state !== "validated")
+            ? "failed"
+            : "completed"
+        );
         push({
           type: "exit",
           code: exitCode,
           signal: timedOut ? "SIGTERM" : signal,
           sessionId,
           timedOut,
+          ...(handoff ? { handoff } : {}),
         });
         if (!closed) {
           closed = true;

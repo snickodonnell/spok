@@ -90,7 +90,7 @@ Outcome: Spok schedules the smallest useful real team and preserves enough budge
 1. Compile mission intent into durable milestone and work-item receipts with owner, integration owner, dependencies, owned/excluded files, authority, budgets, checks, and return condition. **Landed 2026-07-13:** the v1 compiler persists one immutable receipt per durable work item, validates schema migration, worktree/base/session identity, parent authority/budget bounds, non-overlapping ownership, and integration ownership, and exposes trusted privileged routes.
 2. Add readiness scheduling across dependency, repository lock, verified worktree, provider capacity, token/cost reserve, and approval state. **Landed 2026-07-13:** the deterministic v1 decision engine and API report a reason per item, count only provider-emitted lanes as active, protect locked scopes, skip unaffordable head items, and select only work that satisfies all launch preconditions. Runtime dispatch consumption remains to be wired.
 3. Reserve at least 20% for leader integration/validation and one recovery turn by default. Capacity UI shows requested lanes, real lanes, queue depth, and remaining reserve separately. **Runtime contract landed 2026-07-13:** receipt compilation rejects a weaker integration/recovery reserve and the scheduler reports execution, active/new reservations, remaining capacity, and both protected reserves. Mission-control presentation remains open.
-4. Generate compact context packets from repository paths, symbols, decisions, checkpoint deltas, and artifact references. Add size telemetry and a user-visible reason when a packet exceeds its budget.
+4. Generate compact context packets from repository paths, symbols, decisions, checkpoint deltas, and artifact references. Add size telemetry and a user-visible reason when a packet exceeds its budget. **Focused packet-consumer slice landed 2026-07-17:** an exact leader/report request can hash-pin one named `input-packet.v1.json`, reference only explicit evidence files, skip recursive inventory, and prepend a compact execution receipt. Generic packet generation, relevance scoring, and byte/token telemetry remain open.
 5. Launch leaves with no subagents. Nested delegation is a new work item whose lanes, cost, and authority remain observable to Spok.
 6. Assign one integration owner for shared contracts. Prevent overlapping write scopes or serialize them intentionally.
 7. Require structured return packets. Treat missing format as a cheap format-repair turn, not a reason to resend the repository.
@@ -109,11 +109,11 @@ Exit criteria:
 
 Outcome: failures cost bounded work, and Spok—not the user—turns reports into a review-ready repository.
 
-1. Detect stalls from provider heartbeat/progress evidence, not client visibility or missing decoration. **Compatibility recovery landed 2026-07-16:** managed streams emit transport-only heartbeats during silent tools, exact-session process state remains queryable after stream detachment, and active-session duplicate launch fails closed.
+1. Detect stalls from provider heartbeat/progress evidence, not client visibility or missing decoration. **Compatibility recovery landed 2026-07-16; artifact progress slice landed 2026-07-17:** managed streams emit transport-only heartbeats during silent tools, exact-session process state remains queryable after stream detachment, active-session duplicate launch fails closed, and bounded artifact runs attach shard/artifact checkpoint progress without spending inference turns. Generic stall policy remains open.
 2. Retry once by default with a narrower error-specific receipt. Preserve the original attempt; do not restart healthy siblings.
 3. Reconcile every report with Git diff, owned paths, tests, artifacts, and dependency exit criteria before advancing a milestone.
 4. Detect conflicting reports or edits and route them to the integration owner with the smallest relevant evidence packet.
-5. Materialize checkpoint deltas: completed, active, blocked, decisions, changed assumptions, budget use, evidence, cleanup state, and next action.
+5. Materialize checkpoint deltas: completed, active, blocked, decisions, changed assumptions, budget use, evidence, cleanup state, and next action. **Focused slice landed 2026-07-17:** bounded artifact runs persist packet identity, completed shard hashes, verified artifact hashes, handoff findings, and exact-session/run identity in the Mission directory; the general mission delta remains open.
 6. Recover exact sessions/worktrees after runtime restart. Pending approvals and execution authority do not revive automatically.
 7. Degrade an unhealthy leader backend to a visible checkpoint/replan state; never silently relaunch all lanes through a broader path.
 8. Keep trace/export artifacts on failure or explicit handoff, with redaction and retention controls.
@@ -153,7 +153,7 @@ Exit criteria:
 | CLI-004 | P0 | Structured specialist report schema — **landed 2026-07-13** | provider adapter/stream contracts | valid, partial, malformed, repair fixtures |
 | ORCH-001 | P0 | Mission/work-item receipt compiler — **landed 2026-07-13** | mission domain | schema migration and validation tests |
 | ORCH-002 | P1 | Dependency/capacity/reserve scheduler — **landed 2026-07-13** | mission runtime/background runner | deterministic scheduling and starvation tests |
-| ORCH-003 | P1 | Context packet builder with byte/token telemetry | mission artifacts/extensions | relevance, limit, deduplication tests |
+| ORCH-003 | P1 | Context packet builder with byte/token telemetry — **focused named-packet consumer landed 2026-07-17; generic builder/telemetry open** | mission artifacts/extensions | relevance, limit, deduplication tests |
 | ORCH-004 | P1 | Truthful lane/attempt state projection | mission + stream contracts | requested-vs-real and replacement fixtures |
 | ORCH-005 | P2 | Bounded semantic retry and stall recovery | supervised runtime | no sibling restart; reserve enforcement |
 | SYN-001 | P2 | Repository/evidence reconciliation engine | review/validation/mission domain | false-report and overlap tests |

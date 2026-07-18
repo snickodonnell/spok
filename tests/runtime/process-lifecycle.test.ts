@@ -8,6 +8,7 @@ import {
   registerProcess,
   unregisterProcess,
   stopSessionProcess,
+  updateProcessProgress,
   listProcesses,
   pruneStaleProcesses,
 } from "../../src/lib/process-lifecycle";
@@ -104,6 +105,87 @@ describe("process lifecycle", () => {
       listProcesses().some((p) => p.sessionId === "sess-terminal-1"),
       false
     );
+  });
+
+  it("projects transport progress and the terminal artifact handoff", () => {
+    const child = fakeChild(424244);
+    const now = Date.now();
+    registerProcess(
+      {
+        sessionId: "sess-progress-1",
+        runId: "run-progress-1",
+        pid: 424244,
+        command: "grok",
+        args: [],
+        cwd: "C:\\tmp",
+        startedAt: now - 100,
+        timeoutMs: 10_000,
+      },
+      child
+    );
+    const progress = {
+      completedShards: 3,
+      totalShards: 4,
+      verifiedArtifacts: 2,
+      requiredArtifacts: 7,
+      phase: "specialists" as const,
+      checkpointAt: now,
+    };
+    assert.equal(updateProcessProgress("sess-progress-1", progress, now + 1), true);
+    const running = getProcessStatus("sess-progress-1");
+    assert.equal(running?.state, "running");
+    assert.deepEqual(running?.progress, progress);
+    assert.equal(running?.heartbeatAt, now + 1);
+
+    const handoff = {
+      state: "validated" as const,
+      checkedAt: now + 2,
+      manifestPath: "C:\\tmp\\result.json",
+      checkpointPath: "C:\\tmp\\checkpoint.json",
+      findings: [],
+      progress: { ...progress, completedShards: 4, phase: "complete" as const },
+    };
+    recordProcessExit("sess-progress-1", {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      endedAt: now + 3,
+      handoff,
+    });
+    const exited = getProcessStatus("sess-progress-1");
+    assert.equal(exited?.state, "exited");
+    assert.deepEqual(exited?.handoff, handoff);
+  });
+
+  it("does not expose process exit before a required handoff gate finishes", () => {
+    const child = {
+      pid: 424245,
+      killed: false,
+      kill: () => true,
+      exitCode: 0,
+      signalCode: null,
+    } as unknown as ChildProcess;
+    registerProcess(
+      {
+        sessionId: "sess-handoff-race-1",
+        runId: "run-handoff-race-1",
+        pid: 424245,
+        command: "grok",
+        args: [],
+        cwd: "C:\\tmp",
+        startedAt: Date.now(),
+        timeoutMs: 10_000,
+        awaitsTerminalHandoff: true,
+      },
+      child
+    );
+    assert.equal(getProcessStatus("sess-handoff-race-1")?.state, "stopping");
+    recordProcessExit("sess-handoff-race-1", {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+    assert.equal(getProcessStatus("sess-handoff-race-1")?.state, "exited");
   });
 
   it("killProcessTree marks already-dead as ok", () => {
